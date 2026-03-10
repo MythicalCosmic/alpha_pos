@@ -22,6 +22,20 @@ class AuthService:
         }
 
     @staticmethod
+    def _get_session(session_key):
+        return SessionRepository.get_by_session_key(session_key)
+
+    @staticmethod
+    def _get_session_user(session_key):
+        session = SessionRepository.get_by_session_key(session_key)
+        if not session:
+            return None, None
+        user = session.user_id
+        if not user or user.is_deleted:
+            return session, None
+        return session, user
+
+    @staticmethod
     def login(email, password, ip_address, user_agent):
         user = UserRepository.get_by_email(email)
         if not user:
@@ -63,15 +77,16 @@ class AuthService:
 
     @staticmethod
     def logout(session_key):
-        session = SessionRepository.first(payload=session_key)
+        session = AuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
+        SessionRepository.invalidate_cache(session_key)
         SessionRepository.delete(session)
         return ServiceResponse.success(message="Logged out")
 
     @staticmethod
     def logout_all(session_key):
-        session = SessionRepository.first(payload=session_key)
+        session = AuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
         SessionRepository.delete_by_user(session.user_id)
@@ -79,11 +94,8 @@ class AuthService:
 
     @staticmethod
     def me(session_key):
-        session = SessionRepository.first(payload=session_key)
-        if not session:
-            return ServiceResponse.unauthorized("Invalid session")
-        user = session.user_id
-        if not user or user.is_deleted:
+        session, user = AuthService._get_session_user(session_key)
+        if not user:
             return ServiceResponse.unauthorized("Invalid session")
         data = AuthService._user_data(user)
         data['last_login_at'] = user.last_login_at.isoformat() if user.last_login_at else None
@@ -91,11 +103,8 @@ class AuthService:
 
     @staticmethod
     def change_password(session_key, current_password, new_password):
-        session = SessionRepository.first(payload=session_key)
-        if not session:
-            return ServiceResponse.unauthorized("Invalid session")
-        user = session.user_id
-        if not user or user.is_deleted:
+        session, user = AuthService._get_session_user(session_key)
+        if not user:
             return ServiceResponse.unauthorized("Invalid session")
         if not verify_password(current_password, user.password):
             return ServiceResponse.error("Current password is incorrect")
@@ -110,10 +119,10 @@ class AuthService:
 
     @staticmethod
     def get_active_sessions(session_key):
-        session = SessionRepository.first(payload=session_key)
-        if not session:
+        session, user = AuthService._get_session_user(session_key)
+        if not user:
             return ServiceResponse.unauthorized("Invalid session")
-        sessions = SessionRepository.get_by_user(session.user_id)
+        sessions = SessionRepository.get_by_user(user)
         return ServiceResponse.success(
             data={
                 'sessions': [
@@ -132,7 +141,7 @@ class AuthService:
 
     @staticmethod
     def revoke_session(session_key, target_session_id):
-        session = SessionRepository.first(payload=session_key)
+        session = AuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
         target = SessionRepository.get_by_id(target_session_id)
@@ -140,5 +149,6 @@ class AuthService:
             return ServiceResponse.not_found("Session not found")
         if target.payload == session_key:
             return ServiceResponse.error("Cannot revoke current session, use logout instead")
+        SessionRepository.invalidate_cache(target.payload)
         SessionRepository.delete(target)
         return ServiceResponse.success(message="Session revoked")

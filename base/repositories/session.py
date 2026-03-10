@@ -1,9 +1,27 @@
+from django.core.cache import cache
+from django.conf import settings
 from base.repositories.base import BaseRepository
 from base.models import Session
 
 
 class SessionRepository(BaseRepository):
     model = Session
+
+    @classmethod
+    def get_by_session_key(cls, session_key):
+        cache_key = f"session:{session_key}"
+        ttl = getattr(settings, 'SESSION_CACHE_TTL', 300)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        session = cls.model.objects.select_related('user_id').filter(payload=session_key).first()
+        if session:
+            cache.set(cache_key, session, ttl)
+        return session
+
+    @classmethod
+    def invalidate_cache(cls, session_key):
+        cache.delete(f"session:{session_key}")
 
     @classmethod
     def get_by_user(cls, user):
@@ -15,4 +33,7 @@ class SessionRepository(BaseRepository):
 
     @classmethod
     def delete_by_user(cls, user):
-        cls.model.objects.filter(user_id=user).delete()
+        sessions = cls.model.objects.filter(user_id=user)
+        for s in sessions:
+            cache.delete(f"session:{s.payload}")
+        sessions.delete()
