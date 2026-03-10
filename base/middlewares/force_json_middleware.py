@@ -51,7 +51,7 @@ class JSONOnlyMiddleware(MiddlewareMixin):
             
         except Exception as e:
             return JsonResponse({
-                "status": "🔥 Something went terribly wrong",
+                "status": "Something went terribly wrong",
                 "status_code": 500,
                 "success": False,
                 "error": str(e),
@@ -64,7 +64,7 @@ class JSONOnlyMiddleware(MiddlewareMixin):
     
     def process_exception(self, request, exception):
         return JsonResponse({
-            "status": "💥 Epic failure detected",
+            "status": "Epic failure detected",
             "status_code": 500,
             "success": False,
             "error": {
@@ -81,43 +81,43 @@ class JSONOnlyMiddleware(MiddlewareMixin):
     
     def _get_fancy_status_message(self, status_code):
         status_messages = {
-            200: "✨ Mission accomplished",
-            201: "🎉 Created successfully",
-            202: "👍 Accepted and processing",
-            204: "✅ Success with no content",
+            200: "Mission accomplished",
+            201: "Created successfully",
+            202: "Accepted and processing",
+            204: "Success with no content",
 
-            301: "🚚 Moved permanently",
-            302: "🔀 Found elsewhere",
-            304: "💾 Not modified, use cache",
+            301: "Moved permanently",
+            302: "Found elsewhere",
+            304: "Not modified, use cache",
             
-            400: "🤔 Bad request, check your input",
-            401: "🔐 Authentication required",
-            403: "🚫 Access forbidden",
-            404: "🕵️ Not found in our universe",
-            405: "⛔ Method not allowed",
-            408: "⏰ Request timeout",
-            409: "⚔️ Conflict detected",
-            410: "👻 Gone forever",
-            422: "🧩 Unprocessable entity",
-            429: "🐌 Too many requests, slow down",
+            400: "Bad request, check your input",
+            401: "Authentication required",
+            403: "Access forbidden",
+            404: "Not found in our universe",
+            405: "Method not allowed",
+            408: "Request timeout",
+            409: "Conflict detected",
+            410: "Gone forever",
+            422: "Unprocessable entity",
+            429: "Too many requests, slow down",
             
-            500: "💔 Internal server error",
-            501: "🚧 Not implemented yet",
-            502: "🔌 Bad gateway",
-            503: "😴 Service unavailable",
-            504: "⏳ Gateway timeout",
+            500: "Internal server error",
+            501: "Not implemented yet",
+            502: "Bad gateway",
+            503: "Service unavailable",
+            504: "Gateway timeout",
         }
 
         if status_code in status_messages:
             return status_messages[status_code]
         elif 200 <= status_code < 300:
-            return f"✨ Success ({status_code})"
+            return f"Success ({status_code})"
         elif 300 <= status_code < 400:
-            return f"🔀 Redirect ({status_code})"
+            return f"Redirect ({status_code})"
         elif 400 <= status_code < 500:
-            return f"🤷 Client error ({status_code})"
+            return f"Client error ({status_code})"
         else:
-            return f"💥 Server error ({status_code})"
+            return f"Server error ({status_code})"
     
     def _get_timestamp(self):
         from datetime import datetime

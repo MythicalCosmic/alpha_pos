@@ -37,6 +37,11 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'base',
+    'customers',
+    'admins',
+    'stock',
+    'central_command_center',
 ]
 
 MIDDLEWARE = [
@@ -47,6 +52,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'base.middlewares.force_json_middleware.JSONOnlyMiddleware'
 ]
 
 ROOT_URLCONF = 'alpha_pos.urls'
@@ -120,3 +126,7 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+BRANCH_ID = 'main'
+DEPLOYMENT_MODE = 'local'
+SYNC_ON_SAVE = False

@@ -1,0 +1,122 @@
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST, require_GET, require_http_methods
+from base.helpers.request import get_client_ip, get_user_agent, get_session_key
+from base.helpers.response import json_response, ServiceResponse
+from base.helpers.cookie import set_session_cookie, clear_session_cookie
+from base.security.rate_limit import rate_limit
+from customers.services.auth_service import AuthService
+from customers.requests.auth_requests import (
+    login_request,
+    change_password_request,
+    revoke_session_request,
+)
+
+
+@csrf_exempt
+@rate_limit('login', 5, 60)
+@require_POST
+def login(request):
+    data, error = login_request(request)
+    if error:
+        return json_response(error)
+
+    result, status = AuthService.login(
+        email=data['email'],
+        password=data['password'],
+        ip_address=get_client_ip(request),
+        user_agent=get_user_agent(request),
+    )
+
+    response = JsonResponse(result, status=status)
+
+    token = result.get('data', {}).get('token')
+    if result.get('success') and token:
+        set_session_cookie(response, token)
+
+    return response
+
+
+@csrf_exempt
+@rate_limit('logout', 10, 60)
+@require_POST
+def logout(request):
+    session_key = get_session_key(request)
+    if not session_key:
+        return json_response(ServiceResponse.unauthorized("Session not provided"))
+
+    result, status = AuthService.logout(session_key)
+    response = JsonResponse(result, status=status)
+
+    if result.get('success'):
+        clear_session_cookie(response)
+
+    return response
+
+
+@csrf_exempt
+@rate_limit('logout_all', 5, 60)
+@require_POST
+def logout_all(request):
+    session_key = get_session_key(request)
+    if not session_key:
+        return json_response(ServiceResponse.unauthorized("Session not provided"))
+
+    result, status = AuthService.logout_all(session_key)
+    response = JsonResponse(result, status=status)
+
+    if result.get('success'):
+        clear_session_cookie(response)
+
+    return response
+
+
+@csrf_exempt
+@require_GET
+def me(request):
+    session_key = get_session_key(request)
+    if not session_key:
+        return json_response(ServiceResponse.unauthorized("Session not provided"))
+
+    result, status = AuthService.me(session_key)
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@rate_limit('change_password', 3, 60)
+@require_POST
+def change_password(request):
+    session_key = get_session_key(request)
+    if not session_key:
+        return json_response(ServiceResponse.unauthorized("Session not provided"))
+
+    data, error = change_password_request(request)
+    if error:
+        return json_response(error)
+
+    result, status = AuthService.change_password(
+        session_key=session_key,
+        current_password=data['current_password'],
+        new_password=data['new_password'],
+    )
+
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "DELETE"])
+def sessions(request):
+    session_key = get_session_key(request)
+    if not session_key:
+        return json_response(ServiceResponse.unauthorized("Session not provided"))
+
+    if request.method == "GET":
+        result, status = AuthService.get_active_sessions(session_key)
+        return JsonResponse(result, status=status)
+
+    data, error = revoke_session_request(request)
+    if error:
+        return json_response(error)
+
+    result, status = AuthService.revoke_session(session_key, data['session_id'])
+    return JsonResponse(result, status=status)
