@@ -1,5 +1,5 @@
 from django.urls import path
-from admins.views import auth_views, category_views
+from admins.views import auth_views, category_views, product_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -21,4 +21,13 @@ urlpatterns = [
     path('categories/<int:category_id>/status', category_views.update_category_status),
     path('categories/<int:category_id>/toggle', category_views.toggle_category_status),
     path('categories/<int:category_id>/restore', category_views.restore_category),
+
+    path('products', product_views.products),
+    path('products/stats', product_views.product_stats),
+    path('products/deleted', product_views.deleted_products),
+    path('products/bulk-delete', product_views.bulk_delete_products),
+    path('products/bulk-restore', product_views.bulk_restore_products),
+    path('products/category/<int:category_id>', product_views.products_by_category),
+    path('products/<int:product_id>', product_views.product_detail),
+    path('products/<int:product_id>/restore', product_views.restore_product),
 ]

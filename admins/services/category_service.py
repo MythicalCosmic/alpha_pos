@@ -1,4 +1,3 @@
-from django.db.models import Q
 from base.repositories import CategoryRepository
 from base.helpers.response import ServiceResponse
 
@@ -354,7 +353,7 @@ class AdminCategoryService:
 
         restored = 0
         for cat_id in category_ids:
-            result, status = AdminCategoryService.restore_category(cat_id)
+            result, _ = AdminCategoryService.restore_category(cat_id)
             if result.get('success'):
                 restored += 1
 

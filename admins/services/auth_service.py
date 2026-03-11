@@ -95,7 +95,7 @@ class AdminAuthService:
 
     @staticmethod
     def me(session_key):
-        session, user = AdminAuthService._get_session_user(session_key)
+        _, user = AdminAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         if user.role != User.RoleChoices.ADMIN:
@@ -106,7 +106,7 @@ class AdminAuthService:
 
     @staticmethod
     def change_password(session_key, current_password, new_password):
-        session, user = AdminAuthService._get_session_user(session_key)
+        _, user = AdminAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         if not verify_password(current_password, user.password):
@@ -122,7 +122,7 @@ class AdminAuthService:
 
     @staticmethod
     def get_active_sessions(session_key):
-        session, user = AdminAuthService._get_session_user(session_key)
+        _, user = AdminAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         sessions = SessionRepository.get_by_user(user)

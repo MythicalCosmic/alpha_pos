@@ -1,0 +1,149 @@
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from base.helpers.request import parse_json_body
+from base.helpers.response import json_response
+from base.security.rate_limit import rate_limit
+from base.security.permissions import admin_required, permission_required
+from admins.services.product_service import AdminProductService
+from admins.requests.product_requests import create_product_request, bulk_ids_request
+
+
+def _check_permission(request, perm):
+    user_perms = request.user.permissions or []
+    if '*' in user_perms:
+        return None
+    if perm not in user_perms:
+        return JsonResponse(
+            {"success": False, "message": "You don't have permission to perform this action"},
+            status=403,
+        )
+    return None
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+@admin_required
+def products(request):
+    if request.method == "GET":
+        page = int(request.GET.get('page', 1))
+        per_page = int(request.GET.get('per_page', 20))
+        search = request.GET.get('search')
+        category_ids = request.GET.get('category_ids')
+        order_by = request.GET.get('order_by', '-created_at')
+        include_deleted = request.GET.get('include_deleted', '').lower() == 'true'
+
+        result, status_code = AdminProductService.get_all_products(
+            page=page,
+            per_page=per_page,
+            search=search,
+            category_ids=category_ids,
+            order_by=order_by,
+            include_deleted=include_deleted,
+        )
+        return JsonResponse(result, status=status_code)
+
+    denied = _check_permission(request, 'product.create')
+    if denied:
+        return denied
+
+    data, error = create_product_request(request)
+    if error:
+        return json_response(error)
+
+    result, status_code = AdminProductService.create_product(
+        name=data['name'],
+        description=data.get('description'),
+        price=data['price'],
+        category_id=data['category_id'],
+        colors=data.get('colors'),
+    )
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PUT", "PATCH", "DELETE"])
+@admin_required
+def product_detail(request, product_id):
+    if request.method == "GET":
+        include_deleted = request.GET.get('include_deleted', '').lower() == 'true'
+        result, status_code = AdminProductService.get_product_by_id(product_id, include_deleted)
+        return JsonResponse(result, status=status_code)
+
+    if request.method == "DELETE":
+        denied = _check_permission(request, 'product.delete')
+        if denied:
+            return denied
+        hard_delete = request.GET.get('hard', '').lower() == 'true'
+        result, status_code = AdminProductService.delete_product(product_id, hard_delete)
+        return JsonResponse(result, status=status_code)
+
+    denied = _check_permission(request, 'product.update')
+    if denied:
+        return denied
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    result, status_code = AdminProductService.update_product(product_id, **data)
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_GET
+@admin_required
+def products_by_category(request, category_id):
+    result, status_code = AdminProductService.get_products_by_category(category_id)
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_GET
+@admin_required
+def product_stats(request):
+    result, status_code = AdminProductService.get_product_stats()
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_GET
+@admin_required
+def deleted_products(request):
+    page = int(request.GET.get('page', 1))
+    per_page = int(request.GET.get('per_page', 20))
+    result, status_code = AdminProductService.get_deleted_products(page, per_page)
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_POST
+@admin_required
+@permission_required('product.update')
+def restore_product(request, product_id):
+    result, status_code = AdminProductService.restore_product(product_id)
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_POST
+@rate_limit('admin_bulk_delete_products', 10, 60)
+@admin_required
+@permission_required('product.delete')
+def bulk_delete_products(request):
+    data, error = bulk_ids_request(request)
+    if error:
+        return json_response(error)
+    result, status_code = AdminProductService.bulk_delete(data['ids'])
+    return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_POST
+@rate_limit('admin_bulk_restore_products', 10, 60)
+@admin_required
+@permission_required('product.update')
+def bulk_restore_products(request):
+    data, error = bulk_ids_request(request)
+    if error:
+        return json_response(error)
+    result, status_code = AdminProductService.bulk_restore(data['ids'])
+    return JsonResponse(result, status=status_code)
