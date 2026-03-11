@@ -71,7 +71,7 @@ class SyncMixin(models.Model):
 
     def _queue_for_sync(self):
         try:
-            from main.services.sync_service import SyncService
+            from base.services.sync_service import SyncService
             SyncService.queue_record(self)
         except Exception:
             pass
@@ -160,6 +160,8 @@ class User(SyncMixin, models.Model):
         choices=UserStatus.choices,
         default=UserStatus.ACTIVE,
     )
+
+    permissions = models.JSONField(default=list, blank=True)
 
     last_login_at = models.DateTimeField(null=True, blank=True)
     last_login_api = models.CharField(max_length=20, null=True, blank=True)
