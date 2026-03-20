@@ -9,3 +9,4 @@ class InkassaService:
             return
         register.current_balance += amount
         register.save(update_fields=['current_balance', 'last_updated'])
+

@@ -1,5 +1,5 @@
 from django.urls import path
-from admins.views import auth_views, category_views, product_views
+from admins.views import auth_views, category_views, product_views, order_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -30,4 +30,30 @@ urlpatterns = [
     path('products/category/<int:category_id>', product_views.products_by_category),
     path('products/<int:product_id>', product_views.product_detail),
     path('products/<int:product_id>/restore', product_views.restore_product),
+
+    path('orders', order_views.orders),
+    path('orders/stats', order_views.order_stats),
+    path('orders/stats/daily', order_views.daily_stats),
+    path('orders/stats/monthly', order_views.monthly_stats),
+    path('orders/stats/yearly', order_views.yearly_stats),
+    path('orders/stats/cashiers', order_views.cashier_stats),
+    path('orders/stats/statuses', order_views.status_stats),
+    path('orders/stats/order-types', order_views.order_type_stats),
+    path('orders/stats/top-products', order_views.top_products),
+    path('orders/stats/least-sold', order_views.least_sold_products),
+    path('orders/stats/categories', order_views.category_stats),
+    path('orders/stats/hourly', order_views.hourly_stats),
+    path('orders/stats/dashboard', order_views.dashboard_stats),
+    path('orders/<int:order_id>', order_views.order_detail),
+    path('orders/<int:order_id>/add-item', order_views.add_item),
+    path('orders/<int:order_id>/status', order_views.update_status),
+    path('orders/<int:order_id>/pay', order_views.pay_order),
+    path('orders/<int:order_id>/unpay', order_views.unpay_order),
+    path('orders/<int:order_id>/ready', order_views.mark_ready),
+    path('orders/<int:order_id>/cancel', order_views.cancel_order),
+    path('orders/<int:order_id>/restore', order_views.restore_order),
+    path('orders/<int:order_id>/items/<int:item_id>', order_views.update_item),
+    path('orders/<int:order_id>/items/<int:item_id>/remove', order_views.remove_item),
+    path('orders/<int:order_id>/items/<int:item_id>/ready', order_views.mark_item_ready),
+    path('orders/<int:order_id>/items/<int:item_id>/unready', order_views.unmark_item_ready),
 ]

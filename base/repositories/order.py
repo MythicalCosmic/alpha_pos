@@ -1,3 +1,7 @@
+from django.db.models import Sum, Q, Count, Avg, DecimalField
+from django.db.models.functions import Coalesce, TruncDate, TruncMonth, TruncYear
+from django.core.paginator import Paginator
+from decimal import Decimal
 from base.repositories.base import BaseSyncRepository
 from base.models import Order
 
@@ -48,3 +52,218 @@ class OrderRepository(BaseSyncRepository):
     @classmethod
     def get_by_delivery_person(cls, delivery_person):
         return cls.model.objects.filter(is_deleted=False, delivery_person=delivery_person)
+
+    @classmethod
+    def get_with_relations(cls):
+        return cls.model.objects.filter(is_deleted=False).select_related(
+            'user', 'cashier', 'delivery_person'
+        ).prefetch_related('items__product__category')
+
+    @classmethod
+    def get_by_id_with_relations(cls, pk):
+        try:
+            return cls.model.objects.select_related(
+                'user', 'cashier', 'delivery_person'
+            ).prefetch_related('items__product__category').get(pk=pk, is_deleted=False)
+        except cls.model.DoesNotExist:
+            return None
+
+    @classmethod
+    def get_last_display_id(cls):
+        last = cls.model.objects.order_by('-id').only('display_id').first()
+        if not last or not last.display_id:
+            return 0
+        return last.display_id
+
+    @classmethod
+    def paginate(cls, queryset, page=1, per_page=20):
+        paginator = Paginator(queryset, per_page)
+        return paginator.get_page(page), paginator
+
+    @classmethod
+    def build_filtered_queryset(cls, statuses=None, payment_status=None,
+                                 category_ids=None, user_id=None, cashier_id=None,
+                                 order_type=None, date_from=None, date_to=None,
+                                 order_by='-created_at'):
+        qs = cls.get_with_relations()
+
+        if payment_status:
+            payment_status = payment_status.strip().upper()
+            if payment_status == 'PAID':
+                qs = qs.filter(is_paid=True)
+            elif payment_status == 'UNPAID':
+                qs = qs.filter(is_paid=False)
+
+        if statuses:
+            valid = [c[0] for c in Order.Status.choices]
+            filtered = [s.upper() for s in statuses if s.upper() in valid]
+            if filtered:
+                qs = qs.filter(status__in=filtered)
+
+        if category_ids:
+            qs = qs.filter(items__product__category_id__in=category_ids).distinct()
+
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+
+        if cashier_id:
+            qs = qs.filter(cashier_id=cashier_id)
+
+        if order_type:
+            qs = qs.filter(order_type=order_type.upper())
+
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return qs.order_by(order_by)
+
+    @classmethod
+    def get_stats_aggregate(cls, date_from=None, date_to=None, cashier_id=None):
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+        if cashier_id:
+            qs = qs.filter(cashier_id=cashier_id)
+
+        return qs.aggregate(
+            total=Count('id'),
+            preparing=Count('id', filter=Q(status='PREPARING')),
+            ready=Count('id', filter=Q(status='READY')),
+            completed=Count('id', filter=Q(status='COMPLETED')),
+            cancelled=Count('id', filter=Q(status='CANCELED')),
+            paid=Count('id', filter=Q(is_paid=True)),
+            unpaid=Count('id', filter=Q(is_paid=False, status__in=['PREPARING', 'READY', 'COMPLETED'])),
+            total_revenue=Coalesce(
+                Sum('total_amount', filter=Q(is_paid=True)),
+                Decimal('0.00'),
+                output_field=DecimalField()
+            ),
+            avg_order_value=Coalesce(
+                Avg('total_amount', filter=Q(is_paid=True)),
+                Decimal('0.00'),
+                output_field=DecimalField()
+            ),
+        )
+
+    @classmethod
+    def get_daily_stats(cls, date_from=None, date_to=None, cashier_id=None):
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+        if cashier_id:
+            qs = qs.filter(cashier_id=cashier_id)
+
+        return list(qs.annotate(date=TruncDate('created_at')).values('date').annotate(
+            orders=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            paid=Count('id', filter=Q(is_paid=True)),
+            cancelled=Count('id', filter=Q(status='CANCELED')),
+        ).order_by('date'))
+
+    @classmethod
+    def get_monthly_stats(cls, date_from=None, date_to=None):
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return list(qs.annotate(month=TruncMonth('created_at')).values('month').annotate(
+            orders=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            paid=Count('id', filter=Q(is_paid=True)),
+            cancelled=Count('id', filter=Q(status='CANCELED')),
+            avg_order_value=Coalesce(Avg('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+        ).order_by('month'))
+
+    @classmethod
+    def get_yearly_stats(cls):
+        return list(
+            cls.model.objects.filter(is_deleted=False)
+            .annotate(year=TruncYear('created_at')).values('year').annotate(
+                orders=Count('id'),
+                revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+                paid=Count('id', filter=Q(is_paid=True)),
+                cancelled=Count('id', filter=Q(status='CANCELED')),
+            ).order_by('year')
+        )
+
+    @classmethod
+    def get_by_cashier_stats(cls, date_from=None, date_to=None):
+        qs = cls.model.objects.filter(is_deleted=False, cashier__isnull=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return list(qs.values(
+            'cashier_id', 'cashier__first_name', 'cashier__last_name'
+        ).annotate(
+            orders=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            paid=Count('id', filter=Q(is_paid=True)),
+            cancelled=Count('id', filter=Q(status='CANCELED')),
+        ).order_by('-orders'))
+
+    @classmethod
+    def get_by_status_stats(cls, date_from=None, date_to=None):
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return list(qs.values('status').annotate(
+            count=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+        ).order_by('status'))
+
+    @classmethod
+    def get_by_order_type_stats(cls, date_from=None, date_to=None):
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return list(qs.values('order_type').annotate(
+            count=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+        ).order_by('order_type'))
+
+    @classmethod
+    def get_avg_prep_time(cls, date_from=None, date_to=None):
+        qs = cls.model.objects.filter(
+            is_deleted=False, status='READY', ready_at__isnull=False
+        )
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        if not qs.exists():
+            return None
+
+        total = sum((o.ready_at - o.created_at).total_seconds() for o in qs.only('created_at', 'ready_at'))
+        return total / qs.count()
+
+    @classmethod
+    def get_hourly_distribution(cls, date_from=None, date_to=None):
+        from django.db.models.functions import ExtractHour
+        qs = cls.model.objects.filter(is_deleted=False)
+        if date_from:
+            qs = qs.filter(created_at__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__lte=date_to)
+
+        return list(qs.annotate(hour=ExtractHour('created_at')).values('hour').annotate(
+            count=Count('id'),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+        ).order_by('hour'))

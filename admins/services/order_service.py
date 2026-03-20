@@ -1,0 +1,899 @@
+from decimal import Decimal
+from django.db import transaction
+from django.utils import timezone
+from datetime import timedelta, datetime
+from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository
+from base.services.inkassa_service import InkassaService
+from base.helpers.response import ServiceResponse
+
+
+ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED', 'COMPLETED']
+
+ALLOWED_ORDER_FIELDS = {
+    'created_at', '-created_at', 'updated_at', '-updated_at',
+    'total_amount', '-total_amount', 'display_id', '-display_id',
+    'status', '-status', 'id', '-id', 'paid_at', '-paid_at',
+}
+
+
+def _format_duration(seconds):
+    if seconds is None:
+        return None
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    elif minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _serialize_order_list(order):
+    return {
+        'id': order.id,
+        'display_id': order.display_id,
+        'order_type': order.order_type,
+        'phone_number': order.phone_number,
+        'description': order.description,
+        'user': {
+            'id': order.user.id,
+            'name': f"{order.user.first_name} {order.user.last_name}",
+        } if order.user else None,
+        'cashier': {
+            'id': order.cashier.id,
+            'name': f"{order.cashier.first_name} {order.cashier.last_name}",
+        } if order.cashier else None,
+        'delivery_person': {
+            'id': order.delivery_person.id,
+            'name': f"{order.delivery_person.first_name} {order.delivery_person.last_name or ''}".strip(),
+        } if order.delivery_person else None,
+        'status': order.status,
+        'is_paid': order.is_paid,
+        'total_amount': str(order.total_amount or 0),
+        'items_count': order.items.count(),
+        'items': list(order.items.values(
+            'id', 'product__id', 'product__name', 'product__category__id',
+            'product__category__name', 'quantity', 'detail', 'price', 'ready_at'
+        )),
+        'paid_at': order.paid_at.isoformat() if order.paid_at else None,
+        'ready_at': order.ready_at.isoformat() if order.ready_at else None,
+        'created_at': order.created_at.isoformat(),
+        'updated_at': order.updated_at.isoformat(),
+    }
+
+
+def _serialize_order_detail(order):
+    items = []
+    for item in order.items.all():
+        prep_time = (item.ready_at - order.created_at).total_seconds() if item.ready_at else None
+        items.append({
+            'id': item.id,
+            'product': {
+                'id': item.product.id,
+                'name': item.product.name,
+                'category': item.product.category.name if item.product.category else None,
+            },
+            'quantity': item.quantity,
+            'price': str(item.price),
+            'subtotal': str(item.price * item.quantity),
+            'detail': item.detail,
+            'ready_at': item.ready_at.isoformat() if item.ready_at else None,
+            'is_ready': item.ready_at is not None,
+            'preparation_time_seconds': prep_time,
+            'preparation_time_formatted': _format_duration(prep_time) if prep_time else None,
+        })
+
+    order_prep_time = (order.ready_at - order.created_at).total_seconds() if order.ready_at else None
+
+    return {
+        'id': order.id,
+        'display_id': order.display_id,
+        'order_type': order.order_type,
+        'phone_number': order.phone_number,
+        'description': order.description,
+        'user': {
+            'id': order.user.id,
+            'name': f"{order.user.first_name} {order.user.last_name}",
+            'email': order.user.email,
+        } if order.user else None,
+        'cashier': {
+            'id': order.cashier.id,
+            'name': f"{order.cashier.first_name} {order.cashier.last_name}",
+        } if order.cashier else None,
+        'delivery_person': {
+            'id': order.delivery_person.id,
+            'name': f"{order.delivery_person.first_name} {order.delivery_person.last_name or ''}".strip(),
+            'phone': order.delivery_person.phone_number,
+        } if order.delivery_person else None,
+        'status': order.status,
+        'is_paid': order.is_paid,
+        'paid_at': order.paid_at.isoformat() if order.paid_at else None,
+        'total_amount': str(order.total_amount),
+        'items': items,
+        'items_ready_count': sum(1 for i in items if i['is_ready']),
+        'items_total_count': len(items),
+        'created_at': order.created_at.isoformat(),
+        'updated_at': order.updated_at.isoformat(),
+        'ready_at': order.ready_at.isoformat() if order.ready_at else None,
+        'preparation_time_seconds': order_prep_time,
+        'preparation_time_formatted': _format_duration(order_prep_time) if order_prep_time else None,
+    }
+
+
+def _parse_statuses(statuses_param):
+    if not statuses_param:
+        return None
+    param = statuses_param.strip().strip('[]')
+    if not param:
+        return None
+    return [s.strip().strip('"\'') for s in param.split(',') if s.strip()]
+
+
+def _parse_int_list(param):
+    if not param:
+        return None
+    param = param.strip().strip('[]')
+    if not param:
+        return None
+    result = []
+    for item in param.split(','):
+        item = item.strip().strip('"\'')
+        if item.isdigit():
+            result.append(int(item))
+    return result or None
+
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    try:
+        return timezone.make_aware(datetime.strptime(date_str, '%Y-%m-%d'))
+    except (ValueError, TypeError):
+        try:
+            return timezone.make_aware(datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S'))
+        except (ValueError, TypeError):
+            return None
+
+
+def _recalculate_total(order):
+    order.total_amount = OrderItemRepository.calculate_order_total(order)
+    order.save(update_fields=['total_amount'])
+
+
+def _check_and_update_ready(order):
+    total = order.items.count()
+    ready = order.items.filter(ready_at__isnull=False).count()
+    all_ready = total > 0 and total == ready
+
+    if all_ready and order.status != 'READY':
+        order.status = 'READY'
+        order.ready_at = timezone.now()
+        order.save(update_fields=['status', 'ready_at'])
+        return True, True
+
+    return all_ready, False
+
+
+class AdminOrderService:
+
+    @staticmethod
+    def get_all_orders(page=1, per_page=20, statuses=None, payment_status=None,
+                       category_ids=None, user_id=None, cashier_id=None,
+                       order_type=None, date_from=None, date_to=None,
+                       order_by='-created_at', include_deleted=False):
+        statuses_list = _parse_statuses(statuses)
+        category_ids_list = _parse_int_list(category_ids)
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        if order_by not in ALLOWED_ORDER_FIELDS:
+            order_by = '-created_at'
+
+        qs = OrderRepository.build_filtered_queryset(
+            statuses=statuses_list,
+            payment_status=payment_status,
+            category_ids=category_ids_list,
+            user_id=user_id,
+            cashier_id=cashier_id,
+            order_type=order_type,
+            date_from=date_from_dt,
+            date_to=date_to_dt,
+            order_by=order_by,
+        )
+
+        if include_deleted:
+            from base.models import Order
+            qs = Order.objects.select_related(
+                'user', 'cashier', 'delivery_person'
+            ).prefetch_related('items__product__category').order_by(order_by)
+
+        page_obj, paginator = OrderRepository.paginate(qs, page, per_page)
+        orders = [_serialize_order_list(o) for o in page_obj.object_list]
+
+        return ServiceResponse.success(data={
+            'orders': orders,
+            'filters': {
+                'statuses': statuses_list,
+                'category_ids': category_ids_list,
+                'payment_status': payment_status,
+                'order_type': order_type,
+                'date_from': date_from,
+                'date_to': date_to,
+            },
+            'pagination': {
+                'current_page': page_obj.number,
+                'total_pages': paginator.num_pages,
+                'total_orders': paginator.count,
+                'per_page': per_page,
+                'has_next': page_obj.has_next(),
+                'has_previous': page_obj.has_previous(),
+            },
+        })
+
+    @staticmethod
+    def get_order_by_id(order_id, include_deleted=False):
+        if include_deleted:
+            from base.models import Order
+            try:
+                order = Order.objects.select_related(
+                    'user', 'cashier', 'delivery_person'
+                ).prefetch_related('items__product__category').get(pk=order_id)
+            except Order.DoesNotExist:
+                return ServiceResponse.not_found('Order not found')
+        else:
+            order = OrderRepository.get_by_id_with_relations(order_id)
+            if not order:
+                return ServiceResponse.not_found('Order not found')
+
+        return ServiceResponse.success(data={'order': _serialize_order_detail(order)})
+
+    @staticmethod
+    @transaction.atomic
+    def create_order(user_id, items, order_type='HALL', phone_number=None,
+                     description=None, cashier_id=None, delivery_person_id=None):
+        if not UserRepository.exists(id=user_id):
+            return ServiceResponse.not_found('User not found')
+
+        if cashier_id and not UserRepository.exists(id=cashier_id, role='CASHIER'):
+            return ServiceResponse.error('Invalid cashier')
+
+        if not items:
+            return ServiceResponse.validation_error(
+                errors={'items': 'At least one item is required'},
+                message='Order must have at least one item',
+            )
+
+        if order_type not in ['HALL', 'DELIVERY', 'PICKUP']:
+            return ServiceResponse.validation_error(
+                errors={'order_type': 'Must be HALL, DELIVERY, or PICKUP'},
+                message='Invalid order type',
+            )
+
+        delivery_person = None
+        if delivery_person_id:
+            delivery_person = DeliveryPersonRepository.get_by_id(delivery_person_id)
+            if not delivery_person:
+                return ServiceResponse.not_found('Delivery person not found')
+
+        last_id = OrderRepository.get_last_display_id()
+        display_id = (last_id % 100) + 1
+
+        product_ids = [item.get('product_id') for item in items]
+        products = {p.id: p for p in ProductRepository.filter(id__in=product_ids)}
+
+        total_amount = Decimal('0.00')
+        order_items_data = []
+
+        for item_data in items:
+            product_id = item_data.get('product_id')
+            quantity = item_data.get('quantity', 1)
+
+            if quantity <= 0:
+                return ServiceResponse.validation_error(
+                    errors={'quantity': 'Must be greater than 0'},
+                    message='Quantity must be greater than 0',
+                )
+
+            product = products.get(product_id)
+            if not product:
+                return ServiceResponse.not_found(f'Product with id {product_id} not found')
+
+            order_items_data.append({
+                'product': product,
+                'detail': item_data.get('detail'),
+                'quantity': quantity,
+                'price': product.price,
+            })
+            total_amount += product.price * quantity
+
+        order = OrderRepository.create(
+            user_id=user_id,
+            cashier_id=cashier_id,
+            display_id=display_id,
+            order_type=order_type,
+            phone_number=phone_number,
+            description=description,
+            status='PREPARING',
+            is_paid=False,
+            total_amount=total_amount,
+            delivery_person=delivery_person,
+        )
+
+        from base.models import OrderItem
+        OrderItem.objects.bulk_create([
+            OrderItem(
+                order=order,
+                product=d['product'],
+                detail=d['detail'],
+                quantity=d['quantity'],
+                price=d['price'],
+                ready_at=None,
+            ) for d in order_items_data
+        ])
+
+        return ServiceResponse.created(
+            data={'order_id': order.id, 'display_id': order.display_id},
+            message='Order created successfully',
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def update_order(order_id, **kwargs):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        allowed = {'phone_number', 'description', 'order_type'}
+        for key, value in kwargs.items():
+            if key in allowed and hasattr(order, key):
+                setattr(order, key, value)
+
+        order.save()
+        return ServiceResponse.success(message='Order updated successfully')
+
+    @staticmethod
+    @transaction.atomic
+    def add_item_to_order(order_id, product_id, quantity):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status not in ['PREPARING', 'OPEN']:
+            return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
+
+        product = ProductRepository.get_by_id(product_id)
+        if not product:
+            return ServiceResponse.not_found('Product not found')
+
+        existing = OrderItemRepository.get_existing_unready(order_id, product_id)
+        if existing:
+            existing.quantity += quantity
+            existing.save(update_fields=['quantity'])
+        else:
+            OrderItemRepository.create(
+                order=order, product=product, quantity=quantity, price=product.price
+            )
+
+        if order.ready_at:
+            order.ready_at = None
+            order.status = 'PREPARING'
+            order.save(update_fields=['ready_at', 'status'])
+
+        _recalculate_total(order)
+        return ServiceResponse.success(message='Item added to order successfully')
+
+    @staticmethod
+    @transaction.atomic
+    def update_order_item(order_id, item_id, quantity):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status not in ['PREPARING', 'OPEN']:
+            return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
+
+        if quantity <= 0:
+            return ServiceResponse.validation_error(
+                errors={'quantity': 'Must be greater than 0'},
+                message='Quantity must be greater than 0',
+            )
+
+        item = OrderItemRepository.first(id=item_id, order_id=order_id)
+        if not item:
+            return ServiceResponse.not_found('Order item not found')
+
+        item.quantity = quantity
+        item.save(update_fields=['quantity'])
+        _recalculate_total(order)
+
+        return ServiceResponse.success(message='Order item updated successfully')
+
+    @staticmethod
+    @transaction.atomic
+    def remove_item_from_order(order_id, item_id):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status not in ['PREPARING', 'OPEN']:
+            return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
+
+        item = OrderItemRepository.first(id=item_id, order_id=order_id)
+        if not item:
+            return ServiceResponse.not_found('Order item not found')
+
+        item.delete(hard_delete=True)
+
+        if order.items.count() == 0:
+            order.delete(hard_delete=True)
+            return ServiceResponse.success(message='Order deleted (no items remaining)')
+
+        _check_and_update_ready(order)
+        _recalculate_total(order)
+        return ServiceResponse.success(message='Item removed from order successfully')
+
+    @staticmethod
+    def update_order_status(order_id, status):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if status not in ALLOWED_STATUSES:
+            return ServiceResponse.error(f'Invalid status. Allowed: {", ".join(ALLOWED_STATUSES)}')
+
+        if order.status == 'CANCELLED':
+            return ServiceResponse.error('Cannot update cancelled order')
+
+        update_fields = ['status']
+        order.status = status
+
+        if status == 'READY':
+            now = timezone.now()
+            order.ready_at = now
+            order.items.filter(ready_at__isnull=True).update(ready_at=now)
+            update_fields.append('ready_at')
+
+        order.save(update_fields=update_fields)
+
+        return ServiceResponse.success(
+            data={'status': status},
+            message=f'Order status updated to {status}',
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_as_paid(order_id):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status == 'CANCELLED':
+            return ServiceResponse.error('Cancelled order cannot be paid')
+
+        if order.is_paid:
+            return ServiceResponse.error('Order already paid')
+
+        order.is_paid = True
+        order.paid_at = timezone.now()
+        order.save(update_fields=['is_paid', 'paid_at'])
+
+        InkassaService.add_to_register(order.total_amount)
+
+        return ServiceResponse.success(
+            data={'is_paid': True},
+            message='Order marked as paid',
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_as_unpaid(order_id):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if not order.is_paid:
+            return ServiceResponse.error('Order is not paid')
+
+        order.is_paid = False
+        order.paid_at = None
+        order.save(update_fields=['is_paid', 'paid_at'])
+
+        InkassaService.add_to_register(-order.total_amount)
+
+        return ServiceResponse.success(
+            data={'is_paid': False},
+            message='Order marked as unpaid',
+        )
+
+    @staticmethod
+    def mark_order_ready(order_id):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status == 'CANCELLED':
+            return ServiceResponse.error('Cannot mark cancelled order as ready')
+
+        if order.status == 'READY':
+            return ServiceResponse.error('Order is already ready')
+
+        now = timezone.now()
+        order.status = 'READY'
+        order.ready_at = now
+        order.save(update_fields=['status', 'ready_at'])
+        order.items.filter(ready_at__isnull=True).update(ready_at=now)
+
+        order_prep_time = (order.ready_at - order.created_at).total_seconds()
+
+        return ServiceResponse.success(
+            data={
+                'status': order.status,
+                'ready_at': order.ready_at.isoformat(),
+                'preparation_time_seconds': order_prep_time,
+                'preparation_time_formatted': _format_duration(order_prep_time),
+            },
+            message='Order marked as ready',
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_item_ready(order_id, item_id):
+        order = OrderRepository.get_by_id_with_relations(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status == 'CANCELLED':
+            return ServiceResponse.error('Cannot modify cancelled order')
+
+        if order.status == 'READY':
+            return ServiceResponse.error('Order is already marked as ready')
+
+        item = order.items.filter(id=item_id).first()
+        if not item:
+            return ServiceResponse.not_found('Order item not found')
+
+        if item.ready_at is not None:
+            return ServiceResponse.error('Item is already marked as ready')
+
+        now = timezone.now()
+        item.ready_at = now
+        item.save(update_fields=['ready_at'])
+
+        item_prep_time = (item.ready_at - order.created_at).total_seconds()
+        all_ready, order_became_ready = _check_and_update_ready(order)
+
+        order_prep_time = None
+        if order_became_ready and order.ready_at:
+            order_prep_time = (order.ready_at - order.created_at).total_seconds()
+
+        return ServiceResponse.success(
+            data={
+                'item': {
+                    'id': item.id,
+                    'product_name': item.product.name,
+                    'ready_at': item.ready_at.isoformat(),
+                    'preparation_time_seconds': item_prep_time,
+                    'preparation_time_formatted': _format_duration(item_prep_time),
+                },
+                'order': {
+                    'id': order.id,
+                    'display_id': order.display_id,
+                    'status': order.status,
+                    'all_items_ready': all_ready,
+                    'ready_at': order.ready_at.isoformat() if order.ready_at else None,
+                    'preparation_time_seconds': order_prep_time,
+                    'preparation_time_formatted': _format_duration(order_prep_time) if order_prep_time else None,
+                },
+            },
+            message='Item marked as ready',
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def unmark_item_ready(order_id, item_id):
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        if order.status == 'CANCELLED':
+            return ServiceResponse.error('Cannot modify cancelled order')
+
+        from base.models import OrderItem as OI
+        updated = OI.objects.filter(
+            id=item_id, order=order, ready_at__isnull=False
+        ).update(ready_at=None)
+
+        if not updated:
+            return ServiceResponse.error('Item is not marked as ready')
+
+        if order.status == 'READY':
+            order.status = 'PREPARING'
+            order.ready_at = None
+            order.save(update_fields=['status', 'ready_at'])
+
+        return ServiceResponse.success(
+            data={'item_id': item_id, 'order_status': order.status},
+            message='Item unmarked as ready',
+        )
+
+    @staticmethod
+    def delete_order(order_id, hard_delete=False):
+        if hard_delete:
+            from base.models import Order
+            try:
+                order = Order.objects.get(pk=order_id)
+            except Order.DoesNotExist:
+                return ServiceResponse.not_found('Order not found')
+            order.hard_delete()
+            return ServiceResponse.success(message='Order permanently deleted')
+
+        order = OrderRepository.get_by_id(order_id)
+        if not order:
+            return ServiceResponse.not_found('Order not found')
+
+        order.is_deleted = True
+        order.save(update_fields=['is_deleted', 'synced_at', 'sync_version'])
+        return ServiceResponse.success(message='Order deleted successfully')
+
+    @staticmethod
+    def restore_order(order_id):
+        from base.models import Order
+        try:
+            order = Order.objects.get(pk=order_id)
+        except Order.DoesNotExist:
+            return ServiceResponse.not_found('Order not found')
+
+        if not order.is_deleted:
+            return ServiceResponse.error('Order is not deleted')
+
+        order.is_deleted = False
+        order.save()
+        return ServiceResponse.success(
+            data={'order': {'id': order.id, 'display_id': order.display_id}},
+            message='Order restored successfully',
+        )
+
+    @staticmethod
+    def get_order_stats(date_from=None, date_to=None, cashier_id=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        stats = OrderRepository.get_stats_aggregate(date_from_dt, date_to_dt, cashier_id)
+        avg_prep = OrderRepository.get_avg_prep_time(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'total_orders': stats['total'],
+            'preparing_orders': stats['preparing'],
+            'ready_orders': stats['ready'],
+            'completed_orders': stats['completed'],
+            'cancelled_orders': stats['cancelled'],
+            'paid_orders': stats['paid'],
+            'unpaid_orders': stats['unpaid'],
+            'total_revenue': str(stats['total_revenue']),
+            'avg_order_value': str(stats['avg_order_value']),
+            'average_preparation_time_seconds': avg_prep,
+            'average_preparation_time_formatted': _format_duration(avg_prep) if avg_prep else None,
+        })
+
+    @staticmethod
+    def get_daily_stats(date_from=None, date_to=None, cashier_id=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        if not date_from_dt:
+            date_from_dt = timezone.now() - timedelta(days=30)
+        if not date_to_dt:
+            date_to_dt = timezone.now()
+
+        daily = OrderRepository.get_daily_stats(date_from_dt, date_to_dt, cashier_id)
+
+        return ServiceResponse.success(data={
+            'daily_stats': [{
+                'date': d['date'].isoformat() if d['date'] else None,
+                'orders': d['orders'],
+                'revenue': str(d['revenue']),
+                'paid': d['paid'],
+                'cancelled': d['cancelled'],
+            } for d in daily],
+            'period': {
+                'from': date_from_dt.isoformat(),
+                'to': date_to_dt.isoformat(),
+            },
+        })
+
+    @staticmethod
+    def get_monthly_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        if not date_from_dt:
+            date_from_dt = timezone.now() - timedelta(days=365)
+
+        monthly = OrderRepository.get_monthly_stats(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'monthly_stats': [{
+                'month': m['month'].isoformat() if m['month'] else None,
+                'orders': m['orders'],
+                'revenue': str(m['revenue']),
+                'paid': m['paid'],
+                'cancelled': m['cancelled'],
+                'avg_order_value': str(m['avg_order_value']),
+            } for m in monthly],
+        })
+
+    @staticmethod
+    def get_yearly_stats():
+        yearly = OrderRepository.get_yearly_stats()
+
+        return ServiceResponse.success(data={
+            'yearly_stats': [{
+                'year': y['year'].year if y['year'] else None,
+                'orders': y['orders'],
+                'revenue': str(y['revenue']),
+                'paid': y['paid'],
+                'cancelled': y['cancelled'],
+            } for y in yearly],
+        })
+
+    @staticmethod
+    def get_cashier_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        by_cashier = OrderRepository.get_by_cashier_stats(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'cashier_stats': [{
+                'cashier_id': c['cashier_id'],
+                'cashier_name': f"{c['cashier__first_name']} {c['cashier__last_name']}",
+                'orders': c['orders'],
+                'revenue': str(c['revenue']),
+                'paid': c['paid'],
+                'cancelled': c['cancelled'],
+            } for c in by_cashier],
+        })
+
+    @staticmethod
+    def get_status_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        by_status = OrderRepository.get_by_status_stats(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'status_stats': [{
+                'status': s['status'],
+                'count': s['count'],
+                'revenue': str(s['revenue']),
+            } for s in by_status],
+        })
+
+    @staticmethod
+    def get_order_type_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        by_type = OrderRepository.get_by_order_type_stats(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'order_type_stats': [{
+                'order_type': t['order_type'],
+                'count': t['count'],
+                'revenue': str(t['revenue']),
+            } for t in by_type],
+        })
+
+    @staticmethod
+    def get_top_products(date_from=None, date_to=None, limit=20):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        top = OrderItemRepository.get_top_products(date_from_dt, date_to_dt, limit)
+
+        return ServiceResponse.success(data={
+            'top_products': [{
+                'product_id': p['product_id'],
+                'product_name': p['product__name'],
+                'category_name': p['product__category__name'],
+                'total_quantity': p['total_qty'],
+                'total_revenue': str(p['total_revenue']),
+                'order_count': p['order_count'],
+            } for p in top],
+        })
+
+    @staticmethod
+    def get_least_sold_products(date_from=None, date_to=None, limit=20):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        least = OrderItemRepository.get_least_sold_products(date_from_dt, date_to_dt, limit)
+
+        return ServiceResponse.success(data={
+            'least_sold_products': [{
+                'product_id': p['product_id'],
+                'product_name': p['product__name'],
+                'category_name': p['product__category__name'],
+                'total_quantity': p['total_qty'],
+                'total_revenue': str(p['total_revenue']),
+                'order_count': p['order_count'],
+            } for p in least],
+        })
+
+    @staticmethod
+    def get_category_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        by_cat = OrderItemRepository.get_product_category_stats(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'category_stats': [{
+                'category_id': c['product__category_id'],
+                'category_name': c['product__category__name'],
+                'total_quantity': c['total_qty'],
+                'total_revenue': str(c['total_revenue']),
+                'order_count': c['order_count'],
+            } for c in by_cat],
+        })
+
+    @staticmethod
+    def get_hourly_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        hourly = OrderRepository.get_hourly_distribution(date_from_dt, date_to_dt)
+
+        return ServiceResponse.success(data={
+            'hourly_stats': [{
+                'hour': h['hour'],
+                'count': h['count'],
+                'revenue': str(h['revenue']),
+            } for h in hourly],
+        })
+
+    @staticmethod
+    def get_dashboard_stats(date_from=None, date_to=None):
+        date_from_dt = _parse_date(date_from)
+        date_to_dt = _parse_date(date_to)
+
+        today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        month_start = today.replace(day=1)
+
+        today_stats = OrderRepository.get_stats_aggregate(today, None)
+        month_stats = OrderRepository.get_stats_aggregate(month_start, None)
+        overall_stats = OrderRepository.get_stats_aggregate(date_from_dt, date_to_dt)
+        avg_prep = OrderRepository.get_avg_prep_time(today, None)
+
+        top = OrderItemRepository.get_top_products(date_from_dt, date_to_dt, 5)
+        least = OrderItemRepository.get_least_sold_products(date_from_dt, date_to_dt, 5)
+
+        return ServiceResponse.success(data={
+            'today': {
+                'orders': today_stats['total'],
+                'revenue': str(today_stats['total_revenue']),
+                'paid': today_stats['paid'],
+                'cancelled': today_stats['cancelled'],
+                'avg_prep_time': _format_duration(avg_prep) if avg_prep else None,
+            },
+            'this_month': {
+                'orders': month_stats['total'],
+                'revenue': str(month_stats['total_revenue']),
+                'paid': month_stats['paid'],
+                'cancelled': month_stats['cancelled'],
+            },
+            'overall': {
+                'total_orders': overall_stats['total'],
+                'total_revenue': str(overall_stats['total_revenue']),
+                'avg_order_value': str(overall_stats['avg_order_value']),
+            },
+            'top_products': [{
+                'product_name': p['product__name'],
+                'total_quantity': p['total_qty'],
+            } for p in top],
+            'least_sold_products': [{
+                'product_name': p['product__name'],
+                'total_quantity': p['total_qty'],
+            } for p in least],
+        })
