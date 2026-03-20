@@ -17,8 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 
+from base.services.sync.views import get_sync_urls
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/admins/', include('admins.urls')),
+    path('api/sync/', include(get_sync_urls())),
     path('', include('customers.urls')),
 ]

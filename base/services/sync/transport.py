@@ -1,0 +1,98 @@
+import json
+import logging
+import requests
+from base.services.sync.config import (
+    get_cloud_url, get_cloud_token, get_branch_id,
+    get_sync_timeout, get_sync_max_retries,
+)
+from base.services.sync.encoder import SyncEncoder
+
+logger = logging.getLogger(__name__)
+
+
+def _auth_headers():
+    return {
+        'Authorization': f'Branch {get_cloud_token()}',
+        'X-Branch-ID': get_branch_id(),
+        'Content-Type': 'application/json',
+    }
+
+
+def check_health():
+    url = get_cloud_url()
+    if not url:
+        return False
+    try:
+        resp = requests.get(
+            f'{url}/health',
+            headers=_auth_headers(),
+            timeout=5,
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def send_batch(model_name, records, retry=True):
+    url = get_cloud_url()
+    if not url:
+        return {'success': False, 'error': 'Cloud URL not configured'}
+
+    payload = json.dumps({
+        'model': model_name,
+        'branch_id': get_branch_id(),
+        'records': records,
+    }, cls=SyncEncoder)
+
+    max_retries = get_sync_max_retries() if retry else 1
+    timeout = get_sync_timeout()
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(
+                f'{url}/receive',
+                headers=_auth_headers(),
+                data=payload,
+                timeout=timeout,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                errors = data.get('errors', [])
+
+                if errors and data.get('created', 0) == 0 and data.get('updated', 0) == 0:
+                    return {
+                        'success': False,
+                        'error': f'Server rejected all records: {errors[0][:200]}',
+                        'response': data,
+                    }
+
+                return {
+                    'success': True,
+                    'created': data.get('created', 0),
+                    'updated': data.get('updated', 0),
+                    'skipped': data.get('skipped', 0),
+                    'errors': errors,
+                    'response': data,
+                }
+
+            last_error = f'HTTP {resp.status_code}: {resp.text[:200]}'
+            logger.warning(f'Sync attempt {attempt + 1}/{max_retries} failed: {last_error}')
+
+        except requests.exceptions.Timeout:
+            last_error = 'Request timeout'
+            logger.warning(f'Sync attempt {attempt + 1}/{max_retries}: timeout')
+        except requests.exceptions.ConnectionError:
+            last_error = 'Connection failed'
+            logger.warning(f'Sync attempt {attempt + 1}/{max_retries}: connection failed')
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f'Sync attempt {attempt + 1}/{max_retries}: {e}')
+
+        if attempt < max_retries - 1:
+            import time
+            backoff = min(2 ** attempt, 30)
+            time.sleep(backoff)
+
+    return {'success': False, 'error': last_error}

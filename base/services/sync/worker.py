@@ -1,0 +1,64 @@
+import logging
+import threading
+import time
+
+logger = logging.getLogger(__name__)
+
+_running = False
+_thread = None
+_lock = threading.Lock()
+
+
+def start():
+    global _running, _thread
+    with _lock:
+        if _running:
+            return False
+        _running = True
+        _thread = threading.Thread(target=_run_loop, daemon=True)
+        _thread.start()
+        logger.info('Sync worker started')
+        return True
+
+
+def stop():
+    global _running, _thread
+    with _lock:
+        _running = False
+        if _thread:
+            _thread.join(timeout=5)
+            _thread = None
+        logger.info('Sync worker stopped')
+
+
+def is_running():
+    return _running
+
+
+def _run_loop():
+    global _running
+    from base.services.sync.config import get_sync_interval, get_sync_retry_interval, SyncConfig
+
+    while _running:
+        try:
+            if not SyncConfig.is_enabled():
+                time.sleep(get_sync_interval())
+                continue
+
+            from base.services.sync.service import SyncService
+            result = SyncService.push()
+
+            if result.get('offline'):
+                time.sleep(get_sync_retry_interval())
+            else:
+                time.sleep(get_sync_interval())
+
+        except Exception as e:
+            logger.exception(f'Sync worker error: {e}')
+            time.sleep(get_sync_retry_interval())
+
+
+def start_on_ready():
+    from base.services.sync.config import SyncConfig, is_local_mode
+    if SyncConfig.is_enabled() and is_local_mode():
+        threading.Timer(5.0, start).start()

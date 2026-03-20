@@ -71,7 +71,7 @@ class SyncMixin(models.Model):
 
     def _queue_for_sync(self):
         try:
-            from base.services.sync_service import SyncService
+            from base.services.sync.service import SyncService
             SyncService.queue_record(self)
         except Exception:
             pass
