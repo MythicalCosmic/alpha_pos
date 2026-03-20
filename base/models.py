@@ -55,8 +55,16 @@ class SyncMixin(models.Model):
                 ):
                     self.synced_at = None
         super().save(*args, **kwargs)
-        if not syncing and getattr(settings, 'SYNC_ON_SAVE', False) and self.synced_at is None:
+        if not syncing and self.synced_at is None and self._is_sync_on_save():
             self._queue_for_sync()
+
+    @staticmethod
+    def _is_sync_on_save():
+        from django.core.cache import cache
+        override = cache.get('sync:config:on_save')
+        if override is not None:
+            return override
+        return getattr(settings, 'SYNC_ON_SAVE', False)
 
     def delete(self, *args, **kwargs):
         hard_delete = kwargs.pop('hard_delete', False)

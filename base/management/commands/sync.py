@@ -1,6 +1,7 @@
 import signal
 import logging
 from time import sleep
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 logger = logging.getLogger(__name__)
@@ -61,12 +62,16 @@ class Command(BaseCommand):
 
     def _show_status(self):
         from base.services.sync.service import SyncService
+        from django.core.cache import cache
 
         status = SyncService.get_status()
+        on_save_override = cache.get('sync:config:on_save')
+        on_save = on_save_override if on_save_override is not None else getattr(settings, 'SYNC_ON_SAVE', False)
 
         self.stdout.write('\n  Sync Status')
         self.stdout.write('  ' + '=' * 35)
         self.stdout.write(f'  Enabled: {"YES" if status["enabled"] else "NO"}')
+        self.stdout.write(f'  On save: {"YES" if on_save else "NO"}')
         self.stdout.write(f'  Branch: {status["mode"]}')
         self.stdout.write(f'  Online: {"YES" if status["is_online"] else "NO"}')
         self.stdout.write(f'  Last sync: {status["last_sync"] or "Never"}')
@@ -144,7 +149,7 @@ class Command(BaseCommand):
             self.stdout.write(f'    Last synced: {info["last_synced"] or "Never"}')
         self.stdout.write('')
 
-    def _run_worker(self):
+    def _run_worker(self, custom_interval=None):
         from base.services.sync.config import SyncConfig, is_local_mode, get_sync_interval
 
         if not SyncConfig.is_enabled():
@@ -158,7 +163,7 @@ class Command(BaseCommand):
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        interval = get_sync_interval()
+        interval = custom_interval or get_sync_interval()
         self.stdout.write(self.style.SUCCESS('  Sync worker started'))
         self.stdout.write(f'  Interval: {interval}s')
         self.stdout.write('  Press Ctrl+C to stop.\n')
@@ -201,6 +206,15 @@ class Command(BaseCommand):
         else:
             SyncConfig.disable()
             self.stdout.write(self.style.WARNING('  Sync disabled'))
+
+    def _toggle_on_save(self, enable):
+        from django.core.cache import cache
+
+        cache.set('sync:config:on_save', enable, None)
+        if enable:
+            self.stdout.write(self.style.SUCCESS('  SYNC_ON_SAVE enabled (auto-queue on model save)'))
+        else:
+            self.stdout.write(self.style.WARNING('  SYNC_ON_SAVE disabled'))
 
     def _show_queue(self):
         from base.services.sync.queue import SyncQueue
@@ -251,12 +265,16 @@ class Command(BaseCommand):
 
     def _show_config(self):
         from base.services.sync.config import SyncConfig
+        from django.core.cache import cache
 
         config = SyncConfig.get_status()
+        on_save_override = cache.get('sync:config:on_save')
+        on_save = on_save_override if on_save_override is not None else getattr(settings, 'SYNC_ON_SAVE', False)
 
         self.stdout.write('\n  Sync Configuration')
         self.stdout.write('  ' + '=' * 35)
         self.stdout.write(f'  Enabled: {"YES" if config["enabled"] else "NO"}')
+        self.stdout.write(f'  On save: {"YES" if on_save else "NO"}')
         self.stdout.write(f'  Mode: {config["mode"]}')
         self.stdout.write(f'  Branch: {config["branch_id"]}')
         self.stdout.write(f'  Cloud URL: {config["cloud_url"] or "NOT SET"}')
@@ -272,8 +290,11 @@ class Command(BaseCommand):
         self.stdout.write('    --full-push    Queue all records and push')
         self.stdout.write('    --report       Detailed model sync report')
         self.stdout.write('    --worker       Start background sync worker')
+        self.stdout.write('    --interval N   Worker push interval in seconds')
         self.stdout.write('    --enable       Enable sync')
         self.stdout.write('    --disable      Disable sync')
+        self.stdout.write('    --on-save      Enable auto-queue on model save')
+        self.stdout.write('    --off-save     Disable auto-queue on model save')
         self.stdout.write('    --queue        Show queue contents')
         self.stdout.write('    --clear        Clear sync queue')
         self.stdout.write('    --health       Check cloud server health')
