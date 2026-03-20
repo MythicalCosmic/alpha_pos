@@ -4,6 +4,7 @@ from django.utils import timezone
 from base.repositories import UserRepository, SessionRepository
 from base.security.hashing import verify_password, hash_password
 from base.helpers.response import ServiceResponse
+from base.notifications import ShiftNotification
 from base.models import User
 
 
@@ -67,6 +68,10 @@ class AuthService:
         user.last_login_api = ip_address[:20]
         user.save(update_fields=['last_login_at', 'last_login_api'])
 
+        if user.role == User.RoleChoices.CASHIER:
+            user_name = f'{user.first_name} {user.last_name}'.strip()
+            ShiftNotification.on_cashier_login(user.id, user_name)
+
         return ServiceResponse.success(
             data={
                 'token': session_key,
@@ -80,6 +85,11 @@ class AuthService:
         session = AuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
+
+        user = session.user_id
+        if user and user.role == User.RoleChoices.CASHIER:
+            ShiftNotification.on_cashier_logout(user.id)
+
         SessionRepository.invalidate_cache(session_key)
         SessionRepository.delete(session)
         return ServiceResponse.success(message="Logged out")

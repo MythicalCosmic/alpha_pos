@@ -5,6 +5,7 @@ from datetime import timedelta
 from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository
 from base.services.inkassa_service import InkassaService
 from base.helpers.response import ServiceResponse
+from base.notifications import OrderNotification
 
 
 ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED']
@@ -290,6 +291,10 @@ class CustomerOrderService:
             ) for d in order_items_data
         ])
 
+        fresh = OrderRepository.get_by_id_with_relations(order.id)
+        if fresh:
+            OrderNotification.on_new_order(fresh)
+
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
             message='Order created successfully',
@@ -415,6 +420,11 @@ class CustomerOrderService:
 
         order.save(update_fields=update_fields)
 
+        if status == 'READY':
+            OrderNotification.on_order_ready(order_id)
+        elif status == 'CANCELLED':
+            OrderNotification.on_order_cancelled(order_id)
+
         return ServiceResponse.success(
             data={'status': status},
             message=f'Order status updated to {status}',
@@ -454,6 +464,7 @@ class CustomerOrderService:
         order_prep_time = None
         if order_became_ready and order.ready_at:
             order_prep_time = (order.ready_at - order.created_at).total_seconds()
+            OrderNotification.on_order_ready(order_id)
 
         items_status = [{
             'id': oi.id,
@@ -542,6 +553,7 @@ class CustomerOrderService:
         order.save(update_fields=['is_paid', 'paid_at'])
 
         InkassaService.add_to_register(order.total_amount)
+        OrderNotification.on_order_paid(order_id)
 
         return ServiceResponse.success(
             data={'is_paid': True},
@@ -571,6 +583,7 @@ class CustomerOrderService:
         order.items.filter(ready_at__isnull=True).update(ready_at=now)
 
         order_prep_time = (order.ready_at - order.created_at).total_seconds()
+        OrderNotification.on_order_ready(order_id)
 
         return ServiceResponse.success(
             data={
