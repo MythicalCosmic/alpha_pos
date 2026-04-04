@@ -21,8 +21,14 @@ def health(request):
 @require_POST
 def receive(request):
     auth = request.META.get('HTTP_AUTHORIZATION', '')
-    if not auth.startswith('Branch '):
+    if not auth.startswith('Branch ') and not auth.startswith('Cloud '):
         return JsonResponse({'error': 'Invalid authorization'}, status=401)
+
+    if auth.startswith('Cloud '):
+        token = auth[6:]
+        expected = getattr(settings, 'CLOUD_SYNC_TOKEN', '')
+        if not expected or token != expected:
+            return JsonResponse({'error': 'Invalid cloud token'}, status=401)
 
     branch_id = request.META.get('HTTP_X_BRANCH_ID', 'unknown')
 
@@ -131,6 +137,64 @@ def report(request):
     return JsonResponse(SyncService.status_report())
 
 
+@csrf_exempt
+@require_GET
+def changes(request):
+    auth = request.META.get('HTTP_AUTHORIZATION', '')
+    if not auth.startswith('Branch '):
+        return JsonResponse({'error': 'Invalid authorization'}, status=401)
+
+    from base.services.sync.config import SYNC_ORDER, get_all_models
+    from base.services.sync.service import SyncService
+    from django.utils.dateparse import parse_datetime
+
+    requesting_branch = request.META.get('HTTP_X_BRANCH_ID', '')
+    since_param = request.GET.get('since')
+    since_dt = parse_datetime(since_param) if since_param else None
+
+    models = get_all_models()
+    data = {}
+
+    for name in SYNC_ORDER:
+        model_class = models.get(name)
+        if not model_class:
+            continue
+
+        if since_dt:
+            records = SyncService.get_changes_after(model_class, since_dt)
+        else:
+            records = [obj.to_sync_dict() for obj in model_class.objects.all()[:5000]]
+
+        if requesting_branch:
+            records = [r for r in records if r.get('branch_id') != requesting_branch]
+
+        if records:
+            data[name] = records
+
+    from django.utils import timezone
+    return JsonResponse({
+        'success': True,
+        'data': data,
+        'server_timestamp': timezone.now().isoformat(),
+    })
+
+
+@csrf_exempt
+@require_POST
+def trigger_pull(request):
+    from base.services.sync.service import SyncService
+    from base.services.sync.config import SyncConfig, is_local_mode
+
+    if not SyncConfig.is_enabled():
+        return JsonResponse({'success': False, 'message': 'Sync not enabled'}, status=400)
+
+    if not is_local_mode():
+        return JsonResponse({'success': False, 'message': 'Only available in local mode'}, status=400)
+
+    result = SyncService.pull_from_cloud()
+    return JsonResponse(result)
+
+
 def get_sync_urls():
     from django.urls import path
     return [
@@ -138,7 +202,9 @@ def get_sync_urls():
         path('receive', receive, name='sync-receive'),
         path('status', status, name='sync-status'),
         path('trigger', trigger, name='sync-trigger'),
+        path('trigger-pull', trigger_pull, name='sync-trigger-pull'),
         path('full-push', full_push, name='sync-full-push'),
+        path('changes', changes, name='sync-changes'),
         path('queue', queue_view, name='sync-queue'),
         path('queue/clear', queue_clear, name='sync-queue-clear'),
         path('report', report, name='sync-report'),

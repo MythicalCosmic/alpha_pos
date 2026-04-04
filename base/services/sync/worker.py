@@ -37,7 +37,10 @@ def is_running():
 
 def _run_loop():
     global _running
-    from base.services.sync.config import get_sync_interval, get_sync_retry_interval, SyncConfig
+    from base.services.sync.config import (
+        get_sync_interval, get_sync_retry_interval,
+        SyncConfig, get_pull_enabled,
+    )
 
     while _running:
         try:
@@ -46,12 +49,20 @@ def _run_loop():
                 continue
 
             from base.services.sync.service import SyncService
-            result = SyncService.push()
 
-            if result.get('offline'):
+            push_result = SyncService.push()
+
+            if push_result.get('offline'):
                 time.sleep(get_sync_retry_interval())
-            else:
-                time.sleep(get_sync_interval())
+                continue
+
+            if get_pull_enabled():
+                try:
+                    SyncService.pull_from_cloud()
+                except Exception as e:
+                    logger.warning(f'Pull error in worker: {e}')
+
+            time.sleep(get_sync_interval())
 
         except Exception as e:
             logger.exception(f'Sync worker error: {e}')

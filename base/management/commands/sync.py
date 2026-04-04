@@ -27,6 +27,7 @@ class Command(BaseCommand):
         parser.add_argument('--off-save', action='store_true', help='Disable SYNC_ON_SAVE')
         parser.add_argument('--queue', action='store_true', help='Show queue contents')
         parser.add_argument('--clear', action='store_true', help='Clear sync queue')
+        parser.add_argument('--pull', action='store_true', help='Pull changes from cloud')
         parser.add_argument('--health', action='store_true', help='Check cloud server health')
         parser.add_argument('--config', action='store_true', help='Show sync configuration')
 
@@ -49,6 +50,8 @@ class Command(BaseCommand):
             self._toggle_on_save(True)
         elif options['off_save']:
             self._toggle_on_save(False)
+        elif options['pull']:
+            self._pull()
         elif options['queue']:
             self._show_queue()
         elif options['clear']:
@@ -74,7 +77,8 @@ class Command(BaseCommand):
         self.stdout.write(f'  On save: {"YES" if on_save else "NO"}')
         self.stdout.write(f'  Branch: {status["mode"]}')
         self.stdout.write(f'  Online: {"YES" if status["is_online"] else "NO"}')
-        self.stdout.write(f'  Last sync: {status["last_sync"] or "Never"}')
+        self.stdout.write(f'  Last push: {status["last_sync"] or "Never"}')
+        self.stdout.write(f'  Last pull: {status["last_pull"] or "Never"}')
         self.stdout.write(f'  Pending: {status["pending_count"]}')
         self.stdout.write(f'  Failed: {status["failed_count"]}')
 
@@ -131,6 +135,30 @@ class Command(BaseCommand):
         else:
             self.stdout.write(self.style.ERROR(f'  Failed: {result.get("message", "Unknown")}'))
 
+    def _pull(self):
+        from base.services.sync.service import SyncService
+        from base.services.sync.config import SyncConfig, is_local_mode
+
+        if not SyncConfig.is_enabled():
+            self.stdout.write(self.style.WARNING('  Sync not enabled. Use --enable first.'))
+            return
+
+        if not is_local_mode():
+            self.stdout.write(self.style.WARNING('  Pull only available in local mode.'))
+            return
+
+        self.stdout.write('  Pulling from cloud...')
+        result = SyncService.pull_from_cloud()
+
+        if result.get('success'):
+            created = result.get('created', 0)
+            updated = result.get('updated', 0)
+            self.stdout.write(self.style.SUCCESS(f'  Created: {created}, Updated: {updated}'))
+        elif result.get('offline'):
+            self.stdout.write(self.style.WARNING('  Cloud server unreachable.'))
+        else:
+            self.stdout.write(self.style.ERROR(f'  Failed: {result.get("message", "Unknown")}'))
+
     def _show_report(self):
         from base.services.sync.service import SyncService
 
@@ -140,6 +168,7 @@ class Command(BaseCommand):
         self.stdout.write('  ' + '=' * 45)
         self.stdout.write(f'  Branch: {report["branch_id"]}')
         self.stdout.write(f'  Last push: {report["last_push"] or "Never"}')
+        self.stdout.write(f'  Last pull: {report["last_pull"] or "Never"}')
 
         for name, info in report.get('models', {}).items():
             self.stdout.write(f'\n  {name}:')
@@ -150,7 +179,9 @@ class Command(BaseCommand):
         self.stdout.write('')
 
     def _run_worker(self, custom_interval=None):
-        from base.services.sync.config import SyncConfig, is_local_mode, get_sync_interval
+        from base.services.sync.config import (
+            SyncConfig, is_local_mode, get_sync_interval, get_pull_enabled,
+        )
 
         if not SyncConfig.is_enabled():
             self.stdout.write(self.style.WARNING('  Sync not enabled. Use --enable first.'))
@@ -164,8 +195,9 @@ class Command(BaseCommand):
         signal.signal(signal.SIGTERM, self._signal_handler)
 
         interval = custom_interval or get_sync_interval()
-        self.stdout.write(self.style.SUCCESS('  Sync worker started'))
+        self.stdout.write(self.style.SUCCESS('  Sync worker started (bidirectional)'))
         self.stdout.write(f'  Interval: {interval}s')
+        self.stdout.write(f'  Pull: {"ON" if get_pull_enabled() else "OFF"}')
         self.stdout.write('  Press Ctrl+C to stop.\n')
 
         from base.services.sync.service import SyncService
@@ -175,20 +207,29 @@ class Command(BaseCommand):
         while self.running:
             try:
                 ts = uzb_now().strftime('%H:%M:%S')
-                result = SyncService.push()
 
-                if result.get('offline'):
+                push_result = SyncService.push()
+
+                if push_result.get('offline'):
                     self.stdout.write(self.style.WARNING(f'  [{ts}] Offline'))
                     sleep(get_sync_retry_interval())
-                elif result.get('success'):
-                    synced = result.get('synced', 0)
-                    if synced > 0:
-                        self.stdout.write(self.style.SUCCESS(f'  [{ts}] Synced {synced}'))
-                    sleep(interval)
-                else:
-                    msg = result.get('message', 'Unknown')
-                    self.stdout.write(self.style.WARNING(f'  [{ts}] {msg}'))
-                    sleep(interval)
+                    continue
+
+                pushed = push_result.get('synced', 0)
+                if pushed > 0:
+                    self.stdout.write(self.style.SUCCESS(f'  [{ts}] Pushed {pushed}'))
+
+                if get_pull_enabled():
+                    pull_result = SyncService.pull_from_cloud()
+                    if pull_result.get('success'):
+                        created = pull_result.get('created', 0)
+                        updated = pull_result.get('updated', 0)
+                        if created > 0 or updated > 0:
+                            self.stdout.write(self.style.SUCCESS(
+                                f'  [{ts}] Pulled +{created} ~{updated}'
+                            ))
+
+                sleep(interval)
 
             except Exception as e:
                 logger.error(f'Worker error: {e}')
@@ -281,6 +322,7 @@ class Command(BaseCommand):
         self.stdout.write(f'  Interval: {config["interval"]}s')
         self.stdout.write(f'  Batch size: {config["batch_size"]}')
         self.stdout.write(f'  Max retries: {config["max_retries"]}')
+        self.stdout.write(f'  Pull enabled: {"YES" if config["pull_enabled"] else "NO"}')
         self.stdout.write('')
 
     def _print_help(self):
@@ -288,6 +330,7 @@ class Command(BaseCommand):
         self.stdout.write('    --status       Show sync status')
         self.stdout.write('    --push         Push pending records')
         self.stdout.write('    --full-push    Queue all records and push')
+        self.stdout.write('    --pull         Pull changes from cloud')
         self.stdout.write('    --report       Detailed model sync report')
         self.stdout.write('    --worker       Start background sync worker')
         self.stdout.write('    --interval N   Worker push interval in seconds')

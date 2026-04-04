@@ -253,6 +253,7 @@ class SyncService:
             'mode': get_branch_id(),
             'is_online': status_data.get('is_online', False),
             'last_sync': status_data.get('last_sync'),
+            'last_pull': status_data.get('last_pull'),
             'pending_count': pending,
             'failed_count': failed,
             'last_error': status_data.get('last_error'),
@@ -316,10 +317,12 @@ class SyncService:
                 'last_synced': last_synced.isoformat() if last_synced else None,
             }
 
+        status_data = SyncStatus.get()
         return {
             'success': True,
             'branch_id': branch,
-            'last_push': SyncStatus.get().get('last_sync'),
+            'last_push': status_data.get('last_sync'),
+            'last_pull': status_data.get('last_pull'),
             'models': models_status,
         }
 
@@ -375,6 +378,26 @@ class SyncService:
             TelegramAPI.send_message(text)
         except Exception as e:
             logger.debug(f'Sync notification skipped: {e}')
+
+    @classmethod
+    def _notify_pull_success(cls, created, updated):
+        try:
+            from base.notifications.config import NotificationConfig
+            if not NotificationConfig.is_enabled():
+                return
+            from base.notifications.telegram import TelegramAPI
+            from base.notifications.helpers import format_datetime
+            _, time_str = format_datetime()
+            text = (
+                f'<b>SYNC QABUL QILINDI</b>\n\n'
+                f'Yangi: <b>{created}</b> ta\n'
+                f'Yangilangan: <b>{updated}</b> ta\n'
+                f'Branch: {get_branch_id()}\n'
+                f'Vaqt: {time_str}'
+            )
+            TelegramAPI.send_message(text)
+        except Exception as e:
+            logger.debug(f'Pull notification skipped: {e}')
 
     @classmethod
     def _notify_error(cls, error):
