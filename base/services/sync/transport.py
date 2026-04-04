@@ -96,3 +96,54 @@ def send_batch(model_name, records, retry=True):
             time.sleep(backoff)
 
     return {'success': False, 'error': last_error}
+
+
+def fetch_changes(since_timestamp=None):
+    url = get_cloud_url()
+    if not url:
+        return {'success': False, 'error': 'Cloud URL not configured'}
+
+    params = {'branch_id': get_branch_id()}
+    if since_timestamp:
+        params['since'] = since_timestamp
+
+    max_retries = get_sync_max_retries()
+    timeout = get_sync_timeout()
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(
+                f'{url}/changes',
+                headers=_auth_headers(),
+                params=params,
+                timeout=timeout,
+            )
+
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    'success': True,
+                    'data': data.get('data', {}),
+                    'server_timestamp': data.get('server_timestamp'),
+                }
+
+            last_error = f'HTTP {resp.status_code}: {resp.text[:200]}'
+            logger.warning(f'Pull attempt {attempt + 1}/{max_retries} failed: {last_error}')
+
+        except requests.exceptions.Timeout:
+            last_error = 'Request timeout'
+            logger.warning(f'Pull attempt {attempt + 1}/{max_retries}: timeout')
+        except requests.exceptions.ConnectionError:
+            last_error = 'Connection failed'
+            logger.warning(f'Pull attempt {attempt + 1}/{max_retries}: connection failed')
+        except Exception as e:
+            last_error = str(e)
+            logger.error(f'Pull attempt {attempt + 1}/{max_retries}: {e}')
+
+        if attempt < max_retries - 1:
+            import time
+            backoff = min(2 ** attempt, 30)
+            time.sleep(backoff)
+
+    return {'success': False, 'error': last_error}

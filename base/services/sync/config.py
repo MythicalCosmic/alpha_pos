@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.core.cache import cache
+from base.services.sync.cache import safe_get, safe_set
 
 
 CACHE_PREFIX = 'sync'
@@ -66,6 +66,10 @@ def get_sync_batch_size():
     return getattr(settings, 'SYNC_BATCH_SIZE', 500)
 
 
+def get_pull_enabled():
+    return getattr(settings, 'SYNC_PULL_ENABLED', True)
+
+
 def is_local_mode():
     return get_deployment_mode() == 'local'
 
@@ -91,18 +95,18 @@ class SyncConfig:
 
     @classmethod
     def is_enabled(cls):
-        override = cache.get(cls._key('enabled'))
+        override = safe_get(cls._key('enabled'))
         if override is not None:
             return override
         return getattr(settings, 'SYNC_ENABLED', False)
 
     @classmethod
     def enable(cls):
-        cache.set(cls._key('enabled'), True, None)
+        safe_set(cls._key('enabled'), True, None)
 
     @classmethod
     def disable(cls):
-        cache.set(cls._key('enabled'), False, None)
+        safe_set(cls._key('enabled'), False, None)
 
     @classmethod
     def get_status(cls):
@@ -114,4 +118,5 @@ class SyncConfig:
             'interval': get_sync_interval(),
             'batch_size': get_sync_batch_size(),
             'max_retries': get_sync_max_retries(),
+            'pull_enabled': get_pull_enabled(),
         }

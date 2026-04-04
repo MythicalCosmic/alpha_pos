@@ -1,15 +1,13 @@
 import logging
-from collections import defaultdict
-from django.core.cache import cache
 from django.utils import timezone
+from base.services.sync.cache import safe_add, safe_delete
 from base.services.sync.config import (
     SYNC_ORDER, SyncConfig, get_branch_id, is_local_mode,
     get_all_models, get_sync_batch_size,
 )
 from base.services.sync.queue import SyncQueue
-from base.services.sync.transport import check_health, send_batch
+from base.services.sync.transport import check_health, send_batch, fetch_changes
 from base.services.sync.status import SyncStatus
-from base.services.sync.encoder import serialize_payload
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +131,81 @@ class SyncService:
                 'total_updated': total_updated,
                 'total_errors': total_errors,
                 'details': details,
+            }
+        finally:
+            cls._release_lock('pull')
+
+    @classmethod
+    def pull_from_cloud(cls):
+        if not SyncConfig.is_enabled():
+            return {'success': False, 'message': 'Sync not enabled'}
+
+        if not is_local_mode():
+            return {'success': False, 'message': 'Pull only available in local mode'}
+
+        from base.services.sync.config import get_pull_enabled
+        if not get_pull_enabled():
+            return {'success': False, 'message': 'Pull disabled'}
+
+        if not cls._acquire_lock('pull'):
+            return {'success': False, 'message': 'Pull already in progress'}
+
+        try:
+            if not check_health():
+                SyncStatus.set_online(False)
+                return {'success': False, 'message': 'Cannot reach cloud server', 'offline': True}
+
+            SyncStatus.set_online(True)
+
+            status_data = SyncStatus.get()
+            last_pull = status_data.get('last_pull')
+
+            result = fetch_changes(since_timestamp=last_pull)
+            if not result['success']:
+                error = result.get('error', 'Unknown')
+                cls._notify_error(f'Pull failed: {error}')
+                return {'success': False, 'message': error}
+
+            data = result.get('data', {})
+            if not data:
+                return {'success': True, 'message': 'Nothing to pull', 'created': 0, 'updated': 0}
+
+            models = get_all_models()
+            total_created = 0
+            total_updated = 0
+            errors = []
+
+            for name in SYNC_ORDER:
+                if name not in data:
+                    continue
+
+                model_class = models.get(name)
+                if not model_class:
+                    continue
+
+                apply_result = cls._apply_records(model_class, data[name])
+                total_created += apply_result['created']
+                total_updated += apply_result['updated']
+                if apply_result['errors']:
+                    errors.extend(apply_result['errors'])
+
+            server_ts = result.get('server_timestamp')
+            SyncStatus.set_last_pull(total_created, total_updated, [str(e) for e in errors[:1]])
+
+            if server_ts:
+                SyncStatus.update(last_pull=server_ts)
+
+            total = total_created + total_updated
+            if total > 0 and not errors:
+                cls._notify_pull_success(total_created, total_updated)
+            elif errors:
+                cls._notify_error(f'Pull errors: {errors[0]}')
+
+            return {
+                'success': True,
+                'created': total_created,
+                'updated': total_updated,
+                'errors': [str(e) for e in errors],
             }
         finally:
             cls._release_lock('pull')
@@ -278,11 +351,11 @@ class SyncService:
 
     @classmethod
     def _acquire_lock(cls, name):
-        return cache.add(f'sync:lock:{name}', True, LOCK_TTL)
+        return safe_add(f'sync:lock:{name}', True, LOCK_TTL)
 
     @classmethod
     def _release_lock(cls, name):
-        cache.delete(f'sync:lock:{name}')
+        safe_delete(f'sync:lock:{name}')
 
     @classmethod
     def _notify_success(cls, count):

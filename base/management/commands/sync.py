@@ -62,10 +62,10 @@ class Command(BaseCommand):
 
     def _show_status(self):
         from base.services.sync.service import SyncService
-        from django.core.cache import cache
+        from base.services.sync.cache import safe_get
 
         status = SyncService.get_status()
-        on_save_override = cache.get('sync:config:on_save')
+        on_save_override = safe_get('sync:config:on_save')
         on_save = on_save_override if on_save_override is not None else getattr(settings, 'SYNC_ON_SAVE', False)
 
         self.stdout.write('\n  Sync Status')
@@ -208,9 +208,9 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('  Sync disabled'))
 
     def _toggle_on_save(self, enable):
-        from django.core.cache import cache
+        from base.services.sync.cache import safe_set
 
-        cache.set('sync:config:on_save', enable, None)
+        safe_set('sync:config:on_save', enable, None)
         if enable:
             self.stdout.write(self.style.SUCCESS('  SYNC_ON_SAVE enabled (auto-queue on model save)'))
         else:
@@ -265,10 +265,10 @@ class Command(BaseCommand):
 
     def _show_config(self):
         from base.services.sync.config import SyncConfig
-        from django.core.cache import cache
+        from base.services.sync.cache import safe_get
 
         config = SyncConfig.get_status()
-        on_save_override = cache.get('sync:config:on_save')
+        on_save_override = safe_get('sync:config:on_save')
         on_save = on_save_override if on_save_override is not None else getattr(settings, 'SYNC_ON_SAVE', False)
 
         self.stdout.write('\n  Sync Configuration')

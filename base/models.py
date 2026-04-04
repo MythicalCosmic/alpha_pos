@@ -60,8 +60,8 @@ class SyncMixin(models.Model):
 
     @staticmethod
     def _is_sync_on_save():
-        from django.core.cache import cache
-        override = cache.get('sync:config:on_save')
+        from base.services.sync.cache import safe_get
+        override = safe_get('sync:config:on_save')
         if override is not None:
             return override
         return getattr(settings, 'SYNC_ON_SAVE', False)

@@ -1,5 +1,5 @@
-from django.core.cache import cache
 from django.utils import timezone
+from base.services.sync.cache import safe_get, safe_set, safe_delete
 
 
 STATUS_KEY = 'sync:status'
@@ -13,11 +13,11 @@ class SyncStatus:
         data = cls.get()
         data.update(kwargs)
         data['updated_at'] = timezone.now().isoformat()
-        cache.set(STATUS_KEY, data, STATUS_TTL)
+        safe_set(STATUS_KEY, data, STATUS_TTL)
 
     @classmethod
     def get(cls):
-        return cache.get(STATUS_KEY) or {}
+        return safe_get(STATUS_KEY) or {}
 
     @classmethod
     def set_online(cls, online=True):
@@ -33,9 +33,18 @@ class SyncStatus:
         )
 
     @classmethod
+    def set_last_pull(cls, created=0, updated=0, errors=None):
+        cls.update(
+            last_pull=timezone.now().isoformat(),
+            last_pull_created=created,
+            last_pull_updated=updated,
+            last_pull_error=errors[0] if errors else None,
+        )
+
+    @classmethod
     def set_error(cls, error):
         cls.update(last_error=str(error)[:500])
 
     @classmethod
     def clear(cls):
-        cache.delete(STATUS_KEY)
+        safe_delete(STATUS_KEY)

@@ -1,7 +1,7 @@
 import json
 import logging
-from django.core.cache import cache
 from django.utils import timezone
+from base.services.sync.cache import safe_get, safe_set, safe_delete
 from base.services.sync.encoder import serialize_payload
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class SyncQueue:
 
     @classmethod
     def clear(cls):
-        cache.delete(QUEUE_KEY)
+        safe_delete(QUEUE_KEY)
 
     @classmethod
     def get_summary(cls):
@@ -103,7 +103,7 @@ class SyncQueue:
 
     @classmethod
     def _get(cls):
-        data = cache.get(QUEUE_KEY)
+        data = safe_get(QUEUE_KEY)
         if data is None:
             return []
         if isinstance(data, str):
@@ -115,4 +115,4 @@ class SyncQueue:
 
     @classmethod
     def _set(cls, queue):
-        cache.set(QUEUE_KEY, queue, QUEUE_TTL)
+        safe_set(QUEUE_KEY, queue, QUEUE_TTL)
