@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: alpha_pos
+      POSTGRES_USER: alpha_pos
+      POSTGRES_PASSWORD: alpha_pos_secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alpha_pos"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      DEBUG: "True"
+      SECRET_KEY: "django-insecure-docker-dev-key-change-in-production"
+      ALLOWED_HOSTS: "*"
+      DB_ENGINE: "django.db.backends.postgresql"
+      DB_NAME: "alpha_pos"
+      DB_USER: "alpha_pos"
+      DB_PASSWORD: "alpha_pos_secret"
+      DB_HOST: "db"
+      DB_PORT: "5432"
+      REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

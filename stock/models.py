@@ -385,9 +385,8 @@ class ProductStockLink(models.Model):
         PAID = "PAID", "Paid"
 
     uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
-    # NOTE: Replace 'main.Product' with your actual Product model path
     product = models.OneToOneField(
-        "main.Product",
+        "base.Product",
         on_delete=models.CASCADE,
         related_name="stock_link",
     )
@@ -851,7 +850,7 @@ class StockTransaction(models.Model):
 
     # Explicit FKs for the most common reference types
     order = models.ForeignKey(
-        "main.Order",
+        "base.Order",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
