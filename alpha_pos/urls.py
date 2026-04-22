@@ -22,6 +22,7 @@ from base.services.sync.views import get_sync_urls
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/admins/', include('admins.urls')),
+    path('api/admins/stock/', include('stock.urls')),
     path('api/sync/', include(get_sync_urls())),
     path('', include('customers.urls')),
 ]

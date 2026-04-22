@@ -1,4 +1,7 @@
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 from typing import Dict, Any, List
 from decimal import Decimal
 from datetime import timedelta
