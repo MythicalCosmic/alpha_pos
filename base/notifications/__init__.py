@@ -1,3 +1,3 @@
-from base.notifications.order import OrderNotification
-from base.notifications.shift import ShiftNotification
-from base.notifications.config import NotificationConfig
+from notifications.handlers.order import OrderNotification
+from notifications.handlers.shift import ShiftNotification
+from notifications.services.config_service import ConfigService as NotificationConfig

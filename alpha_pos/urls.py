@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/admins/stock/', include('stock.urls')),
     path('api/admins/hr/', include('hr.urls')),
     path('api/admins/discounts/', include('discounts.urls')),
+    path('api/admins/notifications/', include('notifications.urls')),
     path('api/waiters/', include('waiters.urls')),
     path('api/sync/', include(get_sync_urls())),
     path('', include('customers.urls')),

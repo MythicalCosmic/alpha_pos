@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'hr',
     'waiters',
     'discounts',
+    'notifications',
 ]
 
 MIDDLEWARE = [
@@ -145,10 +146,6 @@ CACHES = {
 }
 
 SESSION_CACHE_TTL = 300
-
-TELEGRAM_BOT_TOKEN = ''
-TELEGRAM_CHAT_IDS = []
-NOTIFICATION_TIMEOUT = 10
 
 SYNC_ENABLED = False
 CLOUD_SYNC_URL = ''

@@ -14,7 +14,7 @@ class Command(BaseCommand):
         dry_run = options['dry_run']
         today = timezone.now().date()
         from hr.models import EmployeeContract, EmployeeDocument
-        from hr.notifications import HRNotification
+        from notifications.handlers.hr import HRNotification
 
         # Check contracts expiring in 30, 14, 7, 1 days
         for days in [30, 14, 7, 1]:
