@@ -1,142 +1,148 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from base.helpers.response import ServiceResponse
 from stock.models import (
     ProductStockLink, ProductComponentStock,
     StockItem, StockUnit, Recipe, StockSettings
 )
-from stock.services.base_service import (
-    BaseService, success_response, error_response, paginate_queryset,
-    ValidationError, NotFoundError, BusinessRuleError,
-    to_decimal
+from stock.services.base_service import to_decimal
+from stock.repositories import (
+    ProductStockLinkRepository, ProductComponentStockRepository,
+    RecipeRepository, RecipeIngredientRepository,
+    StockItemRepository, StockUnitRepository,
+    StockSettingsRepository,
 )
 
 
-class ProductStockLinkService(BaseService):
-    
-    model = ProductStockLink
-    
-    
+def _pagination_data(page_obj, paginator):
+    return {
+        "page": page_obj.number,
+        "per_page": paginator.per_page,
+        "total": paginator.count,
+        "total_pages": paginator.num_pages,
+        "has_next": page_obj.has_next(),
+        "has_previous": page_obj.has_previous(),
+    }
+
+
+class ProductStockLinkService:
+
     @classmethod
     def serialize(cls, link: ProductStockLink, include_components: bool = False) -> Dict[str, Any]:
         data = {
             "id": link.id,
             "uuid": str(link.uuid),
             "product_id": link.product_id,
-            
+
             "link_type": link.link_type,
             "link_type_display": link.get_link_type_display(),
-            
+
             "recipe_id": link.recipe_id,
             "recipe_name": link.recipe.name if link.recipe else None,
-            
+
             "stock_item_id": link.stock_item_id,
             "stock_item_name": link.stock_item.name if link.stock_item else None,
-            
+
             "quantity_per_sale": str(link.quantity_per_sale),
             "unit_id": link.unit_id,
             "unit_short": link.unit.short_name if link.unit else None,
-            
+
             "deduct_on_status": link.deduct_on_status,
             "deduct_on_status_display": link.get_deduct_on_status_display(),
-            
+
             "is_active": link.is_active,
             "created_at": link.created_at.isoformat(),
             "updated_at": link.updated_at.isoformat(),
         }
-        
+
         if include_components and link.link_type == "COMPONENT_BASED":
             data["components"] = [
                 ProductComponentService.serialize(comp)
                 for comp in link.components.select_related("stock_item", "unit")
             ]
-        
+
         return data
-    
-    
+
     @classmethod
     def list(cls,
              page: int = 1,
              per_page: int = 50,
              link_type: str = None,
              active_only: bool = True,
-             unlinked_only: bool = False) -> Dict[str, Any]:
-        queryset = cls.model.objects.select_related(
+             unlinked_only: bool = False) -> Tuple[Dict[str, Any], int]:
+        queryset = ProductStockLinkRepository.get_all().select_related(
             "recipe", "stock_item", "unit"
         )
-        
+
         if active_only:
             queryset = queryset.filter(is_active=True)
-        
+
         if link_type:
             queryset = queryset.filter(link_type=link_type)
-        
+
         queryset = queryset.order_by("product_id")
-        
-        links, pagination = paginate_queryset(queryset, page, per_page)
-        
-        return success_response({
-            "links": [cls.serialize(link) for link in links],
-            "pagination": pagination,
+
+        page_obj, paginator = ProductStockLinkRepository.paginate(queryset, page, per_page)
+
+        return ServiceResponse.success(data={
+            "links": [cls.serialize(link) for link in page_obj],
+            "pagination": _pagination_data(page_obj, paginator),
             "link_types": [{"value": c[0], "label": c[1]} for c in ProductStockLink.LinkType.choices],
             "deduct_statuses": [{"value": c[0], "label": c[1]} for c in ProductStockLink.DeductOn.choices],
         })
-    
-    
+
     @classmethod
-    def get(cls, link_id: int, include_components: bool = True) -> Dict[str, Any]:
-        link = cls.model.objects.select_related(
-            "recipe", "stock_item", "unit"
-        ).filter(id=link_id).first()
-        
+    def get(cls, link_id: int, include_components: bool = True) -> Tuple[Dict[str, Any], int]:
+        link = ProductStockLinkRepository.get_with_components(link_id)
         if not link:
-            raise NotFoundError("Product link", link_id)
-        
-        return success_response({
+            return ServiceResponse.not_found(f"Product link with id {link_id} not found")
+
+        return ServiceResponse.success(data={
             "link": cls.serialize(link, include_components=include_components)
         })
-    
+
     @classmethod
-    def get_by_product(cls, product_id: int) -> Dict[str, Any]:
-        link = cls.model.objects.select_related(
-            "recipe", "stock_item", "unit"
-        ).filter(product_id=product_id).first()
-        
+    def get_by_product(cls, product_id: int) -> Tuple[Dict[str, Any], int]:
+        link = ProductStockLinkRepository.get_for_product(product_id)
+
         if not link:
-            return success_response({
+            return ServiceResponse.success(data={
                 "link": None,
                 "is_linked": False
             })
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "link": cls.serialize(link, include_components=True),
             "is_linked": True
         })
-    
-    
+
     @classmethod
     @transaction.atomic
     def link_to_recipe(cls,
                        product_id: int,
                        recipe_id: int,
-                       deduct_on_status: str = "PREPARING") -> Dict[str, Any]:
-        
-        if cls.model.objects.filter(product_id=product_id).exists():
-            raise BusinessRuleError("Product already has a stock link. Remove existing link first.")
-        
-        try:
-            recipe = Recipe.objects.get(id=recipe_id, is_active=True)
-        except Recipe.DoesNotExist:
-            raise NotFoundError("Recipe", recipe_id)
-        
+                       deduct_on_status: str = "PREPARING") -> Tuple[Dict[str, Any], int]:
+
+        if ProductStockLinkRepository.product_has_link(product_id):
+            return ServiceResponse.error("Product already has a stock link. Remove existing link first.")
+
+        recipe = RecipeRepository.get_by_id(recipe_id)
+        if not recipe:
+            return ServiceResponse.not_found(f"Recipe with id {recipe_id} not found")
+        if not recipe.is_active:
+            return ServiceResponse.error("Recipe is not active")
+
         valid_statuses = [c[0] for c in ProductStockLink.DeductOn.choices]
         if deduct_on_status not in valid_statuses:
-            raise ValidationError(f"Invalid status. Valid: {valid_statuses}", "deduct_on_status")
-        
-        link = cls.model.objects.create(
+            return ServiceResponse.validation_error(
+                errors={"deduct_on_status": f"Invalid status. Valid: {valid_statuses}"}
+            )
+
+        link = ProductStockLinkRepository.create(
             product_id=product_id,
             link_type=ProductStockLink.LinkType.RECIPE,
             recipe=recipe,
@@ -144,12 +150,12 @@ class ProductStockLinkService(BaseService):
             unit=recipe.output_unit,
             deduct_on_status=deduct_on_status,
         )
-        
-        return success_response({
+
+        return ServiceResponse.created(data={
             "id": link.id,
             "link": cls.serialize(link)
-        }, f"Product linked to recipe '{recipe.name}'")
-    
+        }, message=f"Product linked to recipe '{recipe.name}'")
+
     @classmethod
     @transaction.atomic
     def link_to_item(cls,
@@ -157,29 +163,33 @@ class ProductStockLinkService(BaseService):
                      stock_item_id: int,
                      quantity_per_sale: Decimal = Decimal("1"),
                      unit_id: int = None,
-                     deduct_on_status: str = "PREPARING") -> Dict[str, Any]:
-        
-        if cls.model.objects.filter(product_id=product_id).exists():
-            raise BusinessRuleError("Product already has a stock link. Remove existing link first.")
-        
-        try:
-            stock_item = StockItem.objects.get(id=stock_item_id, is_active=True)
-        except StockItem.DoesNotExist:
-            raise NotFoundError("Stock item", stock_item_id)
-        
+                     deduct_on_status: str = "PREPARING") -> Tuple[Dict[str, Any], int]:
+
+        if ProductStockLinkRepository.product_has_link(product_id):
+            return ServiceResponse.error("Product already has a stock link. Remove existing link first.")
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
+        if not stock_item:
+            return ServiceResponse.not_found(f"Stock item with id {stock_item_id} not found")
+        if not stock_item.is_active:
+            return ServiceResponse.error("Stock item is not active")
+
         if unit_id:
-            try:
-                unit = StockUnit.objects.get(id=unit_id, is_active=True)
-            except StockUnit.DoesNotExist:
-                raise NotFoundError("Unit", unit_id)
+            unit = StockUnitRepository.get_by_id(unit_id)
+            if not unit:
+                return ServiceResponse.not_found(f"Unit with id {unit_id} not found")
+            if not unit.is_active:
+                return ServiceResponse.error("Unit is not active")
         else:
             unit = stock_item.base_unit
-        
+
         valid_statuses = [c[0] for c in ProductStockLink.DeductOn.choices]
         if deduct_on_status not in valid_statuses:
-            raise ValidationError(f"Invalid status. Valid: {valid_statuses}", "deduct_on_status")
-        
-        link = cls.model.objects.create(
+            return ServiceResponse.validation_error(
+                errors={"deduct_on_status": f"Invalid status. Valid: {valid_statuses}"}
+            )
+
+        link = ProductStockLinkRepository.create(
             product_id=product_id,
             link_type=ProductStockLink.LinkType.DIRECT_ITEM,
             stock_item=stock_item,
@@ -187,38 +197,42 @@ class ProductStockLinkService(BaseService):
             unit=unit,
             deduct_on_status=deduct_on_status,
         )
-        
-        return success_response({
+
+        return ServiceResponse.created(data={
             "id": link.id,
             "link": cls.serialize(link)
-        }, f"Product linked to stock item '{stock_item.name}'")
-    
+        }, message=f"Product linked to stock item '{stock_item.name}'")
+
     @classmethod
     @transaction.atomic
     def link_with_components(cls,
                              product_id: int,
                              components: List[Dict],
-                             deduct_on_status: str = "PREPARING") -> Dict[str, Any]:
-        
-        if cls.model.objects.filter(product_id=product_id).exists():
-            raise BusinessRuleError("Product already has a stock link. Remove existing link first.")
-        
+                             deduct_on_status: str = "PREPARING") -> Tuple[Dict[str, Any], int]:
+
+        if ProductStockLinkRepository.product_has_link(product_id):
+            return ServiceResponse.error("Product already has a stock link. Remove existing link first.")
+
         if not components:
-            raise ValidationError("At least one component required", "components")
-        
+            return ServiceResponse.validation_error(
+                errors={"components": "At least one component required"}
+            )
+
         valid_statuses = [c[0] for c in ProductStockLink.DeductOn.choices]
         if deduct_on_status not in valid_statuses:
-            raise ValidationError(f"Invalid status. Valid: {valid_statuses}", "deduct_on_status")
-        
-        link = cls.model.objects.create(
+            return ServiceResponse.validation_error(
+                errors={"deduct_on_status": f"Invalid status. Valid: {valid_statuses}"}
+            )
+
+        link = ProductStockLinkRepository.create(
             product_id=product_id,
             link_type=ProductStockLink.LinkType.COMPONENT_BASED,
             quantity_per_sale=Decimal("1"),
             deduct_on_status=deduct_on_status,
         )
-        
+
         for comp_data in components:
-            ProductComponentService.add_component(
+            result, status = ProductComponentService.add_component(
                 link_id=link.id,
                 stock_item_id=comp_data["stock_item_id"],
                 quantity=comp_data["quantity"],
@@ -229,68 +243,68 @@ class ProductStockLinkService(BaseService):
                 is_removable=comp_data.get("is_removable", True),
                 price_modifier=comp_data.get("price_modifier", 0),
             )
-        
-        return success_response({
+            if status >= 400:
+                return result, status
+
+        return ServiceResponse.created(data={
             "id": link.id,
             "link": cls.serialize(link, include_components=True)
-        }, "Product linked with components")
-    
+        }, message="Product linked with components")
+
     @classmethod
     @transaction.atomic
-    def update(cls, link_id: int, **kwargs) -> Dict[str, Any]:
-        link = cls.get_by_id(link_id)
+    def update(cls, link_id: int, **kwargs) -> Tuple[Dict[str, Any], int]:
+        link = ProductStockLinkRepository.get_by_id(link_id)
         if not link:
-            raise NotFoundError("Product link", link_id)
-        
+            return ServiceResponse.not_found(f"Product link with id {link_id} not found")
+
         update_fields = ["updated_at"]
-        
+
         if "quantity_per_sale" in kwargs:
             link.quantity_per_sale = to_decimal(kwargs["quantity_per_sale"])
             update_fields.append("quantity_per_sale")
-        
+
         if "deduct_on_status" in kwargs:
             valid_statuses = [c[0] for c in ProductStockLink.DeductOn.choices]
             if kwargs["deduct_on_status"] not in valid_statuses:
-                raise ValidationError(f"Invalid status. Valid: {valid_statuses}", "deduct_on_status")
+                return ServiceResponse.validation_error(
+                    errors={"deduct_on_status": f"Invalid status. Valid: {valid_statuses}"}
+                )
             link.deduct_on_status = kwargs["deduct_on_status"]
             update_fields.append("deduct_on_status")
-        
+
         if "is_active" in kwargs:
             link.is_active = kwargs["is_active"]
             update_fields.append("is_active")
-        
+
         link.save(update_fields=update_fields)
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "link": cls.serialize(link, include_components=True)
-        }, "Link updated")
-    
+        }, message="Link updated")
+
     @classmethod
     @transaction.atomic
-    def unlink(cls, product_id: int) -> Dict[str, Any]:
-        link = cls.model.objects.filter(product_id=product_id).first()
-        
+    def unlink(cls, product_id: int) -> Tuple[Dict[str, Any], int]:
+        link = ProductStockLinkRepository.get_for_product(product_id)
+
         if not link:
-            raise NotFoundError("Product link for product", product_id)
-        
+            return ServiceResponse.not_found(f"Product link for product with id {product_id} not found")
+
         link.delete()
-        
-        return success_response(message="Product unlinked from stock")
-    
-    
+
+        return ServiceResponse.success(message="Product unlinked from stock")
+
     @classmethod
     def get_deduction_items(cls, product_id: int, quantity: int = 1) -> List[Dict]:
+        link = ProductStockLinkRepository.get_active_for_product(product_id)
 
-        link = cls.model.objects.select_related(
-            "recipe", "stock_item", "unit"
-        ).filter(product_id=product_id, is_active=True).first()
-        
         if not link:
             return []
-        
+
         deductions = []
         sale_qty = to_decimal(quantity)
-        
+
         if link.link_type == "DIRECT_ITEM":
             if link.stock_item:
                 deductions.append({
@@ -298,45 +312,45 @@ class ProductStockLinkService(BaseService):
                     "quantity": link.quantity_per_sale * sale_qty,
                     "unit_id": link.unit_id,
                 })
-        
+
         elif link.link_type == "RECIPE":
             if link.recipe:
-                for ingredient in link.recipe.ingredients.select_related("stock_item", "unit"):
+                ingredients = RecipeIngredientRepository.get_for_recipe(link.recipe_id)
+                for ingredient in ingredients:
                     deductions.append({
                         "stock_item_id": ingredient.stock_item_id,
                         "quantity": ingredient.quantity * sale_qty * link.quantity_per_sale,
                         "unit_id": ingredient.unit_id,
                     })
-        
+
         elif link.link_type == "COMPONENT_BASED":
-            for comp in link.components.filter(is_default=True).select_related("stock_item", "unit"):
+            defaults = ProductComponentStockRepository.get_defaults(link.id)
+            for comp in defaults:
                 deductions.append({
                     "stock_item_id": comp.stock_item_id,
                     "quantity": comp.quantity * sale_qty,
                     "unit_id": comp.unit_id,
                 })
-        
+
         return deductions
-    
+
     @classmethod
     def should_deduct(cls, product_id: int, order_status: str) -> bool:
-        settings = StockSettings.load()
-        
+        settings = StockSettingsRepository.load()
+
         if not settings.stock_enabled or not settings.auto_deduct_on_sale:
             return False
-        
-        link = cls.model.objects.filter(product_id=product_id, is_active=True).first()
-        
+
+        link = ProductStockLinkRepository.get_active_for_product(product_id)
+
         if not link:
             return False
-        
+
         return link.deduct_on_status == order_status
 
 
-class ProductComponentService(BaseService):
-    
-    model = ProductComponentStock
-    
+class ProductComponentService:
+
     @classmethod
     def serialize(cls, comp: ProductComponentStock) -> Dict[str, Any]:
         return {
@@ -353,7 +367,7 @@ class ProductComponentService(BaseService):
             "is_removable": comp.is_removable,
             "price_modifier": str(comp.price_modifier),
         }
-    
+
     @classmethod
     @transaction.atomic
     def add_component(cls,
@@ -365,30 +379,31 @@ class ProductComponentService(BaseService):
                       is_default: bool = True,
                       is_addable: bool = True,
                       is_removable: bool = True,
-                      price_modifier: Decimal = Decimal("0")) -> Dict[str, Any]:
-        
-        try:
-            link = ProductStockLink.objects.get(id=link_id)
-        except ProductStockLink.DoesNotExist:
-            raise NotFoundError("Product link", link_id)
-        
+                      price_modifier: Decimal = Decimal("0")) -> Tuple[Dict[str, Any], int]:
+
+        link = ProductStockLinkRepository.get_by_id(link_id)
+        if not link:
+            return ServiceResponse.not_found(f"Product link with id {link_id} not found")
+
         if link.link_type != "COMPONENT_BASED":
-            raise BusinessRuleError("Can only add components to COMPONENT_BASED links")
-        
-        try:
-            stock_item = StockItem.objects.get(id=stock_item_id, is_active=True)
-        except StockItem.DoesNotExist:
-            raise NotFoundError("Stock item", stock_item_id)
-        
+            return ServiceResponse.error("Can only add components to COMPONENT_BASED links")
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
+        if not stock_item:
+            return ServiceResponse.not_found(f"Stock item with id {stock_item_id} not found")
+        if not stock_item.is_active:
+            return ServiceResponse.error("Stock item is not active")
+
         if unit_id:
-            try:
-                unit = StockUnit.objects.get(id=unit_id, is_active=True)
-            except StockUnit.DoesNotExist:
-                raise NotFoundError("Unit", unit_id)
+            unit = StockUnitRepository.get_by_id(unit_id)
+            if not unit:
+                return ServiceResponse.not_found(f"Unit with id {unit_id} not found")
+            if not unit.is_active:
+                return ServiceResponse.error("Unit is not active")
         else:
             unit = stock_item.base_unit
-        
-        comp = cls.model.objects.create(
+
+        comp = ProductComponentStockRepository.create(
             product_stock_link=link,
             component_name=component_name or stock_item.name,
             stock_item=stock_item,
@@ -399,52 +414,48 @@ class ProductComponentService(BaseService):
             is_removable=is_removable,
             price_modifier=to_decimal(price_modifier),
         )
-        
-        return success_response({
+
+        return ServiceResponse.created(data={
             "id": comp.id,
             "component": cls.serialize(comp)
-        }, "Component added")
-    
+        }, message="Component added")
+
     @classmethod
     @transaction.atomic
-    def update_component(cls, component_id: int, **kwargs) -> Dict[str, Any]:
-        try:
-            comp = cls.model.objects.get(id=component_id)
-        except cls.model.DoesNotExist:
-            raise NotFoundError("Component", component_id)
-        
+    def update_component(cls, component_id: int, **kwargs) -> Tuple[Dict[str, Any], int]:
+        comp = ProductComponentStockRepository.get_by_id(component_id)
+        if not comp:
+            return ServiceResponse.not_found(f"Component with id {component_id} not found")
+
         for field in ["component_name", "quantity", "is_default", "is_addable", "is_removable", "price_modifier"]:
             if field in kwargs:
                 value = kwargs[field]
                 if field in ["quantity", "price_modifier"]:
                     value = to_decimal(value)
                 setattr(comp, field, value)
-        
+
         comp.save()
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "component": cls.serialize(comp)
-        }, "Component updated")
-    
+        }, message="Component updated")
+
     @classmethod
     @transaction.atomic
-    def remove_component(cls, component_id: int) -> Dict[str, Any]:
-        try:
-            comp = cls.model.objects.get(id=component_id)
-        except cls.model.DoesNotExist:
-            raise NotFoundError("Component", component_id)
-        
+    def remove_component(cls, component_id: int) -> Tuple[Dict[str, Any], int]:
+        comp = ProductComponentStockRepository.get_by_id(component_id)
+        if not comp:
+            return ServiceResponse.not_found(f"Component with id {component_id} not found")
+
         comp.delete()
-        
-        return success_response(message="Component removed")
-    
+
+        return ServiceResponse.success(message="Component removed")
+
     @classmethod
-    def get_for_link(cls, link_id: int) -> Dict[str, Any]:
-        components = cls.model.objects.filter(
-            product_stock_link_id=link_id
-        ).select_related("stock_item", "unit")
-        
-        return success_response({
+    def get_for_link(cls, link_id: int) -> Tuple[Dict[str, Any], int]:
+        components = ProductComponentStockRepository.get_for_link(link_id)
+
+        return ServiceResponse.success(data={
             "components": [cls.serialize(c) for c in components],
             "count": components.count()
         })

@@ -15,7 +15,7 @@ from stock.models import (
     PurchaseOrder, Recipe, ProductionOrder
 )
 
-from main.models import (
+from base.models import (
     User, Order, OrderItem, Product, Category,
     CashRegister, Inkassa, Session
 )

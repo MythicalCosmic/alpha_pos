@@ -1,85 +1,97 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from datetime import date, timedelta
 from django.db import transaction
 from django.db.models import Q, Sum, F
 from django.utils import timezone
 
+from base.helpers.response import ServiceResponse
 from stock.models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseReceiving, PurchaseReceivingItem,
     Supplier, SupplierStockItem, StockItem, StockUnit, StockLocation,
     StockBatch, StockSettings
 )
-from stock.services.base_service import (
-    BaseService, success_response, error_response, paginate_queryset,
-    ValidationError, NotFoundError, BusinessRuleError,
-    to_decimal, round_decimal, generate_number
+from stock.services.base_service import to_decimal, round_decimal, generate_number, get_date_range
+from stock.repositories import (
+    PurchaseOrderRepository, PurchaseOrderItemRepository,
+    PurchaseReceivingRepository, PurchaseReceivingItemRepository,
+    SupplierRepository, StockItemRepository, StockLocationRepository,
+    StockUnitRepository, SupplierStockItemRepository,
 )
 
 
-class PurchaseOrderService(BaseService):
-    
-    model = PurchaseOrder
-    
+def _pagination_data(page_obj, paginator):
+    return {
+        "page": page_obj.number,
+        "per_page": paginator.per_page,
+        "total": paginator.count,
+        "total_pages": paginator.num_pages,
+        "has_next": page_obj.has_next(),
+        "has_previous": page_obj.has_previous(),
+    }
+
+
+class PurchaseOrderService:
+
     @classmethod
-    def serialize(cls, po: PurchaseOrder, 
+    def serialize(cls, po: PurchaseOrder,
                   include_items: bool = True,
                   include_receivings: bool = False) -> Dict[str, Any]:
         data = {
             "id": po.id,
             "uuid": str(po.uuid),
             "order_number": po.order_number,
-            
+
             "supplier_id": po.supplier_id,
             "supplier": {
                 "id": po.supplier.id,
                 "name": po.supplier.name,
                 "code": po.supplier.code,
             },
-            
+
             "delivery_location_id": po.delivery_location_id,
             "delivery_location": po.delivery_location.name,
-            
+
             "status": po.status,
             "status_display": po.get_status_display(),
             "payment_status": po.payment_status,
             "payment_status_display": po.get_payment_status_display(),
-            
+
             "order_date": po.order_date.isoformat(),
             "expected_date": po.expected_date.isoformat() if po.expected_date else None,
             "received_date": po.received_date.isoformat() if po.received_date else None,
             "payment_due_date": po.payment_due_date.isoformat() if po.payment_due_date else None,
-            
+
             "subtotal": str(po.subtotal),
             "tax_amount": str(po.tax_amount),
             "shipping_cost": str(po.shipping_cost),
             "discount": str(po.discount),
             "total": str(po.total),
             "currency": po.currency,
-            
+
             "created_by_id": po.created_by_id,
             "approved_by_id": po.approved_by_id,
-            
+
             "notes": po.notes,
             "created_at": po.created_at.isoformat(),
             "updated_at": po.updated_at.isoformat(),
         }
-        
+
         if include_items:
             data["items"] = [
                 PurchaseOrderItemService.serialize(item)
                 for item in po.items.select_related("stock_item", "unit")
             ]
             data["item_count"] = len(data["items"])
-        
+
         if include_receivings:
             data["receivings"] = [
                 PurchaseReceivingService.serialize_brief(rcv)
                 for rcv in po.receivings.all()
             ]
-        
+
         return data
-    
+
     @classmethod
     def serialize_brief(cls, po: PurchaseOrder) -> Dict[str, Any]:
         return {
@@ -92,7 +104,7 @@ class PurchaseOrderService(BaseService):
             "total": str(po.total),
             "currency": po.currency,
         }
-    
+
     @classmethod
     def list(cls,
              page: int = 1,
@@ -103,75 +115,72 @@ class PurchaseOrderService(BaseService):
              payment_status: str = None,
              date_from: date = None,
              date_to: date = None,
-             location_id: int = None) -> Dict[str, Any]:
-        queryset = cls.model.objects.select_related("supplier", "delivery_location")
-        
+             location_id: int = None) -> Tuple[Dict[str, Any], int]:
+        queryset = PurchaseOrder.objects.select_related("supplier", "delivery_location")
+
         if search:
             queryset = queryset.filter(
                 Q(order_number__icontains=search) |
                 Q(supplier__name__icontains=search)
             )
-        
+
         if supplier_id:
             queryset = queryset.filter(supplier_id=supplier_id)
-        
+
         if status:
             queryset = queryset.filter(status=status)
-        
+
         if payment_status:
             queryset = queryset.filter(payment_status=payment_status)
-        
+
         if date_from:
             queryset = queryset.filter(order_date__gte=date_from)
-        
+
         if date_to:
             queryset = queryset.filter(order_date__lte=date_to)
-        
+
         if location_id:
             queryset = queryset.filter(delivery_location_id=location_id)
-        
+
         queryset = queryset.order_by("-order_date", "-created_at")
-        
-        orders, pagination = paginate_queryset(queryset, page, per_page)
-        
-        return success_response({
-            "orders": [cls.serialize_brief(po) for po in orders],
-            "pagination": pagination,
+
+        page_obj, paginator = PurchaseOrderRepository.paginate(queryset, page, per_page)
+
+        return ServiceResponse.success(data={
+            "orders": [cls.serialize_brief(po) for po in page_obj],
+            "pagination": _pagination_data(page_obj, paginator),
             "statuses": [{"value": c[0], "label": c[1]} for c in PurchaseOrder.Status.choices],
             "payment_statuses": [{"value": c[0], "label": c[1]} for c in PurchaseOrder.PaymentStatus.choices],
         })
-    
+
     @classmethod
-    def get_pending(cls, supplier_id: int = None) -> Dict[str, Any]:
-        queryset = cls.model.objects.filter(
+    def get_pending(cls, supplier_id: int = None) -> Tuple[Dict[str, Any], int]:
+        queryset = PurchaseOrder.objects.filter(
             status__in=["DRAFT", "SENT", "CONFIRMED", "PARTIAL"]
         ).select_related("supplier", "delivery_location")
-        
+
         if supplier_id:
             queryset = queryset.filter(supplier_id=supplier_id)
-        
+
         orders = queryset.order_by("expected_date", "order_date")
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "orders": [cls.serialize_brief(po) for po in orders],
             "count": orders.count()
         })
-    
-    
+
     @classmethod
-    def get(cls, po_id: int, 
-            include_receivings: bool = True) -> Dict[str, Any]:
-        po = cls.model.objects.select_related(
-            "supplier", "delivery_location"
-        ).filter(id=po_id).first()
-        
+    def get(cls, po_id: int,
+            include_receivings: bool = True) -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_with_relations(po_id)
+
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
-        return success_response({
+            return ServiceResponse.not_found("Purchase order not found")
+
+        return ServiceResponse.success(data={
             "order": cls.serialize(po, include_receivings=include_receivings)
         })
-    
+
     @classmethod
     @transaction.atomic
     def create(cls,
@@ -184,31 +193,26 @@ class PurchaseOrderService(BaseService):
                shipping_cost: Decimal = Decimal("0"),
                discount: Decimal = Decimal("0"),
                notes: str = "",
-               items: List[Dict] = None) -> Dict[str, Any]:
-        
-        try:
-            supplier = Supplier.objects.get(id=supplier_id, is_active=True)
-        except Supplier.DoesNotExist:
-            raise NotFoundError("Supplier", supplier_id)
-        
-        try:
-            location = StockLocation.objects.get(id=delivery_location_id, is_active=True)
-        except StockLocation.DoesNotExist:
-            raise NotFoundError("Delivery location", delivery_location_id)
-        
-        order_number = generate_number("PO", cls.model, "order_number")
-        
+               items: List[Dict] = None) -> Tuple[Dict[str, Any], int]:
+
+        supplier = SupplierRepository.first(id=supplier_id, is_active=True)
+        if not supplier:
+            return ServiceResponse.not_found("Supplier not found")
+
+        location = StockLocationRepository.first(id=delivery_location_id, is_active=True)
+        if not location:
+            return ServiceResponse.not_found("Delivery location not found")
+
+        order_number = generate_number("PO", PurchaseOrder, "order_number")
+
         payment_due_date = None
         if supplier.payment_terms_days:
-            payment_due_date = order_date 
-        
+            payment_due_date = order_date
+
         if not expected_date and supplier.lead_time_days:
-            expected_date = order_date 
-            print(supplier.lead_time_days)
-            print(order_date)
-            print(expected_date)
-        
-        po = cls.model.objects.create(
+            expected_date = order_date
+
+        po = PurchaseOrderRepository.create(
             order_number=order_number,
             supplier=supplier,
             delivery_location=location,
@@ -222,10 +226,10 @@ class PurchaseOrderService(BaseService):
             created_by_id=created_by_id,
             notes=notes,
         )
-        
+
         if items:
             for item_data in items:
-                PurchaseOrderItemService.add(
+                result, status = PurchaseOrderItemService.add(
                     purchase_order_id=po.id,
                     stock_item_id=item_data["stock_item_id"],
                     quantity=item_data["quantity"],
@@ -235,56 +239,58 @@ class PurchaseOrderService(BaseService):
                     tax_percent=item_data.get("tax_percent", 0),
                     notes=item_data.get("notes", ""),
                 )
-        
+                if status >= 400:
+                    return result, status
+
         cls._recalculate_totals(po.id)
         po.refresh_from_db()
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "id": po.id,
             "order_number": po.order_number,
             "order": cls.serialize(po)
-        }, f"Purchase order {order_number} created")
-    
+        }, message=f"Purchase order {order_number} created")
+
     @classmethod
     @transaction.atomic
     def create_from_low_stock(cls,
                               supplier_id: int,
                               delivery_location_id: int,
                               created_by_id: int,
-                              reorder_quantity_multiplier: Decimal = Decimal("1")) -> Dict[str, Any]:
-        
+                              reorder_quantity_multiplier: Decimal = Decimal("1")) -> Tuple[Dict[str, Any], int]:
+
         supplier_items = SupplierStockItem.objects.filter(
             supplier_id=supplier_id,
             supplier__is_active=True
         ).select_related("stock_item", "unit")
-        
+
         items_to_order = []
-        
+
         for si in supplier_items:
             from .level_service import StockLevelService
             available = StockLevelService.get_available(si.stock_item_id)
-            
+
             if available < si.stock_item.reorder_point:
                 shortage = si.stock_item.reorder_point - available
                 order_qty = max(shortage * reorder_quantity_multiplier, si.min_order_qty)
-                
+
                 if si.pack_size > 1:
                     packs_needed = (order_qty / si.pack_size).quantize(Decimal("1"), rounding="ROUND_UP")
                     order_qty = packs_needed * si.pack_size
-                
+
                 items_to_order.append({
                     "stock_item_id": si.stock_item_id,
                     "quantity": order_qty,
                     "unit_id": si.unit_id,
                     "unit_price": si.price,
                 })
-        
+
         if not items_to_order:
-            return success_response({
+            return ServiceResponse.success(data={
                 "created": False,
                 "reason": "No items below reorder point for this supplier"
             })
-        
+
         return cls.create(
             supplier_id=supplier_id,
             delivery_location_id=delivery_location_id,
@@ -293,36 +299,34 @@ class PurchaseOrderService(BaseService):
             items=items_to_order,
             notes="Auto-generated from low stock"
         )
-    
+
     @classmethod
     @transaction.atomic
-    def update(cls, po_id: int, **kwargs) -> Dict[str, Any]:
-        po = cls.get_by_id(po_id)
+    def update(cls, po_id: int, **kwargs) -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status != PurchaseOrder.Status.DRAFT:
-            raise BusinessRuleError("Can only update orders in DRAFT status")
-        
+            return ServiceResponse.error("Can only update orders in DRAFT status")
+
         update_fields = ["updated_at"]
-        
+
         if "supplier_id" in kwargs:
-            try:
-                po.supplier = Supplier.objects.get(id=kwargs["supplier_id"], is_active=True)
-                update_fields.append("supplier")
-            except Supplier.DoesNotExist:
-                raise NotFoundError("Supplier", kwargs["supplier_id"])
-        
+            supplier = SupplierRepository.first(id=kwargs["supplier_id"], is_active=True)
+            if not supplier:
+                return ServiceResponse.not_found("Supplier not found")
+            po.supplier = supplier
+            update_fields.append("supplier")
+
         if "delivery_location_id" in kwargs:
-            try:
-                po.delivery_location = StockLocation.objects.get(
-                    id=kwargs["delivery_location_id"], is_active=True
-                )
-                update_fields.append("delivery_location")
-            except StockLocation.DoesNotExist:
-                raise NotFoundError("Delivery location", kwargs["delivery_location_id"])
-        
-        for field in ["order_date", "expected_date", "currency", "shipping_cost", 
+            location = StockLocationRepository.first(id=kwargs["delivery_location_id"], is_active=True)
+            if not location:
+                return ServiceResponse.not_found("Delivery location not found")
+            po.delivery_location = location
+            update_fields.append("delivery_location")
+
+        for field in ["order_date", "expected_date", "currency", "shipping_cost",
                       "discount", "payment_due_date", "notes"]:
             if field in kwargs:
                 value = kwargs[field]
@@ -330,154 +334,155 @@ class PurchaseOrderService(BaseService):
                     value = to_decimal(value)
                 setattr(po, field, value)
                 update_fields.append(field)
-        
+
         po.save(update_fields=update_fields)
-        
+
         if "shipping_cost" in kwargs or "discount" in kwargs:
             cls._recalculate_totals(po_id)
             po.refresh_from_db()
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "order": cls.serialize(po)
-        }, "Purchase order updated")
-    
+        }, message="Purchase order updated")
+
     @classmethod
     def _recalculate_totals(cls, po_id: int):
-        po = cls.get_by_id(po_id)
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
             return
-        
+
         items = po.items.all()
-        
+
         subtotal = sum(item.total_price for item in items)
         tax_amount = sum(
-            item.total_price * item.tax_percent / 100 
+            item.total_price * item.tax_percent / 100
             for item in items
         )
-        
+
         po.subtotal = subtotal
         po.tax_amount = tax_amount
         po.total = subtotal + tax_amount + po.shipping_cost - po.discount
         po.save(update_fields=["subtotal", "tax_amount", "total", "updated_at"])
-    
+
     @classmethod
     @transaction.atomic
-    def send(cls, po_id: int) -> Dict[str, Any]:
-        po = cls.get_by_id(po_id)
+    def send(cls, po_id: int) -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status != PurchaseOrder.Status.DRAFT:
-            raise BusinessRuleError(f"Cannot send order in {po.status} status")
-        
+            return ServiceResponse.error(f"Cannot send order in {po.status} status")
+
         if not po.items.exists():
-            raise BusinessRuleError("Cannot send order with no items")
-        
+            return ServiceResponse.error("Cannot send order with no items")
+
         po.status = PurchaseOrder.Status.SENT
         po.save(update_fields=["status", "updated_at"])
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "order": cls.serialize(po)
-        }, "Purchase order sent to supplier")
-    
+        }, message="Purchase order sent to supplier")
+
     @classmethod
     @transaction.atomic
-    def confirm(cls, po_id: int, approved_by_id: int = None) -> Dict[str, Any]:
-        po = cls.get_by_id(po_id)
+    def confirm(cls, po_id: int, approved_by_id: int = None) -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status != PurchaseOrder.Status.SENT:
-            raise BusinessRuleError(f"Cannot confirm order in {po.status} status")
-        
+            return ServiceResponse.error(f"Cannot confirm order in {po.status} status")
+
         settings = StockSettings.load()
         if settings.require_po_approval and not approved_by_id:
-            raise BusinessRuleError("PO approval is required")
-        
+            return ServiceResponse.error("PO approval is required")
+
         po.status = PurchaseOrder.Status.CONFIRMED
         if approved_by_id:
             po.approved_by_id = approved_by_id
         po.save(update_fields=["status", "approved_by", "updated_at"])
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "order": cls.serialize(po)
-        }, "Purchase order confirmed")
-    
+        }, message="Purchase order confirmed")
+
     @classmethod
     @transaction.atomic
-    def cancel(cls, po_id: int, reason: str = "") -> Dict[str, Any]:
-        po = cls.get_by_id(po_id)
+    def cancel(cls, po_id: int, reason: str = "") -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status in [PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.CANCELLED]:
-            raise BusinessRuleError(f"Cannot cancel order in {po.status} status")
-        
+            return ServiceResponse.error(f"Cannot cancel order in {po.status} status")
+
         if po.receivings.filter(status=PurchaseReceiving.Status.COMPLETED).exists():
-            raise BusinessRuleError("Cannot cancel order with completed receivings")
-        
+            return ServiceResponse.error("Cannot cancel order with completed receivings")
+
         po.status = PurchaseOrder.Status.CANCELLED
         if reason:
             po.notes = f"{po.notes}\nCancelled: {reason}".strip()
         po.save(update_fields=["status", "notes", "updated_at"])
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "order": cls.serialize(po)
-        }, "Purchase order cancelled")
-    
+        }, message="Purchase order cancelled")
+
     @classmethod
     @transaction.atomic
-    def record_payment(cls, po_id: int, 
+    def record_payment(cls, po_id: int,
                        amount: Decimal,
                        payment_date: date = None,
-                       notes: str = "") -> Dict[str, Any]:
-        po = cls.get_by_id(po_id)
+                       notes: str = "") -> Tuple[Dict[str, Any], int]:
+        po = PurchaseOrderRepository.get_by_id(po_id)
         if not po:
-            raise NotFoundError("Purchase order", po_id)
-        
+            return ServiceResponse.not_found("Purchase order not found")
+
         amount = to_decimal(amount)
-        
+
         from .supplier_service import SupplierService
-        SupplierService.update_balance(po.supplier_id, amount, "subtract")
-        
+        result, status = SupplierService.update_balance(po.supplier_id, amount, "subtract")
+        if status >= 400:
+            return result, status
+
         if amount >= po.total:
             po.payment_status = PurchaseOrder.PaymentStatus.PAID
         else:
             po.payment_status = PurchaseOrder.PaymentStatus.PARTIAL
-        
+
         if notes:
             po.notes = f"{po.notes}\nPayment recorded: {amount} on {payment_date or timezone.now().date()}".strip()
-        
+
         po.save(update_fields=["payment_status", "notes", "updated_at"])
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "payment_status": po.payment_status,
             "payment_status_display": po.get_payment_status_display()
-        }, "Payment recorded")
-    
-    
+        }, message="Payment recorded")
+
     @classmethod
-    def get_stats(cls, date_from: date = None, date_to: date = None) -> Dict[str, Any]:
-        queryset = cls.model.objects.all()
-        
+    def get_stats(cls, date_from: date = None, date_to: date = None) -> Tuple[Dict[str, Any], int]:
+        queryset = PurchaseOrder.objects.all()
+
         if date_from:
             queryset = queryset.filter(order_date__gte=date_from)
         if date_to:
             queryset = queryset.filter(order_date__lte=date_to)
-        
+
         by_status = {}
         for status in PurchaseOrder.Status.choices:
             by_status[status[0]] = queryset.filter(status=status[0]).count()
-        
+
         total_value = queryset.exclude(
             status=PurchaseOrder.Status.CANCELLED
         ).aggregate(total=Sum("total"))["total"] or Decimal("0")
-        
+
         pending_value = queryset.filter(
             status__in=["DRAFT", "SENT", "CONFIRMED", "PARTIAL"]
         ).aggregate(total=Sum("total"))["total"] or Decimal("0")
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "total_orders": queryset.count(),
             "by_status": by_status,
             "total_value": str(total_value),
@@ -485,10 +490,8 @@ class PurchaseOrderService(BaseService):
         })
 
 
-class PurchaseOrderItemService(BaseService):
-    
-    model = PurchaseOrderItem
-    
+class PurchaseOrderItemService:
+
     @classmethod
     def serialize(cls, item: PurchaseOrderItem) -> Dict[str, Any]:
         return {
@@ -511,7 +514,7 @@ class PurchaseOrderItemService(BaseService):
             "total_price": str(item.total_price),
             "notes": item.notes,
         }
-    
+
     @classmethod
     @transaction.atomic
     def add(cls,
@@ -523,36 +526,33 @@ class PurchaseOrderItemService(BaseService):
             discount_percent: Decimal = Decimal("0"),
             tax_percent: Decimal = Decimal("0"),
             supplier_stock_item_id: int = None,
-            notes: str = "") -> Dict[str, Any]:
-        
-        try:
-            po = PurchaseOrder.objects.get(id=purchase_order_id)
-        except PurchaseOrder.DoesNotExist:
-            raise NotFoundError("Purchase order", purchase_order_id)
-        
+            notes: str = "") -> Tuple[Dict[str, Any], int]:
+
+        po = PurchaseOrderRepository.get_by_id(purchase_order_id)
+        if not po:
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status != PurchaseOrder.Status.DRAFT:
-            raise BusinessRuleError("Can only add items to DRAFT orders")
-        
-        try:
-            stock_item = StockItem.objects.get(id=stock_item_id)
-        except StockItem.DoesNotExist:
-            raise NotFoundError("Stock item", stock_item_id)
-        
-        try:
-            unit = StockUnit.objects.get(id=unit_id, is_active=True)
-        except StockUnit.DoesNotExist:
-            raise NotFoundError("Unit", unit_id)
-        
+            return ServiceResponse.error("Can only add items to DRAFT orders")
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
+        if not stock_item:
+            return ServiceResponse.not_found("Stock item not found")
+
+        unit = StockUnitRepository.first(id=unit_id, is_active=True)
+        if not unit:
+            return ServiceResponse.not_found("Unit not found")
+
         quantity = to_decimal(quantity)
         unit_price = to_decimal(unit_price)
         discount_percent = to_decimal(discount_percent)
         tax_percent = to_decimal(tax_percent)
-        
+
         subtotal = quantity * unit_price
         discount_amount = subtotal * discount_percent / 100
         total_price = subtotal - discount_amount
-        
-        item = cls.model.objects.create(
+
+        item = PurchaseOrderItemRepository.create(
             purchase_order=po,
             stock_item=stock_item,
             supplier_stock_item_id=supplier_stock_item_id,
@@ -564,69 +564,71 @@ class PurchaseOrderItemService(BaseService):
             total_price=total_price,
             notes=notes,
         )
-        
+
         PurchaseOrderService._recalculate_totals(purchase_order_id)
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "id": item.id,
             "item": cls.serialize(item)
-        }, "Item added to order")
-    
+        }, message="Item added to order")
+
     @classmethod
     @transaction.atomic
-    def update_item(cls, item_id: int, **kwargs) -> Dict[str, Any]:
-        try:
-            item = cls.model.objects.select_related("purchase_order").get(id=item_id)
-        except cls.model.DoesNotExist:
-            raise NotFoundError("Order item", item_id)
-        
+    def update_item(cls, item_id: int, **kwargs) -> Tuple[Dict[str, Any], int]:
+        item = PurchaseOrderItemRepository.first(id=item_id)
+        if not item:
+            return ServiceResponse.not_found("Order item not found")
+
+        # Need select_related for status check
+        item = PurchaseOrderItem.objects.select_related("purchase_order").get(id=item_id)
+
         if item.purchase_order.status != PurchaseOrder.Status.DRAFT:
-            raise BusinessRuleError("Can only update items in DRAFT orders")
-        
+            return ServiceResponse.error("Can only update items in DRAFT orders")
+
         for field in ["quantity_ordered", "unit_price", "discount_percent", "tax_percent", "notes"]:
             if field in kwargs:
                 value = kwargs[field]
                 if field in ["quantity_ordered", "unit_price", "discount_percent", "tax_percent"]:
                     value = to_decimal(value)
                 setattr(item, field, value)
-        
+
         subtotal = item.quantity_ordered * item.unit_price
         discount_amount = subtotal * item.discount_percent / 100
         item.total_price = subtotal - discount_amount
-        
+
         item.save()
-        
+
         PurchaseOrderService._recalculate_totals(item.purchase_order_id)
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "item": cls.serialize(item)
-        }, "Item updated")
-    
+        }, message="Item updated")
+
     @classmethod
     @transaction.atomic
-    def remove(cls, item_id: int) -> Dict[str, Any]:
-        try:
-            item = cls.model.objects.select_related("purchase_order").get(id=item_id)
-        except cls.model.DoesNotExist:
-            raise NotFoundError("Order item", item_id)
-        
+    def remove(cls, item_id: int) -> Tuple[Dict[str, Any], int]:
+        item = PurchaseOrderItemRepository.first(id=item_id)
+        if not item:
+            return ServiceResponse.not_found("Order item not found")
+
+        # Need select_related for status check
+        item = PurchaseOrderItem.objects.select_related("purchase_order").get(id=item_id)
+
         if item.purchase_order.status != PurchaseOrder.Status.DRAFT:
-            raise BusinessRuleError("Can only remove items from DRAFT orders")
-        
+            return ServiceResponse.error("Can only remove items from DRAFT orders")
+
         po_id = item.purchase_order_id
         item.delete()
-        
+
         PurchaseOrderService._recalculate_totals(po_id)
-        
-        return success_response(message="Item removed")
+
+        return ServiceResponse.success(message="Item removed")
 
 
-class PurchaseReceivingService(BaseService):
-    
-    model = PurchaseReceiving
-    
+class PurchaseReceivingService:
+
     @classmethod
-    def serialize(cls, rcv: PurchaseReceiving, 
+    def serialize(cls, rcv: PurchaseReceiving,
                   include_items: bool = True) -> Dict[str, Any]:
         data = {
             "id": rcv.id,
@@ -643,15 +645,15 @@ class PurchaseReceivingService(BaseService):
             "notes": rcv.notes,
             "created_at": rcv.created_at.isoformat(),
         }
-        
+
         if include_items:
             data["items"] = [
                 PurchaseReceivingItemService.serialize(item)
                 for item in rcv.items.select_related("stock_item", "unit")
             ]
-        
+
         return data
-    
+
     @classmethod
     def serialize_brief(cls, rcv: PurchaseReceiving) -> Dict[str, Any]:
         return {
@@ -660,7 +662,7 @@ class PurchaseReceivingService(BaseService):
             "received_date": rcv.received_date.isoformat(),
             "status": rcv.status,
         }
-    
+
     @classmethod
     @transaction.atomic
     def create(cls,
@@ -668,26 +670,24 @@ class PurchaseReceivingService(BaseService):
                received_by_id: int,
                location_id: int = None,
                received_date: date = None,
-               notes: str = "") -> Dict[str, Any]:
-        
-        try:
-            po = PurchaseOrder.objects.get(id=purchase_order_id)
-        except PurchaseOrder.DoesNotExist:
-            raise NotFoundError("Purchase order", purchase_order_id)
-        
+               notes: str = "") -> Tuple[Dict[str, Any], int]:
+
+        po = PurchaseOrderRepository.get_by_id(purchase_order_id)
+        if not po:
+            return ServiceResponse.not_found("Purchase order not found")
+
         if po.status not in [PurchaseOrder.Status.CONFIRMED, PurchaseOrder.Status.PARTIAL]:
-            raise BusinessRuleError(f"Cannot receive order in {po.status} status")
-        
+            return ServiceResponse.error(f"Cannot receive order in {po.status} status")
+
         location_id = location_id or po.delivery_location_id
-        
-        try:
-            location = StockLocation.objects.get(id=location_id, is_active=True)
-        except StockLocation.DoesNotExist:
-            raise NotFoundError("Location", location_id)
-        
-        receiving_number = generate_number("RCV", cls.model, "receiving_number")
-        
-        rcv = cls.model.objects.create(
+
+        location = StockLocationRepository.first(id=location_id, is_active=True)
+        if not location:
+            return ServiceResponse.not_found("Location not found")
+
+        receiving_number = generate_number("RCV", PurchaseReceiving, "receiving_number")
+
+        rcv = PurchaseReceivingRepository.create(
             receiving_number=receiving_number,
             purchase_order=po,
             location=location,
@@ -696,77 +696,69 @@ class PurchaseReceivingService(BaseService):
             status=PurchaseReceiving.Status.DRAFT,
             notes=notes,
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "id": rcv.id,
             "receiving_number": receiving_number,
             "receiving": cls.serialize(rcv)
-        }, f"Receiving {receiving_number} created")
-    
-    @classmethod
-    @transaction.atomic
-    def add_item(cls, receiving_id: int, po_item_id: int, quantity_received: int, batch_number: int, expiry_date: date, unit_cost: float, quality_status: str, notes: str) -> Dict[str, Any]:
-        try: 
-            try:
-                rcv = cls.model.objects.get(id=receiving_id)
-            except cls.model.DoesNotExist:
-                raise NotFoundError("Receiving", receiving_id)
-            
-            try:
-                po_item_id = PurchaseOrderItem.objects.get(id=po_item_id)
-            except PurchaseOrderItem.DoesNotExist:
-                raise NotFoundError("Purchase Order Item", po_item_id)
-            
-            if rcv.status != PurchaseReceiving.Status.DRAFT:
-                raise BusinessRuleError("Cannot add items to completed receiving")
-            
-            item = PurchaseReceivingItem.objects.create(
-                receiving=rcv,
-                po_item=po_item_id,
-                stock_item=po_item_id.stock_item,
-                quantity_received=quantity_received,
-                unit=po_item_id.unit,
-                batch_number=batch_number,
-                expiry_date=expiry_date,
-                unit_cost=unit_cost,
-                quality_status=quality_status,
-                notes=notes,
-            )
-            return success_response({
-                "id": item.id,
-                "item": PurchaseReceivingItemService.serialize(item)
-            }, "Item added to receiving")
-        
-
-        except Exception as e:
-            return error_response(str(e))
-
-
-
-
+        }, message=f"Receiving {receiving_number} created")
 
     @classmethod
     @transaction.atomic
-    def complete(cls, receiving_id: int) -> Dict[str, Any]:
-        try:
-            rcv = cls.model.objects.select_related("purchase_order").get(id=receiving_id)
-        except cls.model.DoesNotExist:
-            raise NotFoundError("Receiving", receiving_id)
-        
+    def add_item(cls, receiving_id: int, po_item_id: int, quantity_received: int,
+                 batch_number: int, expiry_date: date, unit_cost: float,
+                 quality_status: str, notes: str) -> Tuple[Dict[str, Any], int]:
+
+        rcv = PurchaseReceivingRepository.get_by_id(receiving_id)
+        if not rcv:
+            return ServiceResponse.not_found("Receiving not found")
+
+        po_item = PurchaseOrderItemRepository.get_by_id(po_item_id)
+        if not po_item:
+            return ServiceResponse.not_found("Purchase order item not found")
+
         if rcv.status != PurchaseReceiving.Status.DRAFT:
-            raise BusinessRuleError("Receiving already completed")
-        
+            return ServiceResponse.error("Cannot add items to completed receiving")
+
+        item = PurchaseReceivingItemRepository.create(
+            receiving=rcv,
+            po_item=po_item,
+            stock_item=po_item.stock_item,
+            quantity_received=quantity_received,
+            unit=po_item.unit,
+            batch_number=batch_number,
+            expiry_date=expiry_date,
+            unit_cost=unit_cost,
+            quality_status=quality_status,
+            notes=notes,
+        )
+
+        return ServiceResponse.success(data={
+            "id": item.id,
+            "item": PurchaseReceivingItemService.serialize(item)
+        }, message="Item added to receiving")
+
+    @classmethod
+    @transaction.atomic
+    def complete(cls, receiving_id: int) -> Tuple[Dict[str, Any], int]:
+        rcv = PurchaseReceivingRepository.get_with_relations(receiving_id)
+        if not rcv:
+            return ServiceResponse.not_found("Receiving not found")
+
+        if rcv.status != PurchaseReceiving.Status.DRAFT:
+            return ServiceResponse.error("Receiving already completed")
+
         if not rcv.items.exists():
-            raise BusinessRuleError("No items in receiving")
-        
+            return ServiceResponse.error("No items in receiving")
+
         settings = StockSettings.load()
         po = rcv.purchase_order
-        
+
         for item in rcv.items.select_related("stock_item", "unit", "po_item"):
             batch = None
             if settings.track_batches or item.stock_item.track_batches:
                 from .batch_service import StockBatchService
-                batch_result = StockBatchService.create(
+                batch_result, batch_status = StockBatchService.create(
                     stock_item_id=item.stock_item_id,
                     location_id=rcv.location_id,
                     quantity=item.quantity_received,
@@ -777,12 +769,14 @@ class PurchaseReceivingService(BaseService):
                     purchase_order_id=po.id,
                     quality_status=item.quality_status,
                 )
+                if batch_status >= 400:
+                    return batch_result, batch_status
                 batch = StockBatch.objects.get(id=batch_result["data"]["id"])
                 item.batch_created = batch
                 item.save(update_fields=["batch_created"])
-            
+
             from .level_service import StockLevelService
-            StockLevelService.adjust(
+            level_result, level_status = StockLevelService.adjust(
                 stock_item_id=item.stock_item_id,
                 location_id=rcv.location_id,
                 quantity=item.quantity_received,
@@ -795,84 +789,91 @@ class PurchaseReceivingService(BaseService):
                 unit_cost=item.unit_cost,
                 notes=f"PO: {po.order_number}",
             )
-            
+            if level_status >= 400:
+                return level_result, level_status
+
             item.po_item.quantity_received += item.quantity_received
             item.po_item.save(update_fields=["quantity_received"])
-            
+
             from .item_service import StockItemService
-            StockItemService.update_cost(item.stock_item_id, item.unit_cost, "AVG")
-        
+            cost_result, cost_status = StockItemService.update_cost(item.stock_item_id, item.unit_cost, "AVG")
+            if cost_status >= 400:
+                return cost_result, cost_status
+
         rcv.status = PurchaseReceiving.Status.COMPLETED
         rcv.save(update_fields=["status", "updated_at"])
-        
+
         cls._update_po_status(po)
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "receiving": cls.serialize(rcv)
-        }, "Receiving completed")
-    
+        }, message="Receiving completed")
+
     @classmethod
     @transaction.atomic
-    def update_item(cls, item_id: int, quantity_received: Decimal = None, batch_number: str = None, expiry_date: date = None, unit_cost: Decimal = None, quality_status: str = None, notes: str = None) -> Dict[str, Any]:
-        try:
-            item = PurchaseReceivingItem.objects.select_related("receiving", "po_item").get(id=item_id)
-        except PurchaseReceivingItem.DoesNotExist:
-            raise NotFoundError("Receiving item", item_id)
-        
+    def update_item(cls, item_id: int, quantity_received: Decimal = None,
+                    batch_number: str = None, expiry_date: date = None,
+                    unit_cost: Decimal = None, quality_status: str = None,
+                    notes: str = None) -> Tuple[Dict[str, Any], int]:
+        item = PurchaseReceivingItemRepository.first(id=item_id)
+        if not item:
+            return ServiceResponse.not_found("Receiving item not found")
+
+        # Need select_related for status check
+        item = PurchaseReceivingItem.objects.select_related("receiving", "po_item").get(id=item_id)
+
         if item.receiving.status != PurchaseReceiving.Status.DRAFT:
-            raise BusinessRuleError("Cannot update items in completed receiving")
-        
+            return ServiceResponse.error("Cannot update items in completed receiving")
+
         if quantity_received is not None:
             quantity_received = to_decimal(quantity_received)
             item.quantity_received = quantity_received
-        
+
         if batch_number is not None:
             item.batch_number = batch_number
-        
+
         if expiry_date is not None:
             item.expiry_date = expiry_date
-        
+
         if unit_cost is not None:
             item.unit_cost = to_decimal(unit_cost)
-        
+
         if quality_status is not None:
             item.quality_status = quality_status
-        
+
         if notes is not None:
             item.notes = notes
-        
+
         item.save()
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "item": PurchaseReceivingItemService.serialize(item)
-        }, "Receiving item updated")
-    
+        }, message="Receiving item updated")
+
     @classmethod
     def _update_po_status(cls, po: PurchaseOrder):
         items = po.items.all()
-        
+
         fully_received = all(
-            item.quantity_received >= item.quantity_ordered 
+            item.quantity_received >= item.quantity_ordered
             for item in items
         )
         partially_received = any(
-            item.quantity_received > 0 
+            item.quantity_received > 0
             for item in items
         )
-        
+
         if fully_received:
             po.status = PurchaseOrder.Status.RECEIVED
             po.received_date = timezone.now().date()
         elif partially_received:
             po.status = PurchaseOrder.Status.PARTIAL
-        
+
         po.save(update_fields=["status", "received_date", "updated_at"])
 
 
-class PurchaseReceivingItemService(BaseService):
-    
-    model = PurchaseReceivingItem
-    
+class PurchaseReceivingItemService:
+
     @classmethod
     def serialize(cls, item: PurchaseReceivingItem) -> Dict[str, Any]:
         return {
@@ -891,7 +892,7 @@ class PurchaseReceivingItemService(BaseService):
             "notes": item.notes,
             "batch_created_id": item.batch_created_id,
         }
-    
+
     @classmethod
     @transaction.atomic
     def add(cls,
@@ -902,35 +903,36 @@ class PurchaseReceivingItemService(BaseService):
             expiry_date: date = None,
             unit_cost: Decimal = None,
             quality_status: str = "PASSED",
-            notes: str = "") -> Dict[str, Any]:
-        try:
-            rcv = PurchaseReceiving.objects.get(id=receiving_id)
-        except PurchaseReceiving.DoesNotExist:
-            raise NotFoundError("Receiving", receiving_id)
-        
+            notes: str = "") -> Tuple[Dict[str, Any], int]:
+
+        rcv = PurchaseReceivingRepository.get_by_id(receiving_id)
+        if not rcv:
+            return ServiceResponse.not_found("Receiving not found")
+
         if rcv.status != PurchaseReceiving.Status.DRAFT:
-            raise BusinessRuleError("Cannot add items to completed receiving")
-        
-        try:
-            po_item = PurchaseOrderItem.objects.select_related("stock_item", "unit").get(
-                id=po_item_id,
-                purchase_order=rcv.purchase_order
-            )
-        except PurchaseOrderItem.DoesNotExist:
-            raise NotFoundError("PO item", po_item_id)
-        
+            return ServiceResponse.error("Cannot add items to completed receiving")
+
+        po_item = PurchaseOrderItemRepository.first(
+            id=po_item_id,
+            purchase_order=rcv.purchase_order
+        )
+        if not po_item:
+            return ServiceResponse.not_found("PO item not found")
+
+        # Ensure select_related for stock_item and unit
+        po_item = PurchaseOrderItem.objects.select_related("stock_item", "unit").get(id=po_item.id)
+
         quantity_received = to_decimal(quantity_received)
-        
+
         already_received = po_item.quantity_received
         pending = po_item.quantity_ordered - already_received
-        
+
         if quantity_received > pending:
-            raise ValidationError(
-                f"Cannot receive more than pending quantity ({pending})",
-                "quantity_received"
+            return ServiceResponse.validation_error(
+                errors={"quantity_received": f"Cannot receive more than pending quantity ({pending})"}
             )
-        
-        item = cls.model.objects.create(
+
+        item = PurchaseReceivingItemRepository.create(
             receiving=rcv,
             po_item=po_item,
             stock_item=po_item.stock_item,
@@ -942,36 +944,39 @@ class PurchaseReceivingItemService(BaseService):
             quality_status=quality_status,
             notes=notes,
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "id": item.id,
             "item": cls.serialize(item)
-        }, "Item added to receiving")
-    
+        }, message="Item added to receiving")
+
     @classmethod
     @transaction.atomic
-    def add_all_pending(cls, receiving_id: int) -> Dict[str, Any]:
-        try:
-            rcv = PurchaseReceiving.objects.select_related("purchase_order").get(id=receiving_id)
-        except PurchaseReceiving.DoesNotExist:
-            raise NotFoundError("Receiving", receiving_id)
-        
+    def add_all_pending(cls, receiving_id: int) -> Tuple[Dict[str, Any], int]:
+        rcv = PurchaseReceivingRepository.get_by_id(receiving_id)
+        if not rcv:
+            return ServiceResponse.not_found("Receiving not found")
+
         if rcv.status != PurchaseReceiving.Status.DRAFT:
-            raise BusinessRuleError("Cannot add items to completed receiving")
-        
+            return ServiceResponse.error("Cannot add items to completed receiving")
+
+        # Need purchase_order for items access
+        rcv = PurchaseReceiving.objects.select_related("purchase_order").get(id=rcv.id)
+
         added = 0
         for po_item in rcv.purchase_order.items.all():
             pending = po_item.quantity_ordered - po_item.quantity_received
             if pending > 0:
-                cls.add(
+                result, status = cls.add(
                     receiving_id=receiving_id,
                     po_item_id=po_item.id,
                     quantity_received=pending,
                     unit_cost=po_item.unit_price,
                 )
+                if status >= 400:
+                    return result, status
                 added += 1
-        
-        return success_response({
-            "items_added": added
-        }, f"{added} items added to receiving")
 
+        return ServiceResponse.success(data={
+            "items_added": added
+        }, message=f"{added} items added to receiving")

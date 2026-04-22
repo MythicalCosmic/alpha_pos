@@ -5,20 +5,32 @@ from django.db import transaction
 from django.db.models import Q, Sum, F
 from django.utils import timezone
 
+from base.helpers.response import ServiceResponse
 from stock.models import (
     StockLevel, StockTransaction, StockItem, StockLocation,
     StockUnit, StockBatch, StockSettings
 )
-from stock.services.base_service import (
-    BaseService, success_response, error_response, paginate_queryset,
-    ValidationError, NotFoundError, BusinessRuleError, InsufficientStockError,
-    to_decimal, round_decimal, generate_number
+from stock.services.base_service import to_decimal, round_decimal, generate_number
+from stock.repositories import (
+    StockLevelRepository, StockTransactionRepository,
+    StockItemRepository, StockLocationRepository,
+    StockUnitRepository, StockBatchRepository,
 )
 
 
-class StockLevelService(BaseService):    
-    model = StockLevel
-    
+def _pagination_data(page_obj, paginator):
+    return {
+        "page": page_obj.number,
+        "per_page": paginator.per_page,
+        "total": paginator.count,
+        "total_pages": paginator.num_pages,
+        "has_next": page_obj.has_next(),
+        "has_previous": page_obj.has_previous(),
+    }
+
+
+class StockLevelService:
+
     @classmethod
     def serialize(cls, level: StockLevel) -> Dict[str, Any]:
         return {
@@ -46,7 +58,7 @@ class StockLevelService(BaseService):
             "last_restocked_at": level.last_restocked_at.isoformat() if level.last_restocked_at else None,
             "last_movement_at": level.last_movement_at.isoformat() if level.last_movement_at else None,
         }
-    
+
     @classmethod
     def get_all(cls,
                 location_id: int = None,
@@ -55,115 +67,94 @@ class StockLevelService(BaseService):
                 low_stock_only: bool = False,
                 page: int = 1,
                 search: str = None,
-                per_page: int = 50) -> Dict[str, Any]:
-        queryset = cls.model.objects.select_related(
+                per_page: int = 50) -> Tuple[Dict[str, Any], int]:
+        queryset = StockLevelRepository.get_all().select_related(
             "stock_item", "stock_item__base_unit", "stock_item__category", "location"
         ).filter(stock_item__is_active=True)
-        
+
         if location_id:
             queryset = queryset.filter(location_id=location_id)
-        
+
         if category_id:
             queryset = queryset.filter(stock_item__category_id=category_id)
-        
+
         if item_type:
             queryset = queryset.filter(stock_item__item_type=item_type)
-        
+
         if low_stock_only:
             queryset = queryset.filter(
                 quantity__lt=F("stock_item__reorder_point")
             )
-        
+
         queryset = queryset.order_by("stock_item__name", "location__name")
-        
-        levels, pagination = paginate_queryset(queryset, page, per_page)
-        
-        return success_response({
-            "levels": [cls.serialize(lvl) for lvl in levels],
-            "pagination": pagination
+
+        page_obj, paginator = StockLevelRepository.paginate(queryset, page, per_page)
+
+        return ServiceResponse.success(data={
+            "levels": [cls.serialize(lvl) for lvl in page_obj],
+            "pagination": _pagination_data(page_obj, paginator),
         })
-    
+
     @classmethod
-    def get_for_item(cls, stock_item_id: int) -> Dict[str, Any]:
-        levels = cls.model.objects.filter(
-            stock_item_id=stock_item_id
-        ).select_related("location").order_by("location__name")
-        
+    def get_for_item(cls, stock_item_id: int) -> Tuple[Dict[str, Any], int]:
+        levels = StockLevelRepository.get_for_item(stock_item_id).order_by("location__name")
+
         total = levels.aggregate(
             total_qty=Sum("quantity"),
             total_reserved=Sum("reserved_quantity")
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "levels": [cls.serialize(lvl) for lvl in levels],
             "total_quantity": str(total["total_qty"] or 0),
             "total_reserved": str(total["total_reserved"] or 0),
             "total_available": str((total["total_qty"] or 0) - (total["total_reserved"] or 0))
         })
-    
+
     @classmethod
-    def get_for_location(cls, location_id: int) -> Dict[str, Any]:
-        levels = cls.model.objects.filter(
-            location_id=location_id,
+    def get_for_location(cls, location_id: int) -> Tuple[Dict[str, Any], int]:
+        levels = StockLevelRepository.get_for_location(location_id).filter(
             stock_item__is_active=True
         ).select_related(
             "stock_item", "stock_item__base_unit"
         ).order_by("stock_item__name")
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "levels": [cls.serialize(lvl) for lvl in levels],
             "count": levels.count()
         })
-    
+
     @classmethod
     def get_level(cls, stock_item_id: int, location_id: int) -> StockLevel:
-        level, created = cls.model.objects.get_or_create(
-            stock_item_id=stock_item_id,
-            location_id=location_id,
-            defaults={
-                "quantity": Decimal("0"),
-                "reserved_quantity": Decimal("0"),
-            }
-        )
-        return level
-    
+        return StockLevelRepository.get_or_create_level(stock_item_id, location_id)
+
     @classmethod
     def get_available(cls, stock_item_id: int, location_id: int = None) -> Decimal:
-        queryset = cls.model.objects.filter(stock_item_id=stock_item_id)
-        
         if location_id:
-            queryset = queryset.filter(location_id=location_id)
-        
-        result = queryset.aggregate(
+            level = StockLevelRepository.get_for_item_and_location(stock_item_id, location_id)
+            if level:
+                return level.quantity - level.reserved_quantity
+            return Decimal("0")
+
+        qs = StockLevelRepository.get_for_item(stock_item_id)
+        result = qs.aggregate(
             total=Sum("quantity"),
             reserved=Sum("reserved_quantity")
         )
-        
+
         total = result["total"] or Decimal("0")
         reserved = result["reserved"] or Decimal("0")
-        
+
         return total - reserved
-    
+
     @classmethod
-    def get_low_stock_items(cls, location_id: int = None) -> Dict[str, Any]:
-        if location_id:
-            low_stock = cls.model.objects.filter(
-                location_id=location_id,
-                quantity__lt=F("stock_item__reorder_point"),
-                stock_item__is_active=True
-            ).select_related("stock_item", "location")
-        else:
-            low_stock = StockItem.objects.filter(
-                is_active=True
-            ).annotate(
-                total_qty=Sum("stock_levels__quantity")
-            ).filter(
-                Q(total_qty__lt=F("reorder_point")) |
-                Q(total_qty__isnull=True)
-            )
-        
+    def get_low_stock_items(cls, location_id: int = None) -> Tuple[Dict[str, Any], int]:
         alerts = []
+
         if location_id:
+            low_stock = StockLevelRepository.get_low_stock().filter(
+                location_id=location_id
+            )
             for level in low_stock:
                 alerts.append({
                     "stock_item_id": level.stock_item_id,
@@ -176,7 +167,8 @@ class StockLevelService(BaseService):
                     "shortage": str(level.stock_item.reorder_point - level.quantity),
                 })
         else:
-            for item in low_stock:
+            low_stock_items = StockItemRepository.get_low_stock()
+            for item in low_stock_items:
                 total_qty = item.total_qty or Decimal("0")
                 alerts.append({
                     "stock_item_id": item.id,
@@ -186,12 +178,12 @@ class StockLevelService(BaseService):
                     "reorder_point": str(item.reorder_point),
                     "shortage": str(item.reorder_point - total_qty),
                 })
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "alerts": alerts,
             "count": len(alerts)
         })
-    
+
     @classmethod
     @transaction.atomic
     def adjust(cls,
@@ -208,39 +200,38 @@ class StockLevelService(BaseService):
                production_order_id: int = None,
                transfer_id: int = None,
                unit_cost: Decimal = None,
-               notes: str = "") -> Dict[str, Any]:
+               notes: str = "") -> Tuple[Dict[str, Any], int]:
         settings = StockSettings.load()
-        
+
         if not settings.stock_enabled:
-            return success_response({
+            return ServiceResponse.success(data={
                 "skipped": True,
                 "reason": "Stock system disabled"
-            }, "Stock adjustment skipped (system disabled)")
-        
+            }, message="Stock adjustment skipped (system disabled)")
+
         valid_types = [c[0] for c in StockTransaction.MovementType.choices]
         if movement_type not in valid_types:
-            raise ValidationError(f"Invalid movement type. Valid: {valid_types}", "movement_type")
-        
-        try:
-            stock_item = StockItem.objects.get(id=stock_item_id)
-        except StockItem.DoesNotExist:
-            raise NotFoundError("Stock item", stock_item_id)
-        
-        try:
-            location = StockLocation.objects.get(id=location_id)
-        except StockLocation.DoesNotExist:
-            raise NotFoundError("Location", location_id)
-        
+            return ServiceResponse.validation_error(
+                errors={"movement_type": f"Invalid movement type. Valid: {valid_types}"}
+            )
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
+        if not stock_item:
+            return ServiceResponse.not_found(f"Stock item with id {stock_item_id} not found")
+
+        location = StockLocationRepository.get_by_id(location_id)
+        if not location:
+            return ServiceResponse.not_found(f"Location with id {location_id} not found")
+
         if unit_id:
-            try:
-                unit = StockUnit.objects.get(id=unit_id)
-            except StockUnit.DoesNotExist:
-                raise NotFoundError("Unit", unit_id)
+            unit = StockUnitRepository.get_by_id(unit_id)
+            if not unit:
+                return ServiceResponse.not_found(f"Unit with id {unit_id} not found")
         else:
             unit = stock_item.base_unit
-        
+
         quantity = to_decimal(quantity)
-        
+
         if unit_id and unit_id != stock_item.base_unit_id:
             from .unit_service import StockItemUnitService
             base_quantity = StockItemUnitService.convert_for_item(
@@ -248,42 +239,41 @@ class StockLevelService(BaseService):
             )
         else:
             base_quantity = quantity
-        
+
         level = cls.get_level(stock_item_id, location_id)
         quantity_before = level.quantity
-        
+
         is_outgoing = movement_type in [
             "SALE_OUT", "TRANSFER_OUT", "PRODUCTION_OUT",
             "ADJUSTMENT_MINUS", "WASTE", "SPOILAGE", "RETURN_TO_SUPPLIER"
         ]
-        
+
         if is_outgoing:
             adjustment = -abs(base_quantity)
         else:
             adjustment = abs(base_quantity)
-        
+
         new_quantity = level.quantity + adjustment
         if new_quantity < 0 and not settings.allow_negative_stock:
-            raise InsufficientStockError(
-                stock_item.name,
-                abs(adjustment),
-                level.quantity
+            return ServiceResponse.error(
+                f"Insufficient stock for {stock_item.name}: "
+                f"required {abs(adjustment)}, available {level.quantity}"
             )
-        
+
         level.quantity = new_quantity
         level.last_movement_at = timezone.now()
-        
+
         if not is_outgoing:
             level.last_restocked_at = timezone.now()
-        
+
         level.save(update_fields=["quantity", "last_movement_at", "last_restocked_at", "updated_at"])
-        
+
         if unit_cost is None:
             unit_cost = stock_item.avg_cost_price
-        
+
         trans_number = generate_number("TRX", StockTransaction, "transaction_number")
-        
-        trans = StockTransaction.objects.create(
+
+        trans = StockTransactionRepository.create(
             transaction_number=trans_number,
             stock_item=stock_item,
             location=location,
@@ -304,17 +294,16 @@ class StockLevelService(BaseService):
             user_id=user_id,
             notes=notes,
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "transaction_id": trans.id,
             "transaction_number": trans.transaction_number,
             "quantity_before": str(quantity_before),
             "quantity_after": str(new_quantity),
             "adjustment": str(adjustment),
             "movement_type": movement_type,
-        }, f"Stock adjusted: {adjustment:+} {stock_item.base_unit.short_name}")
-    
-    
+        }, message=f"Stock adjusted: {adjustment:+} {stock_item.base_unit.short_name}")
+
     @classmethod
     @transaction.atomic
     def reserve(cls,
@@ -324,28 +313,29 @@ class StockLevelService(BaseService):
                 user_id: int,
                 reference_type: str = None,
                 reference_id: int = None,
-                notes: str = "") -> Dict[str, Any]:
+                notes: str = "") -> Tuple[Dict[str, Any], int]:
         settings = StockSettings.load()
         if not settings.stock_enabled:
-            return success_response({"skipped": True})
-        
+            return ServiceResponse.success(data={"skipped": True})
+
         quantity = abs(to_decimal(quantity))
         level = cls.get_level(stock_item_id, location_id)
-        
+
         available = level.quantity - level.reserved_quantity
         if quantity > available:
-            raise InsufficientStockError(
-                StockItem.objects.get(id=stock_item_id).name,
-                quantity, available
+            stock_item = StockItemRepository.get_by_id(stock_item_id)
+            item_name = stock_item.name if stock_item else f"item {stock_item_id}"
+            return ServiceResponse.error(
+                f"Insufficient stock for {item_name}: required {quantity}, available {available}"
             )
-        
+
         level.reserved_quantity += quantity
         level.save(update_fields=["reserved_quantity", "updated_at"])
-        
-        stock_item = StockItem.objects.get(id=stock_item_id)
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
         trans_number = generate_number("TRX", StockTransaction, "transaction_number")
-        
-        StockTransaction.objects.create(
+
+        StockTransactionRepository.create(
             transaction_number=trans_number,
             stock_item_id=stock_item_id,
             location_id=location_id,
@@ -354,19 +344,19 @@ class StockLevelService(BaseService):
             unit=stock_item.base_unit,
             base_quantity=quantity,
             quantity_before=level.quantity,
-            quantity_after=level.quantity, 
+            quantity_after=level.quantity,
             user_id=user_id,
             reference_type=reference_type or "",
             reference_id=reference_id,
             notes=notes,
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "reserved": str(quantity),
             "total_reserved": str(level.reserved_quantity),
             "available": str(level.quantity - level.reserved_quantity)
-        }, "Stock reserved")
-    
+        }, message="Stock reserved")
+
     @classmethod
     @transaction.atomic
     def release_reservation(cls,
@@ -374,23 +364,23 @@ class StockLevelService(BaseService):
                            location_id: int,
                            quantity: Decimal,
                            user_id: int,
-                           notes: str = "") -> Dict[str, Any]:
+                           notes: str = "") -> Tuple[Dict[str, Any], int]:
         settings = StockSettings.load()
         if not settings.stock_enabled:
-            return success_response({"skipped": True})
-        
+            return ServiceResponse.success(data={"skipped": True})
+
         quantity = abs(to_decimal(quantity))
         level = cls.get_level(stock_item_id, location_id)
-        
+
         release_qty = min(quantity, level.reserved_quantity)
-        
+
         level.reserved_quantity -= release_qty
         level.save(update_fields=["reserved_quantity", "updated_at"])
-        
-        stock_item = StockItem.objects.get(id=stock_item_id)
+
+        stock_item = StockItemRepository.get_by_id(stock_item_id)
         trans_number = generate_number("TRX", StockTransaction, "transaction_number")
-        
-        StockTransaction.objects.create(
+
+        StockTransactionRepository.create(
             transaction_number=trans_number,
             stock_item_id=stock_item_id,
             location_id=location_id,
@@ -403,16 +393,15 @@ class StockLevelService(BaseService):
             user_id=user_id,
             notes=notes,
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "released": str(release_qty),
             "remaining_reserved": str(level.reserved_quantity)
-        }, "Reservation released")
+        }, message="Reservation released")
 
 
-class StockTransactionService(BaseService):
-    model = StockTransaction
-    
+class StockTransactionService:
+
     @classmethod
     def serialize(cls, trans: StockTransaction) -> Dict[str, Any]:
         return {
@@ -442,7 +431,7 @@ class StockTransactionService(BaseService):
             "notes": trans.notes,
             "created_at": trans.created_at.isoformat(),
         }
-    
+
     @classmethod
     def list(cls,
              stock_item_id: int = None,
@@ -454,75 +443,71 @@ class StockTransactionService(BaseService):
              production_order_id: int = None,
              transfer_id: int = None,
              page: int = 1,
-             per_page: int = 50) -> Dict[str, Any]:
-        queryset = cls.model.objects.select_related(
+             per_page: int = 50) -> Tuple[Dict[str, Any], int]:
+        queryset = StockTransactionRepository.get_all().select_related(
             "stock_item", "location", "unit"
         )
-        
+
         if stock_item_id:
             queryset = queryset.filter(stock_item_id=stock_item_id)
-        
+
         if location_id:
             queryset = queryset.filter(location_id=location_id)
-        
+
         if movement_type:
             queryset = queryset.filter(movement_type=movement_type)
-        
+
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
-        
+
         if date_to:
             queryset = queryset.filter(created_at__date__lte=date_to)
-        
+
         if order_id:
             queryset = queryset.filter(order_id=order_id)
-        
+
         if production_order_id:
             queryset = queryset.filter(production_order_id=production_order_id)
-        
+
         if transfer_id:
             queryset = queryset.filter(transfer_id=transfer_id)
-        
+
         queryset = queryset.order_by("-created_at")
-        
-        transactions, pagination = paginate_queryset(queryset, page, per_page)
-        
-        return success_response({
-            "transactions": [cls.serialize(t) for t in transactions],
-            "pagination": pagination,
+
+        page_obj, paginator = StockTransactionRepository.paginate(queryset, page, per_page)
+
+        return ServiceResponse.success(data={
+            "transactions": [cls.serialize(t) for t in page_obj],
+            "pagination": _pagination_data(page_obj, paginator),
             "movement_types": [
                 {"value": c[0], "label": c[1]}
                 for c in StockTransaction.MovementType.choices
             ]
         })
-    
+
     @classmethod
-    def get_by_reference(cls, reference_type: str, reference_id: int) -> Dict[str, Any]:
-        transactions = cls.model.objects.filter(
-            reference_type=reference_type,
-            reference_id=reference_id
-        ).select_related("stock_item", "location", "unit").order_by("-created_at")
-        
-        return success_response({
+    def get_by_reference(cls, reference_type: str, reference_id: int) -> Tuple[Dict[str, Any], int]:
+        transactions = StockTransactionRepository.get_by_reference(
+            reference_type, reference_id
+        ).select_related("stock_item", "location", "unit")
+
+        return ServiceResponse.success(data={
             "transactions": [cls.serialize(t) for t in transactions],
             "count": transactions.count()
         })
-    
+
     @classmethod
-    def get_item_history(cls, stock_item_id: int, days: int = 30) -> Dict[str, Any]:
-        since = timezone.now() - timedelta(days=days)
-        
-        transactions = cls.model.objects.filter(
-            stock_item_id=stock_item_id,
-            created_at__gte=since
-        ).select_related("location", "unit").order_by("-created_at")
-        
+    def get_item_history(cls, stock_item_id: int, days: int = 30) -> Tuple[Dict[str, Any], int]:
+        transactions = StockTransactionRepository.get_for_item(
+            stock_item_id, days=days
+        )
+
         summary = transactions.values("movement_type").annotate(
             count=Sum("id"),
             total_qty=Sum("base_quantity")
         )
-        
-        return success_response({
+
+        return ServiceResponse.success(data={
             "transactions": [cls.serialize(t) for t in transactions[:100]],
             "summary": list(summary),
             "total_transactions": transactions.count(),
