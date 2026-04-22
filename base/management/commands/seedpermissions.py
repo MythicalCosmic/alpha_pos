@@ -15,6 +15,30 @@ ALL_PERMISSIONS = [
     'order.update',
     'order.delete',
     'order.stats',
+
+    'hr.departments.create',
+    'hr.departments.update',
+    'hr.departments.delete',
+
+    'hr.employees.create',
+    'hr.employees.update',
+    'hr.employees.delete',
+
+    'hr.expenses.create',
+    'hr.expenses.update',
+    'hr.expenses.delete',
+    'hr.expenses.approve',
+    'hr.expenses.pay',
+
+    'hr.salary.create',
+    'hr.salary.update',
+    'hr.salary.delete',
+    'hr.salary.approve',
+    'hr.salary.pay',
+    'hr.salary.generate',
+
+    'hr.cash.deposit',
+    'hr.cash.withdraw',
 ]
 
 ROLE_PRESETS = {
@@ -33,6 +57,15 @@ ROLE_PRESETS = {
     'product_manager': [
         'product.create', 'product.update', 'product.delete',
         'category.create', 'category.update', 'category.delete',
+    ],
+    'hr_manager': [
+        'hr.departments.create', 'hr.departments.update', 'hr.departments.delete',
+        'hr.employees.create', 'hr.employees.update', 'hr.employees.delete',
+        'hr.expenses.create', 'hr.expenses.update', 'hr.expenses.delete',
+        'hr.expenses.approve', 'hr.expenses.pay',
+        'hr.salary.create', 'hr.salary.update', 'hr.salary.delete',
+        'hr.salary.approve', 'hr.salary.pay', 'hr.salary.generate',
+        'hr.cash.deposit', 'hr.cash.withdraw',
     ],
 }
 

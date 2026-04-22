@@ -1,0 +1,6 @@
+from hr.repositories.department import DepartmentRepository
+from hr.repositories.employee import EmployeeRepository
+from hr.repositories.expense_category import ExpenseCategoryRepository
+from hr.repositories.expense import ExpenseRepository
+from hr.repositories.salary import SalaryPaymentRepository
+from hr.repositories.cash_transaction import CashTransactionRepository

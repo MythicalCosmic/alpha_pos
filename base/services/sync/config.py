@@ -22,6 +22,9 @@ SYNC_ORDER = [
     'stocktransfer', 'stocktransferitem',
     'variancereasoncode', 'stockcount', 'stockcountitem',
     'stocksettings', 'stockalertconfig',
+    # HR models
+    'department', 'employee', 'expensecategory', 'expense',
+    'salarypayment', 'cashtransaction',
 ]
 
 MODEL_MAP = {
@@ -67,6 +70,13 @@ MODEL_MAP = {
     'stockcountitem': 'stock.StockCountItem',
     'stocksettings': 'stock.StockSettings',
     'stockalertconfig': 'stock.StockAlertConfig',
+    # HR models
+    'department': 'hr.Department',
+    'employee': 'hr.Employee',
+    'expensecategory': 'hr.ExpenseCategory',
+    'expense': 'hr.Expense',
+    'salarypayment': 'hr.SalaryPayment',
+    'cashtransaction': 'hr.CashTransaction',
 }
 
 FK_UUID_MAPPINGS = {
@@ -125,6 +135,13 @@ FK_UUID_MAPPINGS = {
     'stock_count_uuid': ('stock', 'StockCount', 'stock_count'),
     'reason_code_uuid': ('stock', 'VarianceReasonCode', 'reason_code'),
     'adjustment_transaction_uuid': ('stock', 'StockTransaction', 'adjustment_transaction'),
+    # HR FK mappings
+    'manager_uuid': ('base', 'User', 'manager'),
+    'department_uuid': ('hr', 'Department', 'department'),
+    'employee_uuid': ('hr', 'Employee', 'employee'),
+    'expense_category_uuid': ('hr', 'ExpenseCategory', 'category'),
+    'paid_by_uuid': ('base', 'User', 'paid_by'),
+    'performed_by_uuid': ('base', 'User', 'performed_by'),
 }
 
 
