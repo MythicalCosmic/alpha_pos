@@ -31,6 +31,8 @@ SYNC_ORDER = [
     'employeedocument',
     'performancereview', 'performancegoal',
     'employmentevent',
+    # Discount models
+    'discounttype', 'discount', 'orderdiscount', 'discountusage',
 ]
 
 MODEL_MAP = {
@@ -95,6 +97,11 @@ MODEL_MAP = {
     'performancereview': 'hr.PerformanceReview',
     'performancegoal': 'hr.PerformanceGoal',
     'employmentevent': 'hr.EmploymentEvent',
+    # Discount models
+    'discounttype': 'discounts.DiscountType',
+    'discount': 'discounts.Discount',
+    'orderdiscount': 'discounts.OrderDiscount',
+    'discountusage': 'discounts.DiscountUsage',
 }
 
 FK_UUID_MAPPINGS = {
@@ -169,6 +176,11 @@ FK_UUID_MAPPINGS = {
     'reviewer_uuid': ('base', 'User', 'reviewer'),
     'verified_by_uuid': ('base', 'User', 'verified_by'),
     'uploaded_by_uuid': ('base', 'User', 'uploaded_by'),
+    # Discount FK mappings
+    'discount_type_uuid': ('discounts', 'DiscountType', 'discount_type'),
+    'discount_uuid': ('discounts', 'Discount', 'discount'),
+    'free_product_uuid': ('base', 'Product', 'free_product'),
+    'applied_by_uuid': ('base', 'User', 'applied_by'),
 }
 
 

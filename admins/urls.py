@@ -45,6 +45,7 @@ urlpatterns = [
 
     path('orders/stats/categories', order_views.category_stats),
     path('orders/stats/hourly', order_views.hourly_stats),
+
     path('orders/stats/dashboard', order_views.dashboard_stats),
 
     path('orders/<int:order_id>', order_views.order_detail),

@@ -211,3 +211,39 @@ def client_display(request):
 def chef_display(request):
     result, status_code = CustomerOrderService.get_chef_display_orders()
     return JsonResponse(result, status=status_code)
+
+
+@csrf_exempt
+@require_POST
+@login_required
+def apply_discount(request, order_id):
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    from discounts.services import DiscountService
+    result, status = DiscountService.apply_to_order(order_id, data.get('code', ''), request.user.id)
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_POST
+@login_required
+def remove_discount(request, order_id):
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    from discounts.services import DiscountService
+    result, status = DiscountService.remove_from_order(order_id, data.get('order_discount_id'), request.user.id)
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_POST
+@login_required
+def check_secret_word(request, order_id):
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    from discounts.services import DiscountService
+    result, status = DiscountService.validate_secret_word(data.get('word', ''), order_id, request.user.id)
+    return JsonResponse(result, status=status)

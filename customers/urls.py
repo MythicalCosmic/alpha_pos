@@ -32,4 +32,8 @@ urlpatterns = [
     path('orders/<int:order_id>/items/<int:item_id>/remove', order_views.remove_item),
     path('orders/<int:order_id>/items/<int:item_id>/ready', order_views.mark_item_ready),
     path('orders/<int:order_id>/items/<int:item_id>/unready', order_views.unmark_item_ready),
+
+    path('orders/<int:order_id>/apply-discount', order_views.apply_discount),
+    path('orders/<int:order_id>/remove-discount', order_views.remove_discount),
+    path('orders/<int:order_id>/check-secret-word', order_views.check_secret_word),
 ]

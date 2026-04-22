@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'stock',
     'hr',
     'waiters',
+    'discounts',
 ]
 
 MIDDLEWARE = [

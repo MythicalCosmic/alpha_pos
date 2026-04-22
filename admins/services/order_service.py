@@ -157,8 +157,9 @@ def _parse_date(date_str):
 
 
 def _recalculate_total(order):
-    order.total_amount = OrderItemRepository.calculate_order_total(order)
-    order.save(update_fields=['total_amount'])
+    order.subtotal = OrderItemRepository.calculate_order_total(order)
+    order.total_amount = order.subtotal - order.discount_amount
+    order.save(update_fields=['subtotal', 'total_amount'])
 
 
 def _check_and_update_ready(order):
@@ -316,6 +317,7 @@ class AdminOrderService:
             description=description,
             status='PREPARING',
             is_paid=False,
+            subtotal=total_amount,
             total_amount=total_amount,
             delivery_person=delivery_person,
         )

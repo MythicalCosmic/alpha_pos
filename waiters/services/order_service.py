@@ -95,8 +95,9 @@ def _check_waiter_ownership(order, waiter_user_id):
 
 
 def _recalculate_total(order):
-    order.total_amount = OrderItemRepository.calculate_order_total(order)
-    order.save(update_fields=['total_amount'])
+    order.subtotal = OrderItemRepository.calculate_order_total(order)
+    order.total_amount = order.subtotal - order.discount_amount
+    order.save(update_fields=['subtotal', 'total_amount'])
 
 
 class WaiterOrderService:
@@ -200,6 +201,7 @@ class WaiterOrderService:
             description=description,
             status='PREPARING',
             is_paid=False,
+            subtotal=total_amount,
             total_amount=total_amount,
             place=place,
             table=table,

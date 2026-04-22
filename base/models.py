@@ -428,6 +428,8 @@ class Order(SyncMixin, models.Model):
     )
 
     is_paid = models.BooleanField(default=False)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -531,7 +533,9 @@ class OrderItem(SyncMixin, models.Model):
     quantity = models.PositiveIntegerField()
     detail = models.TextField(null=True, blank=True)
     ready_at = models.DateTimeField(null=True, blank=True)
+    original_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     objects = SyncManager()
 
