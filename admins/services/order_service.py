@@ -332,6 +332,20 @@ class AdminOrderService:
             ) for d in order_items_data
         ])
 
+        try:
+            from stock.services import OrderStatusHandler, StockSettingsService
+            location_id = StockSettingsService.get_default_location_id()
+            if location_id:
+                stock_items = [
+                    {'product_id': d['product'].id, 'quantity': d['quantity']}
+                    for d in order_items_data
+                ]
+                OrderStatusHandler.on_status_change(
+                    order.id, None, 'PREPARING', stock_items, location_id, user_id,
+                )
+        except Exception:
+            pass
+
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
             message='Order created successfully',
@@ -445,6 +459,7 @@ class AdminOrderService:
         if order.status == 'CANCELLED':
             return ServiceResponse.error('Cannot update cancelled order')
 
+        old_status = order.status
         update_fields = ['status']
         order.status = status
 
@@ -455,6 +470,20 @@ class AdminOrderService:
             update_fields.append('ready_at')
 
         order.save(update_fields=update_fields)
+
+        try:
+            from stock.services import OrderStatusHandler, StockSettingsService
+            location_id = StockSettingsService.get_default_location_id()
+            if location_id:
+                stock_items = [
+                    {'product_id': i.product_id, 'quantity': i.quantity}
+                    for i in order.items.all()
+                ]
+                OrderStatusHandler.on_status_change(
+                    order.id, old_status, status, stock_items, location_id, order.user_id,
+                )
+        except Exception:
+            pass
 
         return ServiceResponse.success(
             data={'status': status},
@@ -479,6 +508,22 @@ class AdminOrderService:
         order.save(update_fields=['is_paid', 'paid_at'])
 
         InkassaService.add_to_register(order.total_amount)
+
+        try:
+            from stock.services import OrderStatusHandler, StockSettingsService
+            settings = StockSettingsService.load()
+            if settings.stock_enabled and settings.deduct_on_order_status == 'PAID':
+                location_id = StockSettingsService.get_default_location_id()
+                if location_id:
+                    stock_items = [
+                        {'product_id': i.product_id, 'quantity': i.quantity}
+                        for i in order.items.all()
+                    ]
+                    OrderStatusHandler.on_status_change(
+                        order.id, order.status, 'PAID', stock_items, location_id, order.user_id,
+                    )
+        except Exception:
+            pass
 
         return ServiceResponse.success(
             data={'is_paid': True},
