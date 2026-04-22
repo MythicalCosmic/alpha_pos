@@ -1,5 +1,6 @@
 from django.urls import path
 from hr.views import department_views, employee_views, expense_views, salary_views, cash_views
+from hr.views import contract_views, leave_views, attendance_views, document_views, review_views, event_views
 
 app_name = 'hr'
 
@@ -40,4 +41,58 @@ urlpatterns = [
     path('cash/withdraw/', cash_views.cash_withdraw, name='cash-withdraw'),
     path('cash/balance/', cash_views.cash_balance, name='cash-balance'),
     path('cash/<int:transaction_id>/', cash_views.cash_transaction_detail, name='cash-detail'),
+
+    # Contracts
+    path('contracts/', contract_views.contracts, name='contract-list'),
+    path('contracts/expiring/', contract_views.contracts_expiring, name='contract-expiring'),
+    path('contracts/<int:contract_id>/', contract_views.contract_detail, name='contract-detail'),
+    path('contracts/<int:contract_id>/activate/', contract_views.contract_activate, name='contract-activate'),
+    path('contracts/<int:contract_id>/terminate/', contract_views.contract_terminate, name='contract-terminate'),
+    path('contracts/<int:contract_id>/renew/', contract_views.contract_renew, name='contract-renew'),
+    path('contracts/<int:contract_id>/documents/', contract_views.contract_documents, name='contract-documents'),
+    path('contracts/<int:contract_id>/documents/<int:doc_id>/', contract_views.contract_document_detail, name='contract-document-detail'),
+
+    # Leave
+    path('leave-types/', leave_views.leave_types, name='leave-type-list'),
+    path('leave-types/<int:type_id>/', leave_views.leave_type_detail, name='leave-type-detail'),
+    path('leaves/', leave_views.leave_requests, name='leave-list'),
+    path('leaves/calendar/', leave_views.leave_calendar, name='leave-calendar'),
+    path('leaves/<int:leave_id>/', leave_views.leave_detail, name='leave-detail'),
+    path('leaves/<int:leave_id>/approve/', leave_views.leave_approve, name='leave-approve'),
+    path('leaves/<int:leave_id>/reject/', leave_views.leave_reject, name='leave-reject'),
+    path('leaves/<int:leave_id>/cancel/', leave_views.leave_cancel, name='leave-cancel'),
+    path('leave-balances/', leave_views.leave_balances, name='leave-balance-list'),
+    path('leave-balances/initialize/', leave_views.leave_balance_initialize, name='leave-balance-init'),
+    path('leave-balances/employee/<int:employee_id>/', leave_views.leave_balance_by_employee, name='leave-balance-employee'),
+
+    # Attendance
+    path('attendance/', attendance_views.attendance_list, name='attendance-list'),
+    path('attendance/check-in/', attendance_views.attendance_check_in, name='attendance-check-in'),
+    path('attendance/check-out/', attendance_views.attendance_check_out, name='attendance-check-out'),
+    path('attendance/daily-report/', attendance_views.attendance_daily_report, name='attendance-daily-report'),
+    path('attendance/monthly-report/', attendance_views.attendance_monthly_report, name='attendance-monthly-report'),
+    path('attendance/<int:attendance_id>/', attendance_views.attendance_detail, name='attendance-detail'),
+
+    # Documents
+    path('documents/', document_views.documents, name='document-list'),
+    path('documents/expiring/', document_views.documents_expiring, name='document-expiring'),
+    path('documents/employee/<int:employee_id>/', document_views.documents_by_employee, name='document-by-employee'),
+    path('documents/<int:doc_id>/', document_views.document_detail, name='document-detail'),
+    path('documents/<int:doc_id>/verify/', document_views.document_verify, name='document-verify'),
+
+    # Reviews
+    path('reviews/', review_views.reviews, name='review-list'),
+    path('reviews/<int:review_id>/', review_views.review_detail, name='review-detail'),
+    path('reviews/<int:review_id>/submit/', review_views.review_submit, name='review-submit'),
+    path('reviews/<int:review_id>/acknowledge/', review_views.review_acknowledge, name='review-acknowledge'),
+
+    # Goals
+    path('goals/', review_views.goals, name='goal-list'),
+    path('goals/<int:goal_id>/', review_views.goal_detail, name='goal-detail'),
+    path('goals/<int:goal_id>/progress/', review_views.goal_progress, name='goal-progress'),
+
+    # Events
+    path('events/', event_views.events, name='event-list'),
+    path('events/employee/<int:employee_id>/', event_views.employee_timeline, name='event-timeline'),
+    path('events/<int:event_id>/', event_views.event_detail, name='event-detail'),
 ]

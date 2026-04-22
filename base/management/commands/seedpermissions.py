@@ -39,6 +39,40 @@ ALL_PERMISSIONS = [
 
     'hr.cash.deposit',
     'hr.cash.withdraw',
+
+    'hr.contracts.create',
+    'hr.contracts.update',
+    'hr.contracts.delete',
+    'hr.contracts.activate',
+    'hr.contracts.terminate',
+    'hr.contracts.renew',
+
+    'hr.leave.types.create',
+    'hr.leave.types.update',
+    'hr.leave.types.delete',
+    'hr.leave.create',
+    'hr.leave.approve',
+    'hr.leave.cancel',
+
+    'hr.attendance.create',
+    'hr.attendance.update',
+    'hr.attendance.reports',
+
+    'hr.documents.create',
+    'hr.documents.update',
+    'hr.documents.delete',
+    'hr.documents.verify',
+
+    'hr.reviews.create',
+    'hr.reviews.update',
+    'hr.reviews.delete',
+
+    'hr.goals.create',
+    'hr.goals.update',
+    'hr.goals.delete',
+
+    'hr.events.create',
+    'hr.events.delete',
 ]
 
 ROLE_PRESETS = {
@@ -66,6 +100,15 @@ ROLE_PRESETS = {
         'hr.salary.create', 'hr.salary.update', 'hr.salary.delete',
         'hr.salary.approve', 'hr.salary.pay', 'hr.salary.generate',
         'hr.cash.deposit', 'hr.cash.withdraw',
+        'hr.contracts.create', 'hr.contracts.update', 'hr.contracts.delete',
+        'hr.contracts.activate', 'hr.contracts.terminate', 'hr.contracts.renew',
+        'hr.leave.types.create', 'hr.leave.types.update', 'hr.leave.types.delete',
+        'hr.leave.create', 'hr.leave.approve', 'hr.leave.cancel',
+        'hr.attendance.create', 'hr.attendance.update', 'hr.attendance.reports',
+        'hr.documents.create', 'hr.documents.update', 'hr.documents.delete', 'hr.documents.verify',
+        'hr.reviews.create', 'hr.reviews.update', 'hr.reviews.delete',
+        'hr.goals.create', 'hr.goals.update', 'hr.goals.delete',
+        'hr.events.create', 'hr.events.delete',
     ],
 }
 

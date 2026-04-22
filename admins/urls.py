@@ -21,7 +21,7 @@ urlpatterns = [
     path('categories/<int:category_id>/status', category_views.update_category_status),
     path('categories/<int:category_id>/toggle', category_views.toggle_category_status),
     path('categories/<int:category_id>/restore', category_views.restore_category),
-
+    
     path('products', product_views.products),
     path('products/stats', product_views.product_stats),
     path('products/deleted', product_views.deleted_products),

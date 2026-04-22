@@ -4,3 +4,9 @@ from .employee_service import EmployeeService
 from .expense_category_service import ExpenseCategoryService
 from .expense_service import ExpenseService
 from .salary_service import SalaryService
+from .contract_service import ContractService
+from .leave_service import LeaveService
+from .attendance_service import AttendanceService
+from .document_service import DocumentService
+from .review_service import ReviewService
+from .employment_event_service import EmploymentEventService

@@ -72,6 +72,12 @@ class AuthService:
             user_name = f'{user.first_name} {user.last_name}'.strip()
             ShiftNotification.on_cashier_login(user.id, user_name)
 
+        try:
+            from hr.services import AttendanceService
+            AttendanceService.auto_check_in(user.id)
+        except Exception:
+            pass
+
         return ServiceResponse.success(
             data={
                 'token': session_key,
@@ -89,6 +95,13 @@ class AuthService:
         user = session.user_id
         if user and user.role == User.RoleChoices.CASHIER:
             ShiftNotification.on_cashier_logout(user.id)
+
+        if user:
+            try:
+                from hr.services import AttendanceService
+                AttendanceService.auto_check_out(user.id)
+            except Exception:
+                pass
 
         SessionRepository.invalidate_cache(session_key)
         SessionRepository.delete(session)

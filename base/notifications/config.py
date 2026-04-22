@@ -12,7 +12,8 @@ NOTIFICATION_TIMEOUT = getattr(settings, 'NOTIFICATION_TIMEOUT', 10)
 class NotificationConfig:
 
     TYPES = ['order.new', 'order.ready', 'order.cancelled', 'order.paid',
-             'shift.start', 'shift.end', 'shift.switch']
+             'shift.start', 'shift.end', 'shift.switch',
+             'hr.contract_expiry', 'hr.probation_end', 'hr.document_expiry']
 
     @classmethod
     def _key(cls, notification_type):

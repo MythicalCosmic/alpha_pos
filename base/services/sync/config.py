@@ -25,6 +25,12 @@ SYNC_ORDER = [
     # HR models
     'department', 'employee', 'expensecategory', 'expense',
     'salarypayment', 'cashtransaction',
+    'employeecontract', 'contractdocument',
+    'leavetype', 'leaverequest', 'leavebalance',
+    'attendance',
+    'employeedocument',
+    'performancereview', 'performancegoal',
+    'employmentevent',
 ]
 
 MODEL_MAP = {
@@ -77,6 +83,16 @@ MODEL_MAP = {
     'expense': 'hr.Expense',
     'salarypayment': 'hr.SalaryPayment',
     'cashtransaction': 'hr.CashTransaction',
+    'employeecontract': 'hr.EmployeeContract',
+    'contractdocument': 'hr.ContractDocument',
+    'leavetype': 'hr.LeaveType',
+    'leaverequest': 'hr.LeaveRequest',
+    'leavebalance': 'hr.LeaveBalance',
+    'attendance': 'hr.Attendance',
+    'employeedocument': 'hr.EmployeeDocument',
+    'performancereview': 'hr.PerformanceReview',
+    'performancegoal': 'hr.PerformanceGoal',
+    'employmentevent': 'hr.EmploymentEvent',
 }
 
 FK_UUID_MAPPINGS = {
@@ -142,6 +158,13 @@ FK_UUID_MAPPINGS = {
     'expense_category_uuid': ('hr', 'ExpenseCategory', 'category'),
     'paid_by_uuid': ('base', 'User', 'paid_by'),
     'performed_by_uuid': ('base', 'User', 'performed_by'),
+    # HR expansion FK mappings
+    'renewed_from_uuid': ('hr', 'EmployeeContract', 'renewed_from'),
+    'contract_uuid': ('hr', 'EmployeeContract', 'contract'),
+    'leave_type_uuid': ('hr', 'LeaveType', 'leave_type'),
+    'reviewer_uuid': ('base', 'User', 'reviewer'),
+    'verified_by_uuid': ('base', 'User', 'verified_by'),
+    'uploaded_by_uuid': ('base', 'User', 'uploaded_by'),
 }
 
 
