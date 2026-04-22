@@ -26,7 +26,6 @@ INSTALLED_APPS = [
     'customers',
     'admins',
     'stock',
-    'central_command_center',
 ]
 
 MIDDLEWARE = [

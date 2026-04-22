@@ -34,3 +34,4 @@ def rate_limit(key_prefix, max_attempts, window):
             return view_func(request, *args, **kwargs)
         return wrapper
     return decorator
+
