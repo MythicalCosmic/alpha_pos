@@ -58,5 +58,3 @@ class StockCategoryRepository(BaseSyncRepository):
     def reorder(cls, ordered_ids):
         for index, cat_id in enumerate(ordered_ids):
             cls.model.objects.filter(id=cat_id).update(sort_order=index)
-
-            
