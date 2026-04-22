@@ -125,6 +125,8 @@ BRANCH_ID = 'main'
 DEPLOYMENT_MODE = 'local'
 SYNC_ON_SAVE = False
 
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 CACHES = {

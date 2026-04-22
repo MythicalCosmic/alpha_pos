@@ -125,9 +125,14 @@ class AIStockAssistant:
     @classmethod
     def _get_model(cls):
         if cls._model is None:
-            api_key = settings.GEMINI_API_KEY
+            if genai is None:
+                raise ImportError(
+                    "google-generativeai is not installed. "
+                    "Run: pip install google-generativeai"
+                )
+            api_key = getattr(settings, 'GEMINI_API_KEY', '')
             if not api_key:
-                raise ValueError("GEMINI_API_KEY not set")
+                raise ValueError("GEMINI_API_KEY not set in settings or environment")
             genai.configure(api_key=api_key)
             cls._model = genai.GenerativeModel(
                 model_name="gemini-2.5-flash",
