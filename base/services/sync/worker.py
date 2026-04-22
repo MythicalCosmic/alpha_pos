@@ -60,7 +60,9 @@ def _run_loop():
                 try:
                     SyncService.pull_from_cloud()
                 except Exception as e:
-                    logger.warning(f'Pull error in worker: {e}')
+                    logger.error(f'Pull error in worker: {e}')
+                    from base.services.sync.status import SyncStatus
+                    SyncStatus.set_error(f'Pull failed: {e}')
 
             time.sleep(get_sync_interval())
 

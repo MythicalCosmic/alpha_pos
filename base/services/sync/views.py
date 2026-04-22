@@ -151,9 +151,12 @@ def changes(request):
     requesting_branch = request.META.get('HTTP_X_BRANCH_ID', '')
     since_param = request.GET.get('since')
     since_dt = parse_datetime(since_param) if since_param else None
+    per_page = min(int(request.GET.get('per_page', 1000)), 5000)
 
     models = get_all_models()
     data = {}
+    total_records = 0
+    has_more = False
 
     for name in SYNC_ORDER:
         model_class = models.get(name)
@@ -163,18 +166,25 @@ def changes(request):
         if since_dt:
             records = SyncService.get_changes_after(model_class, since_dt)
         else:
-            records = [obj.to_sync_dict() for obj in model_class.objects.all()[:5000]]
+            all_objs = model_class.objects.all()[:per_page + 1]
+            records = [obj.to_sync_dict() for obj in all_objs]
+            if len(records) > per_page:
+                records = records[:per_page]
+                has_more = True
 
         if requesting_branch:
             records = [r for r in records if r.get('branch_id') != requesting_branch]
 
         if records:
             data[name] = records
+            total_records += len(records)
 
     from django.utils import timezone
     return JsonResponse({
         'success': True,
         'data': data,
+        'total_records': total_records,
+        'has_more': has_more,
         'server_timestamp': timezone.now().isoformat(),
     })
 

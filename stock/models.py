@@ -33,6 +33,11 @@ class StockLocation(SyncMixin, models.Model):
     class Meta:
         ordering = ["sort_order", "name"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['parent_location_uuid'] = str(self.parent_location.uuid) if self.parent_location else None
+        return data
+
     def __str__(self):
         return f"{self.name} ({self.get_type_display()})"
 
@@ -76,6 +81,11 @@ class StockUnit(SyncMixin, models.Model):
     class Meta:
         ordering = ["unit_type", "name"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['base_unit_uuid'] = str(self.base_unit.uuid) if self.base_unit else None
+        return data
+
     def __str__(self):
         return f"{self.name} ({self.short_name})"
 
@@ -108,6 +118,11 @@ class StockCategory(SyncMixin, models.Model):
     class Meta:
         verbose_name_plural = "stock categories"
         ordering = ["sort_order", "name"]
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['parent_uuid'] = str(self.parent.uuid) if self.parent else None
+        return data
 
     def __str__(self):
         return self.name
@@ -168,6 +183,12 @@ class StockItem(SyncMixin, models.Model):
     class Meta:
         ordering = ["name"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_category_uuid'] = str(self.category.uuid) if self.category else None
+        data['base_unit_uuid'] = str(self.base_unit.uuid) if self.base_unit else None
+        return data
+
     def __str__(self):
         return self.name
 
@@ -196,6 +217,12 @@ class StockItemUnit(SyncMixin, models.Model):
 
     class Meta:
         unique_together = [("stock_item", "unit")]
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
 
     def __str__(self):
         return f"{self.stock_item.name} – {self.unit.short_name}"
@@ -281,6 +308,16 @@ class Recipe(SyncMixin, models.Model):
     class Meta:
         ordering = ["name", "-version"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['output_item_uuid'] = str(self.output_item.uuid) if self.output_item else None
+        data['output_unit_uuid'] = str(self.output_unit.uuid) if self.output_unit else None
+        data['production_location_uuid'] = str(self.production_location.uuid) if self.production_location else None
+        data['created_by_uuid'] = str(self.created_by.uuid) if self.created_by else None
+        data['approved_by_uuid'] = str(self.approved_by.uuid) if self.approved_by else None
+        data['parent_recipe_uuid'] = str(self.parent_recipe.uuid) if self.parent_recipe else None
+        return data
+
     def __str__(self):
         return f"{self.name} v{self.version}"
 
@@ -310,6 +347,13 @@ class RecipeIngredient(SyncMixin, models.Model):
     class Meta:
         ordering = ["sort_order"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['recipe_uuid'] = str(self.recipe.uuid) if self.recipe else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.quantity}"
 
@@ -333,6 +377,13 @@ class RecipeIngredientSubstitute(SyncMixin, models.Model):
     class Meta:
         ordering = ["priority"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['recipe_ingredient_uuid'] = str(self.recipe_ingredient.uuid) if self.recipe_ingredient else None
+        data['substitute_item_uuid'] = str(self.substitute_item.uuid) if self.substitute_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
+
     def __str__(self):
         return f"Sub: {self.substitute_item.name}"
 
@@ -354,6 +405,13 @@ class RecipeByProduct(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['recipe_uuid'] = str(self.recipe.uuid) if self.recipe else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
 
     def __str__(self):
         return f"{'Waste' if self.is_waste else 'By-product'}: {self.stock_item.name}"
@@ -379,6 +437,11 @@ class RecipeStep(SyncMixin, models.Model):
     class Meta:
         ordering = ["step_number"]
         unique_together = [("recipe", "step_number")]
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['recipe_uuid'] = str(self.recipe.uuid) if self.recipe else None
+        return data
 
     def __str__(self):
         return f"Step {self.step_number}: {self.title}"
@@ -442,6 +505,14 @@ class ProductStockLink(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['product_uuid'] = str(self.product.uuid) if self.product else None
+        data['recipe_uuid'] = str(self.recipe.uuid) if self.recipe else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
+
     def __str__(self):
         return f"Link: Product#{self.product_id} → {self.get_link_type_display()}"
 
@@ -466,6 +537,13 @@ class ProductComponentStock(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['product_stock_link_uuid'] = str(self.product_stock_link.uuid) if self.product_stock_link else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
 
     def __str__(self):
         return self.component_name
@@ -548,6 +626,13 @@ class SupplierStockItem(SyncMixin, models.Model):
     class Meta:
         unique_together = [("supplier", "stock_item")]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['supplier_uuid'] = str(self.supplier.uuid) if self.supplier else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
+
     def __str__(self):
         return f"{self.supplier.name} → {self.stock_item.name}"
 
@@ -614,6 +699,14 @@ class PurchaseOrder(SyncMixin, models.Model):
     class Meta:
         ordering = ["-order_date"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['supplier_uuid'] = str(self.supplier.uuid) if self.supplier else None
+        data['delivery_location_uuid'] = str(self.delivery_location.uuid) if self.delivery_location else None
+        data['created_by_uuid'] = str(self.created_by.uuid) if self.created_by else None
+        data['approved_by_uuid'] = str(self.approved_by.uuid) if self.approved_by else None
+        return data
+
     def __str__(self):
         return f"PO-{self.order_number}"
 
@@ -649,6 +742,14 @@ class PurchaseOrderItem(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['purchase_order_uuid'] = str(self.purchase_order.uuid) if self.purchase_order else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['supplier_stock_item_uuid'] = str(self.supplier_stock_item.uuid) if self.supplier_stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.quantity_ordered}"
 
@@ -678,6 +779,13 @@ class PurchaseReceiving(SyncMixin, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['purchase_order_uuid'] = str(self.purchase_order.uuid) if self.purchase_order else None
+        data['location_uuid'] = str(self.location.uuid) if self.location else None
+        data['received_by_uuid'] = str(self.received_by.uuid) if self.received_by else None
+        return data
 
     def __str__(self):
         return f"RCV-{self.receiving_number}"
@@ -722,6 +830,15 @@ class PurchaseReceivingItem(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['receiving_uuid'] = str(self.receiving.uuid) if self.receiving else None
+        data['po_item_uuid'] = str(self.po_item.uuid) if self.po_item else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        data['batch_created_uuid'] = str(self.batch_created.uuid) if self.batch_created else None
+        return data
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.quantity_received}"
 
@@ -763,6 +880,12 @@ class StockLevel(SyncMixin, models.Model):
     @property
     def available_quantity(self):
         return self.quantity - self.reserved_quantity
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['location_uuid'] = str(self.location.uuid) if self.location else None
+        return data
 
     def __str__(self):
         return f"{self.stock_item.name} @ {self.location.name}: {self.quantity}"
@@ -831,6 +954,15 @@ class StockBatch(SyncMixin, models.Model):
     class Meta:
         unique_together = [("batch_number", "stock_item")]
         verbose_name_plural = "stock batches"
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['location_uuid'] = str(self.location.uuid) if self.location else None
+        data['supplier_uuid'] = str(self.supplier.uuid) if self.supplier else None
+        data['purchase_order_uuid'] = str(self.purchase_order.uuid) if self.purchase_order else None
+        data['production_order_uuid'] = str(self.production_order.uuid) if self.production_order else None
+        return data
 
     def __str__(self):
         return f"Batch {self.batch_number} – {self.stock_item.name}"
@@ -927,6 +1059,18 @@ class StockTransaction(SyncMixin, models.Model):
             models.Index(fields=["reference_type", "reference_id"]),
         ]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['location_uuid'] = str(self.location.uuid) if self.location else None
+        data['batch_uuid'] = str(self.batch.uuid) if self.batch else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        data['order_uuid'] = str(self.order.uuid) if self.order else None
+        data['production_order_uuid'] = str(self.production_order.uuid) if self.production_order else None
+        data['transfer_uuid'] = str(self.transfer.uuid) if self.transfer else None
+        data['user_uuid'] = str(self.user.uuid) if self.user else None
+        return data
+
     def __str__(self):
         return f"{self.transaction_number} | {self.get_movement_type_display()}"
 
@@ -1006,6 +1150,16 @@ class ProductionOrder(SyncMixin, models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['recipe_uuid'] = str(self.recipe.uuid) if self.recipe else None
+        data['output_unit_uuid'] = str(self.output_unit.uuid) if self.output_unit else None
+        data['source_location_uuid'] = str(self.source_location.uuid) if self.source_location else None
+        data['output_location_uuid'] = str(self.output_location.uuid) if self.output_location else None
+        data['assigned_to_uuid'] = str(self.assigned_to.uuid) if self.assigned_to else None
+        data['created_by_uuid'] = str(self.created_by.uuid) if self.created_by else None
+        return data
+
     def __str__(self):
         return f"PROD-{self.order_number}"
 
@@ -1055,6 +1209,15 @@ class ProductionOrderIngredient(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['production_order_uuid'] = str(self.production_order.uuid) if self.production_order else None
+        data['recipe_ingredient_uuid'] = str(self.recipe_ingredient.uuid) if self.recipe_ingredient else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        data['batch_used_uuid'] = str(self.batch_used.uuid) if self.batch_used else None
+        return data
+
     def __str__(self):
         return f"{self.stock_item.name} (planned: {self.planned_quantity})"
 
@@ -1094,6 +1257,14 @@ class ProductionOrderOutput(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['production_order_uuid'] = str(self.production_order.uuid) if self.production_order else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        data['batch_created_uuid'] = str(self.batch_created.uuid) if self.batch_created else None
+        return data
+
     def __str__(self):
         label = "Primary" if self.is_primary_output else "By-product"
         return f"{label}: {self.stock_item.name} × {self.quantity}"
@@ -1130,6 +1301,13 @@ class ProductionOrderStep(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['production_order_uuid'] = str(self.production_order.uuid) if self.production_order else None
+        data['recipe_step_uuid'] = str(self.recipe_step.uuid) if self.recipe_step else None
+        data['completed_by_uuid'] = str(self.completed_by.uuid) if self.completed_by else None
+        return data
 
     def __str__(self):
         return f"Step {self.recipe_step.step_number}: {self.get_status_display()}"
@@ -1206,6 +1384,16 @@ class StockTransfer(SyncMixin, models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['from_location_uuid'] = str(self.from_location.uuid) if self.from_location else None
+        data['to_location_uuid'] = str(self.to_location.uuid) if self.to_location else None
+        data['requested_by_uuid'] = str(self.requested_by.uuid) if self.requested_by else None
+        data['approved_by_uuid'] = str(self.approved_by.uuid) if self.approved_by else None
+        data['shipped_by_uuid'] = str(self.shipped_by.uuid) if self.shipped_by else None
+        data['received_by_uuid'] = str(self.received_by.uuid) if self.received_by else None
+        return data
+
     def __str__(self):
         return f"TRF-{self.transfer_number}"
 
@@ -1240,6 +1428,14 @@ class StockTransferItem(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['transfer_uuid'] = str(self.transfer.uuid) if self.transfer else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['batch_uuid'] = str(self.batch.uuid) if self.batch else None
+        data['unit_uuid'] = str(self.unit.uuid) if self.unit else None
+        return data
 
     def __str__(self):
         return f"{self.stock_item.name} × {self.requested_qty}"
@@ -1317,6 +1513,14 @@ class StockCount(SyncMixin, models.Model):
     class Meta:
         ordering = ["-created_at"]
 
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['location_uuid'] = str(self.location.uuid) if self.location else None
+        data['category_filter_uuid'] = str(self.category_filter.uuid) if self.category_filter else None
+        data['counted_by_uuid'] = str(self.counted_by.uuid) if self.counted_by else None
+        data['approved_by_uuid'] = str(self.approved_by.uuid) if self.approved_by else None
+        return data
+
     def __str__(self):
         return f"CNT-{self.count_number}"
 
@@ -1368,6 +1572,15 @@ class StockCountItem(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['stock_count_uuid'] = str(self.stock_count.uuid) if self.stock_count else None
+        data['stock_item_uuid'] = str(self.stock_item.uuid) if self.stock_item else None
+        data['batch_uuid'] = str(self.batch.uuid) if self.batch else None
+        data['reason_code_uuid'] = str(self.reason_code.uuid) if self.reason_code else None
+        data['adjustment_transaction_uuid'] = str(self.adjustment_transaction.uuid) if self.adjustment_transaction else None
+        return data
 
     def __str__(self):
         return f"{self.stock_item.name}: system={self.system_quantity}, counted={self.counted_quantity}"
@@ -1462,6 +1675,13 @@ class StockSettings(SyncMixin, models.Model):
     def load(cls):
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['default_location_uuid'] = str(self.default_location.uuid) if self.default_location else None
+        data['default_production_location_uuid'] = str(self.default_production_location.uuid) if self.default_production_location else None
+        data['default_receiving_location_uuid'] = str(self.default_receiving_location.uuid) if self.default_receiving_location else None
+        return data
 
     def __str__(self):
         return "Stock Settings"
