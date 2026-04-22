@@ -5,11 +5,27 @@ from base.services.sync.cache import safe_get, safe_set
 CACHE_PREFIX = 'sync'
 
 SYNC_ORDER = [
+    # Base models (synced first - other models depend on these)
     'user', 'category', 'deliveryperson', 'product',
     'order', 'orderitem', 'cashregister', 'inkassa',
+    # Stock models (synced after base, respecting FK dependencies)
+    'stocklocation', 'stockunit', 'stockcategory', 'stockitem',
+    'stockitemunit', 'supplier', 'supplierstockitem',
+    'recipe', 'recipeingredient', 'recipeingredientsubstitute',
+    'recipebyproduct', 'recipestep',
+    'productstocklink', 'productcomponentstock',
+    'purchaseorder', 'purchaseorderitem',
+    'purchasereceiving', 'purchasereceivingitem',
+    'stocklevel', 'stockbatch', 'stocktransaction',
+    'productionorder', 'productionorderingredient',
+    'productionorderoutput', 'productionorderstep',
+    'stocktransfer', 'stocktransferitem',
+    'variancereasoncode', 'stockcount', 'stockcountitem',
+    'stocksettings', 'stockalertconfig',
 ]
 
 MODEL_MAP = {
+    # Base models
     'user': 'base.User',
     'category': 'base.Category',
     'deliveryperson': 'base.DeliveryPerson',
@@ -18,15 +34,72 @@ MODEL_MAP = {
     'orderitem': 'base.OrderItem',
     'cashregister': 'base.CashRegister',
     'inkassa': 'base.Inkassa',
+    # Stock models
+    'stocklocation': 'stock.StockLocation',
+    'stockunit': 'stock.StockUnit',
+    'stockcategory': 'stock.StockCategory',
+    'stockitem': 'stock.StockItem',
+    'stockitemunit': 'stock.StockItemUnit',
+    'supplier': 'stock.Supplier',
+    'supplierstockitem': 'stock.SupplierStockItem',
+    'recipe': 'stock.Recipe',
+    'recipeingredient': 'stock.RecipeIngredient',
+    'recipeingredientsubstitute': 'stock.RecipeIngredientSubstitute',
+    'recipebyproduct': 'stock.RecipeByProduct',
+    'recipestep': 'stock.RecipeStep',
+    'productstocklink': 'stock.ProductStockLink',
+    'productcomponentstock': 'stock.ProductComponentStock',
+    'purchaseorder': 'stock.PurchaseOrder',
+    'purchaseorderitem': 'stock.PurchaseOrderItem',
+    'purchasereceiving': 'stock.PurchaseReceiving',
+    'purchasereceivingitem': 'stock.PurchaseReceivingItem',
+    'stocklevel': 'stock.StockLevel',
+    'stockbatch': 'stock.StockBatch',
+    'stocktransaction': 'stock.StockTransaction',
+    'productionorder': 'stock.ProductionOrder',
+    'productionorderingredient': 'stock.ProductionOrderIngredient',
+    'productionorderoutput': 'stock.ProductionOrderOutput',
+    'productionorderstep': 'stock.ProductionOrderStep',
+    'stocktransfer': 'stock.StockTransfer',
+    'stocktransferitem': 'stock.StockTransferItem',
+    'variancereasoncode': 'stock.VarianceReasonCode',
+    'stockcount': 'stock.StockCount',
+    'stockcountitem': 'stock.StockCountItem',
+    'stocksettings': 'stock.StockSettings',
+    'stockalertconfig': 'stock.StockAlertConfig',
 }
 
 FK_UUID_MAPPINGS = {
+    # Base FK mappings
     'user_uuid': ('base', 'User', 'user'),
     'cashier_uuid': ('base', 'User', 'cashier'),
     'delivery_person_uuid': ('base', 'DeliveryPerson', 'delivery_person'),
     'category_uuid': ('base', 'Category', 'category'),
     'order_uuid': ('base', 'Order', 'order'),
     'product_uuid': ('base', 'Product', 'product'),
+    # Stock FK mappings
+    'stock_item_uuid': ('stock', 'StockItem', 'stock_item'),
+    'location_uuid': ('stock', 'StockLocation', 'location'),
+    'supplier_uuid': ('stock', 'Supplier', 'supplier'),
+    'recipe_uuid': ('stock', 'Recipe', 'recipe'),
+    'batch_uuid': ('stock', 'StockBatch', 'batch'),
+    'base_unit_uuid': ('stock', 'StockUnit', 'base_unit'),
+    'unit_uuid': ('stock', 'StockUnit', 'unit'),
+    'output_item_uuid': ('stock', 'StockItem', 'output_item'),
+    'output_unit_uuid': ('stock', 'StockUnit', 'output_unit'),
+    'parent_location_uuid': ('stock', 'StockLocation', 'parent_location'),
+    'parent_uuid': ('stock', 'StockCategory', 'parent'),
+    'production_order_uuid': ('stock', 'ProductionOrder', 'production_order'),
+    'purchase_order_uuid': ('stock', 'PurchaseOrder', 'purchase_order'),
+    'transfer_uuid': ('stock', 'StockTransfer', 'transfer'),
+    'created_by_uuid': ('base', 'User', 'created_by'),
+    'approved_by_uuid': ('base', 'User', 'approved_by'),
+    'assigned_to_uuid': ('base', 'User', 'assigned_to'),
+    'received_by_uuid': ('base', 'User', 'received_by'),
+    'requested_by_uuid': ('base', 'User', 'requested_by'),
+    'shipped_by_uuid': ('base', 'User', 'shipped_by'),
+    'counted_by_uuid': ('base', 'User', 'counted_by'),
+    'completed_by_uuid': ('base', 'User', 'completed_by'),
 }
 
 

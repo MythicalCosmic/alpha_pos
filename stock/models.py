@@ -1,11 +1,9 @@
-import uuid as uuid_lib
-
-from django.conf import settings
 from django.db import models
+from base.models import SyncMixin, SyncManager
 
 
 
-class StockLocation(models.Model):
+class StockLocation(SyncMixin, models.Model):
     class LocationType(models.TextChoices):
         WAREHOUSE = "WAREHOUSE", "Warehouse"
         KITCHEN = "KITCHEN", "Kitchen"
@@ -13,7 +11,7 @@ class StockLocation(models.Model):
         STORAGE = "STORAGE", "Storage"
         PREP = "PREP", "Prep Area"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     name = models.CharField(max_length=100)
     type = models.CharField(max_length=20, choices=LocationType.choices)
     parent_location = models.ForeignKey(
@@ -30,6 +28,8 @@ class StockLocation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["sort_order", "name"]
 
@@ -37,7 +37,7 @@ class StockLocation(models.Model):
         return f"{self.name} ({self.get_type_display()})"
 
 
-class StockUnit(models.Model):
+class StockUnit(SyncMixin, models.Model):
     class UnitType(models.TextChoices):
         WEIGHT = "WEIGHT", "Weight"
         VOLUME = "VOLUME", "Volume"
@@ -45,7 +45,7 @@ class StockUnit(models.Model):
         LENGTH = "LENGTH", "Length"
         TIME = "TIME", "Time"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     name = models.CharField(max_length=50)
     short_name = models.CharField(max_length=10)
     unit_type = models.CharField(max_length=20, choices=UnitType.choices)
@@ -71,6 +71,8 @@ class StockUnit(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["unit_type", "name"]
 
@@ -78,7 +80,7 @@ class StockUnit(models.Model):
         return f"{self.name} ({self.short_name})"
 
 
-class StockCategory(models.Model):
+class StockCategory(SyncMixin, models.Model):
     class CategoryType(models.TextChoices):
         RAW_MATERIAL = "RAW_MATERIAL", "Raw Material"
         SEMI_FINISHED = "SEMI_FINISHED", "Semi-Finished"
@@ -86,7 +88,7 @@ class StockCategory(models.Model):
         PACKAGING = "PACKAGING", "Packaging"
         CONSUMABLE = "CONSUMABLE", "Consumable"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     name = models.CharField(max_length=100)
     parent = models.ForeignKey(
         "self",
@@ -101,6 +103,8 @@ class StockCategory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         verbose_name_plural = "stock categories"
         ordering = ["sort_order", "name"]
@@ -109,14 +113,14 @@ class StockCategory(models.Model):
         return self.name
 
 
-class StockItem(models.Model):
+class StockItem(SyncMixin, models.Model):
     class ItemType(models.TextChoices):
         RAW = "RAW", "Raw Material"
         SEMI = "SEMI", "Semi-Finished"
         FINISHED = "FINISHED", "Finished Good"
         PACKAGING = "PACKAGING", "Packaging"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     name = models.CharField(max_length=200)
     sku = models.CharField(max_length=50, unique=True, blank=True, null=True)
     barcode = models.CharField(max_length=100, blank=True, null=True, db_index=True)
@@ -159,6 +163,8 @@ class StockItem(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["name"]
 
@@ -166,13 +172,13 @@ class StockItem(models.Model):
         return self.name
 
 
-class StockItemUnit(models.Model):
+class StockItemUnit(SyncMixin, models.Model):
     """
     Alternative units for a stock item.
     E.g. a flour item's base unit is gram but it can also be tracked in kg or bags.
     """
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     stock_item = models.ForeignKey(
         StockItem, on_delete=models.CASCADE, related_name="alternative_units"
     )
@@ -186,6 +192,8 @@ class StockItemUnit(models.Model):
     barcode = models.CharField(max_length=100, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     class Meta:
         unique_together = [("stock_item", "unit")]
 
@@ -194,14 +202,14 @@ class StockItemUnit(models.Model):
 
 
 
-class Recipe(models.Model):
+class Recipe(SyncMixin, models.Model):
     class RecipeType(models.TextChoices):
         PRODUCTION = "PRODUCTION", "Production"
         ASSEMBLY = "ASSEMBLY", "Assembly"
         PREPARATION = "PREPARATION", "Preparation"
         DISASSEMBLY = "DISASSEMBLY", "Disassembly"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     name = models.CharField(max_length=200)
     code = models.CharField(max_length=50, unique=True, blank=True, null=True)
 
@@ -251,14 +259,14 @@ class Recipe(models.Model):
 
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="created_recipes",
     )
     approved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -268,6 +276,8 @@ class Recipe(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["name", "-version"]
 
@@ -275,8 +285,8 @@ class Recipe(models.Model):
         return f"{self.name} v{self.version}"
 
 
-class RecipeIngredient(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class RecipeIngredient(SyncMixin, models.Model):
+
     recipe = models.ForeignKey(
         Recipe, on_delete=models.CASCADE, related_name="ingredients"
     )
@@ -295,6 +305,8 @@ class RecipeIngredient(models.Model):
     substitute_group = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["sort_order"]
 
@@ -302,8 +314,8 @@ class RecipeIngredient(models.Model):
         return f"{self.stock_item.name} × {self.quantity}"
 
 
-class RecipeIngredientSubstitute(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class RecipeIngredientSubstitute(SyncMixin, models.Model):
+
     recipe_ingredient = models.ForeignKey(
         RecipeIngredient, on_delete=models.CASCADE, related_name="substitutes"
     )
@@ -316,6 +328,8 @@ class RecipeIngredientSubstitute(models.Model):
     priority = models.PositiveSmallIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["priority"]
 
@@ -323,8 +337,8 @@ class RecipeIngredientSubstitute(models.Model):
         return f"Sub: {self.substitute_item.name}"
 
 
-class RecipeByProduct(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class RecipeByProduct(SyncMixin, models.Model):
+
     recipe = models.ForeignKey(
         Recipe, on_delete=models.CASCADE, related_name="by_products"
     )
@@ -339,12 +353,14 @@ class RecipeByProduct(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{'Waste' if self.is_waste else 'By-product'}: {self.stock_item.name}"
 
 
-class RecipeStep(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class RecipeStep(SyncMixin, models.Model):
+
     recipe = models.ForeignKey(
         Recipe, on_delete=models.CASCADE, related_name="steps"
     )
@@ -358,6 +374,8 @@ class RecipeStep(models.Model):
     photo_url = models.URLField(max_length=500, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["step_number"]
         unique_together = [("recipe", "step_number")]
@@ -367,7 +385,7 @@ class RecipeStep(models.Model):
 
 
 
-class ProductStockLink(models.Model):
+class ProductStockLink(SyncMixin, models.Model):
     """
     Links a POS product to either a recipe, a direct stock item, or
     a set of components. This drives automatic stock deduction on sale.
@@ -384,7 +402,7 @@ class ProductStockLink(models.Model):
         READY = "READY", "Ready"
         PAID = "PAID", "Paid"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     product = models.OneToOneField(
         "base.Product",
         on_delete=models.CASCADE,
@@ -422,12 +440,14 @@ class ProductStockLink(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"Link: Product#{self.product_id} → {self.get_link_type_display()}"
 
 
-class ProductComponentStock(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class ProductComponentStock(SyncMixin, models.Model):
+
     product_stock_link = models.ForeignKey(
         ProductStockLink, on_delete=models.CASCADE, related_name="components"
     )
@@ -445,13 +465,15 @@ class ProductComponentStock(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return self.component_name
 
 
 
-class Supplier(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class Supplier(SyncMixin, models.Model):
+
     code = models.CharField(max_length=20, unique=True, blank=True, null=True)
     name = models.CharField(max_length=200)
     legal_name = models.CharField(max_length=200, blank=True, default="")
@@ -485,6 +507,8 @@ class Supplier(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["name"]
 
@@ -492,8 +516,8 @@ class Supplier(models.Model):
         return self.name
 
 
-class SupplierStockItem(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class SupplierStockItem(SyncMixin, models.Model):
+
     supplier = models.ForeignKey(
         Supplier, on_delete=models.CASCADE, related_name="stock_items"
     )
@@ -519,6 +543,8 @@ class SupplierStockItem(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         unique_together = [("supplier", "stock_item")]
 
@@ -526,7 +552,7 @@ class SupplierStockItem(models.Model):
         return f"{self.supplier.name} → {self.stock_item.name}"
 
 
-class PurchaseOrder(models.Model):
+class PurchaseOrder(SyncMixin, models.Model):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         SENT = "SENT", "Sent"
@@ -540,7 +566,7 @@ class PurchaseOrder(models.Model):
         PARTIAL = "PARTIAL", "Partial"
         PAID = "PAID", "Paid"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     order_number = models.CharField(max_length=50, unique=True)
     supplier = models.ForeignKey(
         Supplier, on_delete=models.PROTECT, related_name="purchase_orders"
@@ -568,12 +594,12 @@ class PurchaseOrder(models.Model):
     payment_due_date = models.DateTimeField(null=True, blank=True)
 
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.PROTECT,
         related_name="created_purchase_orders",
     )
     approved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -583,6 +609,8 @@ class PurchaseOrder(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["-order_date"]
 
@@ -590,8 +618,8 @@ class PurchaseOrder(models.Model):
         return f"PO-{self.order_number}"
 
 
-class PurchaseOrderItem(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class PurchaseOrderItem(SyncMixin, models.Model):
+
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name="items"
     )
@@ -619,16 +647,18 @@ class PurchaseOrderItem(models.Model):
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.quantity_ordered}"
 
 
-class PurchaseReceiving(models.Model):
+class PurchaseReceiving(SyncMixin, models.Model):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         COMPLETED = "COMPLETED", "Completed"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     receiving_number = models.CharField(max_length=50, unique=True)
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.PROTECT, related_name="receivings"
@@ -638,7 +668,7 @@ class PurchaseReceiving(models.Model):
     )
     received_date = models.DateField()
     received_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+"
+        'base.User', on_delete=models.PROTECT, related_name="+"
     )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT
@@ -647,17 +677,19 @@ class PurchaseReceiving(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"RCV-{self.receiving_number}"
 
 
-class PurchaseReceivingItem(models.Model):
+class PurchaseReceivingItem(SyncMixin, models.Model):
     class QualityStatus(models.TextChoices):
         PASSED = "PASSED", "Passed"
         FAILED = "FAILED", "Failed"
         PENDING = "PENDING", "Pending"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     receiving = models.ForeignKey(
         PurchaseReceiving, on_delete=models.CASCADE, related_name="items"
     )
@@ -688,17 +720,19 @@ class PurchaseReceivingItem(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.quantity_received}"
 
 
-class StockLevel(models.Model):
+class StockLevel(SyncMixin, models.Model):
     """
     Denormalized current stock level per item per location.
     Updated by stock transactions.
     """
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     stock_item = models.ForeignKey(
         StockItem, on_delete=models.CASCADE, related_name="stock_levels"
     )
@@ -721,6 +755,8 @@ class StockLevel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         unique_together = [("stock_item", "location")]
 
@@ -732,7 +768,7 @@ class StockLevel(models.Model):
         return f"{self.stock_item.name} @ {self.location.name}: {self.quantity}"
 
 
-class StockBatch(models.Model):
+class StockBatch(SyncMixin, models.Model):
     class BatchStatus(models.TextChoices):
         AVAILABLE = "AVAILABLE", "Available"
         RESERVED = "RESERVED", "Reserved"
@@ -740,7 +776,7 @@ class StockBatch(models.Model):
         EXPIRED = "EXPIRED", "Expired"
         CONSUMED = "CONSUMED", "Consumed"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     batch_number = models.CharField(max_length=100)
     stock_item = models.ForeignKey(
         StockItem, on_delete=models.CASCADE, related_name="batches"
@@ -790,6 +826,8 @@ class StockBatch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         unique_together = [("batch_number", "stock_item")]
         verbose_name_plural = "stock batches"
@@ -798,7 +836,7 @@ class StockBatch(models.Model):
         return f"Batch {self.batch_number} – {self.stock_item.name}"
 
 
-class StockTransaction(models.Model):
+class StockTransaction(SyncMixin, models.Model):
     class MovementType(models.TextChoices):
         PURCHASE_IN = "PURCHASE_IN", "Purchase In"
         SALE_OUT = "SALE_OUT", "Sale Out"
@@ -817,7 +855,7 @@ class StockTransaction(models.Model):
         RESERVATION = "RESERVATION", "Reservation"
         RESERVATION_RELEASE = "RESERVATION_RELEASE", "Reservation Release"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     transaction_number = models.CharField(max_length=50, unique=True)
     stock_item = models.ForeignKey(
         StockItem, on_delete=models.PROTECT, related_name="transactions"
@@ -872,12 +910,14 @@ class StockTransaction(models.Model):
     )
 
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.PROTECT,
         related_name="stock_transactions",
     )
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    objects = SyncManager()
 
     class Meta:
         ordering = ["-created_at"]
@@ -891,7 +931,7 @@ class StockTransaction(models.Model):
         return f"{self.transaction_number} | {self.get_movement_type_display()}"
 
 
-class ProductionOrder(models.Model):
+class ProductionOrder(SyncMixin, models.Model):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         PLANNED = "PLANNED", "Planned"
@@ -906,7 +946,7 @@ class ProductionOrder(models.Model):
         HIGH = "HIGH", "High"
         URGENT = "URGENT", "Urgent"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     order_number = models.CharField(max_length=50, unique=True)
     recipe = models.ForeignKey(
         Recipe, on_delete=models.PROTECT, related_name="production_orders"
@@ -946,20 +986,22 @@ class ProductionOrder(models.Model):
     actual_end = models.DateTimeField(null=True, blank=True)
 
     assigned_to = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="assigned_production_orders",
     )
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.PROTECT,
         related_name="created_production_orders",
     )
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
 
     class Meta:
         ordering = ["-created_at"]
@@ -968,13 +1010,13 @@ class ProductionOrder(models.Model):
         return f"PROD-{self.order_number}"
 
 
-class ProductionOrderIngredient(models.Model):
+class ProductionOrderIngredient(SyncMixin, models.Model):
     class IngredientStatus(models.TextChoices):
         PENDING = "PENDING", "Pending"
         ALLOCATED = "ALLOCATED", "Allocated"
         CONSUMED = "CONSUMED", "Consumed"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     production_order = models.ForeignKey(
         ProductionOrder, on_delete=models.CASCADE, related_name="ingredients"
     )
@@ -1011,17 +1053,19 @@ class ProductionOrderIngredient(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.stock_item.name} (planned: {self.planned_quantity})"
 
 
-class ProductionOrderOutput(models.Model):
+class ProductionOrderOutput(SyncMixin, models.Model):
     class QualityStatus(models.TextChoices):
         PASSED = "PASSED", "Passed"
         FAILED = "FAILED", "Failed"
         PENDING = "PENDING", "Pending"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     production_order = models.ForeignKey(
         ProductionOrder, on_delete=models.CASCADE, related_name="outputs"
     )
@@ -1048,19 +1092,21 @@ class ProductionOrderOutput(models.Model):
     quality_notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         label = "Primary" if self.is_primary_output else "By-product"
         return f"{label}: {self.stock_item.name} × {self.quantity}"
 
 
-class ProductionOrderStep(models.Model):
+class ProductionOrderStep(SyncMixin, models.Model):
     class StepStatus(models.TextChoices):
         PENDING = "PENDING", "Pending"
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
         COMPLETED = "COMPLETED", "Completed"
         SKIPPED = "SKIPPED", "Skipped"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     production_order = models.ForeignKey(
         ProductionOrder, on_delete=models.CASCADE, related_name="steps"
     )
@@ -1073,7 +1119,7 @@ class ProductionOrderStep(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     completed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1083,10 +1129,12 @@ class ProductionOrderStep(models.Model):
     checkpoint_passed = models.BooleanField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"Step {self.recipe_step.step_number}: {self.get_status_display()}"
 
-class StockTransfer(models.Model):
+class StockTransfer(SyncMixin, models.Model):
     class Status(models.TextChoices):
         DRAFT = "DRAFT", "Draft"
         REQUESTED = "REQUESTED", "Requested"
@@ -1099,7 +1147,7 @@ class StockTransfer(models.Model):
         INTERNAL = "INTERNAL", "Internal"
         BRANCH_TO_BRANCH = "BRANCH_TO_BRANCH", "Branch to Branch"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     transfer_number = models.CharField(max_length=50, unique=True)
     from_location = models.ForeignKey(
         StockLocation, on_delete=models.PROTECT, related_name="transfers_out"
@@ -1117,28 +1165,28 @@ class StockTransfer(models.Model):
     )
 
     requested_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="requested_transfers",
     )
     approved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="approved_transfers",
     )
     shipped_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="shipped_transfers",
     )
     received_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1153,6 +1201,8 @@ class StockTransfer(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -1160,8 +1210,8 @@ class StockTransfer(models.Model):
         return f"TRF-{self.transfer_number}"
 
 
-class StockTransferItem(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class StockTransferItem(SyncMixin, models.Model):
+
     transfer = models.ForeignKey(
         StockTransfer, on_delete=models.CASCADE, related_name="items"
     )
@@ -1189,12 +1239,14 @@ class StockTransferItem(models.Model):
     variance_reason = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.stock_item.name} × {self.requested_qty}"
 
 
-class VarianceReasonCode(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class VarianceReasonCode(SyncMixin, models.Model):
+
     code = models.CharField(max_length=20, unique=True)
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, default="")
@@ -1202,11 +1254,13 @@ class VarianceReasonCode(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.code}: {self.name}"
 
 
-class StockCount(models.Model):
+class StockCount(SyncMixin, models.Model):
     class CountType(models.TextChoices):
         FULL = "FULL", "Full Count"
         PARTIAL = "PARTIAL", "Partial Count"
@@ -1220,7 +1274,7 @@ class StockCount(models.Model):
         APPROVED = "APPROVED", "Approved"
         CANCELLED = "CANCELLED", "Cancelled"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     count_number = models.CharField(max_length=50, unique=True)
     location = models.ForeignKey(
         StockLocation, on_delete=models.PROTECT, related_name="stock_counts"
@@ -1240,14 +1294,14 @@ class StockCount(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     counted_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="stock_counts",
     )
     approved_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
+        'base.User',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -1258,6 +1312,8 @@ class StockCount(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         ordering = ["-created_at"]
 
@@ -1265,8 +1321,8 @@ class StockCount(models.Model):
         return f"CNT-{self.count_number}"
 
 
-class StockCountItem(models.Model):
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+class StockCountItem(SyncMixin, models.Model):
+
     stock_count = models.ForeignKey(
         StockCount, on_delete=models.CASCADE, related_name="items"
     )
@@ -1311,11 +1367,13 @@ class StockCountItem(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = SyncManager()
+
     def __str__(self):
         return f"{self.stock_item.name}: system={self.system_quantity}, counted={self.counted_quantity}"
 
 
-class StockSettings(models.Model):
+class StockSettings(SyncMixin, models.Model):
     """
     Singleton settings table. Use StockSettings.load() to get the instance.
     """
@@ -1389,6 +1447,8 @@ class StockSettings(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = SyncManager()
+
     class Meta:
         verbose_name = "stock settings"
         verbose_name_plural = "stock settings"
@@ -1407,14 +1467,14 @@ class StockSettings(models.Model):
         return "Stock Settings"
 
 
-class StockAlertConfig(models.Model):
+class StockAlertConfig(SyncMixin, models.Model):
     class AlertType(models.TextChoices):
         LOW_STOCK = "LOW_STOCK", "Low Stock"
         EXPIRING = "EXPIRING", "Expiring"
         NEGATIVE = "NEGATIVE", "Negative Stock"
         OVERSTOCK = "OVERSTOCK", "Overstock"
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, unique=True, editable=False)
+
     alert_type = models.CharField(max_length=20, choices=AlertType.choices)
     notify_email = models.BooleanField(default=False)
     notify_telegram = models.BooleanField(default=True)
@@ -1425,6 +1485,8 @@ class StockAlertConfig(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
 
     def __str__(self):
         return f"Alert: {self.get_alert_type_display()}"
