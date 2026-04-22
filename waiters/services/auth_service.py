@@ -8,7 +8,7 @@ from base.notifications import ShiftNotification
 from base.models import User
 
 
-class AuthService:
+class WaiterAuthService:
     @staticmethod
     def _user_data(user):
         return {
@@ -48,8 +48,8 @@ class AuthService:
         if user.status != User.UserStatus.ACTIVE:
             return ServiceResponse.forbidden("Account is suspended")
 
-        if user.role in (User.RoleChoices.ADMIN, User.RoleChoices.WAITER):
-            return ServiceResponse.forbidden("Admin accounts cannot log in here")
+        if user.role != User.RoleChoices.WAITER:
+            return ServiceResponse.forbidden("Only waiter accounts can log in here")
 
         branch_id = getattr(settings, 'BRANCH_ID', '')
         if branch_id and user.branch_id and user.branch_id != branch_id:
@@ -68,9 +68,8 @@ class AuthService:
         user.last_login_api = ip_address[:20]
         user.save(update_fields=['last_login_at', 'last_login_api'])
 
-        if user.role == User.RoleChoices.CASHIER:
-            user_name = f'{user.first_name} {user.last_name}'.strip()
-            ShiftNotification.on_cashier_login(user.id, user_name)
+        user_name = f'{user.first_name} {user.last_name}'.strip()
+        ShiftNotification.on_cashier_login(user.id, user_name)
 
         try:
             from hr.services import AttendanceService
@@ -81,19 +80,19 @@ class AuthService:
         return ServiceResponse.success(
             data={
                 'token': session_key,
-                'user': AuthService._user_data(user),
+                'user': WaiterAuthService._user_data(user),
             },
             message="Login successful",
         )
 
     @staticmethod
     def logout(session_key):
-        session = AuthService._get_session(session_key)
+        session = WaiterAuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
 
         user = session.user_id
-        if user and user.role == User.RoleChoices.CASHIER:
+        if user and user.role == User.RoleChoices.WAITER:
             ShiftNotification.on_cashier_logout(user.id)
 
         if user:
@@ -109,7 +108,7 @@ class AuthService:
 
     @staticmethod
     def logout_all(session_key):
-        session = AuthService._get_session(session_key)
+        session = WaiterAuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
         SessionRepository.delete_by_user(session.user_id)
@@ -117,16 +116,16 @@ class AuthService:
 
     @staticmethod
     def me(session_key):
-        session, user = AuthService._get_session_user(session_key)
+        session, user = WaiterAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
-        data = AuthService._user_data(user)
+        data = WaiterAuthService._user_data(user)
         data['last_login_at'] = user.last_login_at.isoformat() if user.last_login_at else None
         return ServiceResponse.success(data=data, message="User data retrieved")
 
     @staticmethod
     def change_password(session_key, current_password, new_password):
-        session, user = AuthService._get_session_user(session_key)
+        session, user = WaiterAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         if not verify_password(current_password, user.password):
@@ -142,7 +141,7 @@ class AuthService:
 
     @staticmethod
     def get_active_sessions(session_key):
-        session, user = AuthService._get_session_user(session_key)
+        session, user = WaiterAuthService._get_session_user(session_key)
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         sessions = SessionRepository.get_by_user(user)
@@ -164,7 +163,7 @@ class AuthService:
 
     @staticmethod
     def revoke_session(session_key, target_session_id):
-        session = AuthService._get_session(session_key)
+        session = WaiterAuthService._get_session(session_key)
         if not session:
             return ServiceResponse.unauthorized("Invalid session")
         target = SessionRepository.get_by_id(target_session_id)

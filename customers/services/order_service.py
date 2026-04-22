@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
-from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository
+from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository, PlaceRepository, TableRepository
 from base.services.inkassa_service import InkassaService
 from base.helpers.response import ServiceResponse
 from base.notifications import OrderNotification
@@ -44,6 +44,8 @@ def _serialize_order_list(order):
         'status': order.status,
         'is_paid': order.is_paid,
         'total_amount': str(order.total_amount or 0),
+        'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
+        'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
         'items_count': order.items.count(),
         'items': list(order.items.values(
             'id', 'product__id', 'product__name', 'product__category__id',
@@ -94,6 +96,8 @@ def _serialize_order_detail(order):
             'id': order.cashier.id,
             'name': f"{order.cashier.first_name} {order.cashier.last_name}"
         } if order.cashier else None,
+        'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
+        'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
         'status': order.status,
         'is_paid': order.is_paid,
         'paid_at': order.paid_at.isoformat() if order.paid_at else None,
@@ -210,7 +214,8 @@ class CustomerOrderService:
     @staticmethod
     @transaction.atomic
     def create_order(user_id, items, order_type='HALL', phone_number=None,
-                     description=None, cashier_id=None, delivery_person_id=None):
+                     description=None, cashier_id=None, delivery_person_id=None,
+                     place_id=None, table_id=None):
         if not UserRepository.exists(id=user_id):
             return ServiceResponse.not_found('User not found')
 
@@ -234,6 +239,18 @@ class CustomerOrderService:
             delivery_person = DeliveryPersonRepository.get_by_id(delivery_person_id)
             if not delivery_person:
                 return ServiceResponse.not_found('Delivery person not found')
+
+        place = None
+        if place_id:
+            place = PlaceRepository.get_by_id(place_id)
+            if not place:
+                return ServiceResponse.not_found('Place not found')
+
+        table = None
+        if table_id:
+            table = TableRepository.get_by_id(table_id)
+            if not table:
+                return ServiceResponse.not_found('Table not found')
 
         last_id = OrderRepository.get_last_display_id()
         display_id = (last_id % 100) + 1
@@ -277,6 +294,8 @@ class CustomerOrderService:
             is_paid=False,
             total_amount=total_amount,
             delivery_person=delivery_person,
+            place=place,
+            table=table,
         )
 
         from base.models import OrderItem

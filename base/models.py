@@ -147,6 +147,7 @@ class User(SyncMixin, models.Model):
         USER = "USER", "User"
         ADMIN = "ADMIN", "Admin"
         CASHIER = "CASHIER", "Cashier"
+        WAITER = "WAITER", "Waiter"
 
     class UserStatus(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"
@@ -296,6 +297,74 @@ class DeliveryPerson(SyncMixin, models.Model):
         return f"{self.first_name} {self.last_name}"
 
 
+class Place(SyncMixin, models.Model):
+    class PlaceType(models.TextChoices):
+        HALL = "HALL", "Hall"
+        BAR = "BAR", "Bar"
+        TERRACE = "TERRACE", "Terrace"
+        PRIVATE_ROOM = "PRIVATE_ROOM", "Private Room"
+        OUTDOOR = "OUTDOOR", "Outdoor"
+
+    name = models.CharField(max_length=100)
+    place_type = models.CharField(
+        max_length=15,
+        choices=PlaceType.choices,
+        default=PlaceType.HALL,
+    )
+    capacity = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['sort_order', 'name']
+
+    def __str__(self):
+        return f"{self.name} ({self.get_place_type_display()})"
+
+
+class Table(SyncMixin, models.Model):
+    class Status(models.TextChoices):
+        AVAILABLE = "AVAILABLE", "Available"
+        OCCUPIED = "OCCUPIED", "Occupied"
+        RESERVED = "RESERVED", "Reserved"
+        OUT_OF_SERVICE = "OUT_OF_SERVICE", "Out of Service"
+
+    place = models.ForeignKey(
+        Place,
+        on_delete=models.CASCADE,
+        related_name="tables",
+    )
+    number = models.CharField(max_length=20)
+    capacity = models.PositiveIntegerField(default=4)
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.AVAILABLE,
+    )
+    is_active = models.BooleanField(default=True)
+    sort_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['place', 'sort_order', 'number']
+        unique_together = ['place', 'number']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['place_uuid'] = str(self.place.uuid) if self.place else None
+        return data
+
+    def __str__(self):
+        return f"Table {self.number} ({self.place.name})"
+
+
 class Order(SyncMixin, models.Model):
     class Status(models.TextChoices):
         OPEN = "OPEN", "Open"
@@ -315,6 +384,21 @@ class Order(SyncMixin, models.Model):
         null=True,
         blank=True,
         related_name="deliveries",
+    )
+
+    place = models.ForeignKey(
+        Place,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+    )
+    table = models.ForeignKey(
+        Table,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
     )
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -357,6 +441,8 @@ class Order(SyncMixin, models.Model):
         data['user_uuid'] = str(self.user.uuid) if self.user else None
         data['cashier_uuid'] = str(self.cashier.uuid) if self.cashier else None
         data['delivery_person_uuid'] = str(self.delivery_person.uuid) if self.delivery_person else None
+        data['place_uuid'] = str(self.place.uuid) if self.place else None
+        data['table_uuid'] = str(self.table.uuid) if self.table else None
         return data
 
     @classmethod
@@ -616,3 +702,26 @@ class Inkassa(SyncMixin, models.Model):
 
     def __str__(self):
         return f"Inkassa #{self.id} - {self.amount} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class AppSettings(models.Model):
+    hr_enabled = models.BooleanField(default=False)
+    waiter_enabled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'app settings'
+        verbose_name_plural = 'app settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return "App Settings"

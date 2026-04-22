@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'admins',
     'stock',
     'hr',
+    'waiters',
 ]
 
 MIDDLEWARE = [

@@ -6,7 +6,7 @@ CACHE_PREFIX = 'sync'
 
 SYNC_ORDER = [
     # Base models (synced first - other models depend on these)
-    'user', 'category', 'deliveryperson', 'product',
+    'user', 'category', 'deliveryperson', 'place', 'table', 'product',
     'order', 'orderitem', 'cashregister', 'inkassa',
     # Stock models (synced after base, respecting FK dependencies)
     'stocklocation', 'stockunit', 'stockcategory', 'stockitem',
@@ -43,6 +43,8 @@ MODEL_MAP = {
     'orderitem': 'base.OrderItem',
     'cashregister': 'base.CashRegister',
     'inkassa': 'base.Inkassa',
+    'place': 'base.Place',
+    'table': 'base.Table',
     # Stock models
     'stocklocation': 'stock.StockLocation',
     'stockunit': 'stock.StockUnit',
@@ -103,6 +105,8 @@ FK_UUID_MAPPINGS = {
     'category_uuid': ('base', 'Category', 'category'),
     'order_uuid': ('base', 'Order', 'order'),
     'product_uuid': ('base', 'Product', 'product'),
+    'place_uuid': ('base', 'Place', 'place'),
+    'table_uuid': ('base', 'Table', 'table'),
     # Stock FK mappings
     'stock_item_uuid': ('stock', 'StockItem', 'stock_item'),
     'location_uuid': ('stock', 'StockLocation', 'location'),

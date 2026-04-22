@@ -8,3 +8,5 @@ from base.repositories.order import OrderRepository
 from base.repositories.order_item import OrderItemRepository
 from base.repositories.cash_register import CashRegisterRepository
 from base.repositories.inkassa import InkassaRepository
+from base.repositories.place import PlaceRepository
+from base.repositories.table import TableRepository
