@@ -21,7 +21,7 @@ def expense_categories(request):
     if error:
         return json_response(error)
 
-    result, status = ExpenseCategoryService.create(**data, created_by_id=request.user.id)
+    result, status = ExpenseCategoryService.create(**data)
     return JsonResponse(result, status=status)
 
 
@@ -103,7 +103,7 @@ def expense_reject(request, expense_id):
     if error:
         return json_response(error)
 
-    result, status = ExpenseService.reject(expense_id, rejected_by_id=request.user.id, **data)
+    result, status = ExpenseService.reject(expense_id, approved_by_id=request.user.id, **data)
     return JsonResponse(result, status=status)
 
 
@@ -115,7 +115,7 @@ def expense_pay(request, expense_id):
     if error:
         return json_response(error)
 
-    result, status = ExpenseService.pay(expense_id, paid_by_id=request.user.id)
+    result, status = ExpenseService.mark_paid(expense_id, paid_by_id=request.user.id)
     return JsonResponse(result, status=status)
 
 
@@ -123,5 +123,5 @@ def expense_pay(request, expense_id):
 @require_GET
 @admin_required
 def expense_stats(request):
-    result, status = ExpenseService.stats()
+    result, status = ExpenseService.get_stats()
     return JsonResponse(result, status=status)

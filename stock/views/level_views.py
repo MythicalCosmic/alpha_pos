@@ -59,7 +59,7 @@ def stock_reserve(request):
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
-    result, status = StockLevelService.reserve(**data)
+    result, status = StockLevelService.reserve(**data, user_id=request.user.id)
     return JsonResponse(result, status=status)
 
 
@@ -70,7 +70,7 @@ def stock_release_reservation(request):
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
-    result, status = StockLevelService.release_reservation(**data)
+    result, status = StockLevelService.release_reservation(**data, user_id=request.user.id)
     return JsonResponse(result, status=status)
 
 

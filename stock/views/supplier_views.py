@@ -53,7 +53,7 @@ def supplier_detail(request, supplier_id):
 @admin_required
 def supplier_items(request, supplier_id):
     if request.method == "GET":
-        result, status_code = SupplierStockItemService.get_for_supplier(supplier_id)
+        result, status_code = SupplierService.get(supplier_id, include_items=True, include_stats=False)
         return JsonResponse(result, status=status_code)
 
     data, error = parse_json_body(request)

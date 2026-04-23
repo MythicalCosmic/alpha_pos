@@ -53,7 +53,7 @@ def salary_generate(request):
     if error:
         return json_response(error)
 
-    result, status = SalaryService.generate(
+    result, status = SalaryService.generate_payroll(
         year=data["year"],
         month=data["month"],
         created_by_id=request.user.id,
@@ -107,8 +107,13 @@ def salary_pay(request, salary_id):
 def salary_summary(request):
     year = request.GET.get("year")
     month = request.GET.get("month")
-    result, status = SalaryService.summary(
-        year=int(year) if year else None,
-        month=int(month) if month else None,
+    if not year or not month:
+        from django.utils import timezone
+        now = timezone.now()
+        year = year or now.year
+        month = month or now.month
+    result, status = SalaryService.get_payroll_summary(
+        year=int(year),
+        month=int(month),
     )
     return JsonResponse(result, status=status)
