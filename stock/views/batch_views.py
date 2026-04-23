@@ -12,14 +12,19 @@ from stock.services import StockBatchService
 @admin_required
 def batches(request):
     if request.method == "GET":
+        expiring_within_days = None
+        if request.GET.get("expiring_within_days"):
+            expiring_within_days = int(request.GET["expiring_within_days"])
+
         result, status_code = StockBatchService.list(
             page=int(request.GET.get("page", 1)),
             per_page=int(request.GET.get("per_page", 50)),
             stock_item_id=int(request.GET.get("stock_item_id")) if request.GET.get("stock_item_id") else None,
             location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
             status=request.GET.get("status"),
-            include_empty=request.GET.get("include_empty", "").lower() == "true",
-            expiry_filter=request.GET.get("expiry_filter"),
+            has_stock_only=request.GET.get("has_stock_only", "true").lower() != "false",
+            expired_only=request.GET.get("expired_only", "").lower() == "true",
+            expiring_within_days=expiring_within_days,
         )
         return JsonResponse(result, status=status_code)
 

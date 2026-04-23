@@ -21,7 +21,7 @@ def departments(request):
     if error:
         return json_response(error)
 
-    result, status = DepartmentService.create(**data, created_by_id=request.user.id)
+    result, status = DepartmentService.create(**data)
     return JsonResponse(result, status=status)
 
 

@@ -16,8 +16,11 @@ def stock_levels(request):
     result, status = StockLevelService.get_all(
         page=int(request.GET.get("page", 1)),
         per_page=int(request.GET.get("per_page", 50)),
-        stock_item_id=int(request.GET.get("stock_item_id")) if request.GET.get("stock_item_id") else None,
         location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
+        category_id=int(request.GET.get("category_id")) if request.GET.get("category_id") else None,
+        item_type=request.GET.get("item_type"),
+        low_stock_only=request.GET.get("low_stock_only", "").lower() == "true",
+        search=request.GET.get("search"),
     )
     return JsonResponse(result, status=status)
 
@@ -75,7 +78,8 @@ def stock_release_reservation(request):
 @require_GET
 @admin_required
 def low_stock(request):
-    result, status = StockLevelService.get_low_stock()
+    location_id = int(request.GET.get("location_id")) if request.GET.get("location_id") else None
+    result, status = StockLevelService.get_low_stock_items(location_id=location_id)
     return JsonResponse(result, status=status)
 
 

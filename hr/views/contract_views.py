@@ -95,7 +95,7 @@ def contract_renew(request, contract_id):
 @admin_required
 def contracts_expiring(request):
     days = int(request.GET.get("days", 30))
-    result, status = ContractService.expiring(days=days)
+    result, status = ContractService.get_expiring(days=days)
     return JsonResponse(result, status=status)
 
 

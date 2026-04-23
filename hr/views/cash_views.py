@@ -33,7 +33,7 @@ def cash_deposit(request):
     if error:
         return json_response(error)
 
-    result, status = CashTransactionService.deposit(**data, created_by_id=request.user.id)
+    result, status = CashTransactionService.deposit(**data, performed_by_id=request.user.id)
     return JsonResponse(result, status=status)
 
 
@@ -45,7 +45,7 @@ def cash_withdraw(request):
     if error:
         return json_response(error)
 
-    result, status = CashTransactionService.withdraw(**data, created_by_id=request.user.id)
+    result, status = CashTransactionService.withdraw(**data, performed_by_id=request.user.id)
     return JsonResponse(result, status=status)
 
 
@@ -53,5 +53,5 @@ def cash_withdraw(request):
 @require_GET
 @admin_required
 def cash_balance(request):
-    result, status = CashTransactionService.balance()
+    result, status = CashTransactionService.get_balance_summary()
     return JsonResponse(result, status=status)

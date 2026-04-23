@@ -21,7 +21,7 @@ def employees(request):
     if error:
         return json_response(error)
 
-    result, status = EmployeeService.create(**data, created_by_id=request.user.id)
+    result, status = EmployeeService.create(**data)
     return JsonResponse(result, status=status)
 
 
@@ -49,5 +49,5 @@ def employee_detail(request, employee_id):
 @require_GET
 @admin_required
 def employee_stats(request):
-    result, status = EmployeeService.stats()
+    result, status = EmployeeService.get_stats()
     return JsonResponse(result, status=status)

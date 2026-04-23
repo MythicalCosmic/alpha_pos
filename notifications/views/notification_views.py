@@ -165,21 +165,24 @@ def template_detail(request, template_id):
 @require_GET
 @admin_required
 def queue_view(request):
-    return json_response(QueueService.get_all())
+    items = QueueService.get_all()
+    return JsonResponse({'success': True, 'data': {'queue': items, 'count': len(items)}})
 
 
 @csrf_exempt
 @require_POST
 @admin_required
 def queue_process(request):
-    return json_response(QueueService.process())
+    sent, failed = QueueService.process()
+    return JsonResponse({'success': True, 'data': {'sent': sent, 'failed': failed}})
 
 
 @csrf_exempt
 @require_POST
 @admin_required
 def queue_clear(request):
-    return json_response(QueueService.clear())
+    QueueService.clear()
+    return JsonResponse({'success': True, 'message': 'Queue cleared'})
 
 
 @require_GET

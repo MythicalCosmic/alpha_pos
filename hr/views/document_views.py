@@ -25,7 +25,7 @@ def documents(request):
     if error:
         return json_response(error)
 
-    result, status = DocumentService.create(**data, created_by_id=request.user.id)
+    result, status = DocumentService.create(**data)
     return JsonResponse(result, status=status)
 
 
@@ -62,7 +62,7 @@ def document_verify(request, doc_id):
 @admin_required
 def documents_expiring(request):
     days = int(request.GET.get("days", 30))
-    result, status = DocumentService.expiring(days=days)
+    result, status = DocumentService.get_expiring(days=days)
     return JsonResponse(result, status=status)
 
 
@@ -70,5 +70,5 @@ def documents_expiring(request):
 @require_GET
 @admin_required
 def documents_by_employee(request, employee_id):
-    result, status = DocumentService.by_employee(employee_id)
+    result, status = DocumentService.get_by_employee(employee_id)
     return JsonResponse(result, status=status)

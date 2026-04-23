@@ -133,16 +133,25 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': REDIS_URL,
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-        },
-        'KEY_PREFIX': 'alpha_pos',
-        'TIMEOUT': 300,
+if os.environ.get('USE_REDIS', '').lower() in ('true', '1', 'yes'):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            },
+            'KEY_PREFIX': 'alpha_pos',
+            'TIMEOUT': 300,
+        }
     }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'alpha-pos-cache',
+            'TIMEOUT': 300,
+        }
 }
 
 SESSION_CACHE_TTL = 300

@@ -19,7 +19,7 @@ def leave_types(request):
     if error:
         return json_response(error)
 
-    result, status = LeaveService.create_type(**data, created_by_id=request.user.id)
+    result, status = LeaveService.create_type(**data)
     return JsonResponse(result, status=status)
 
 
@@ -63,7 +63,7 @@ def leave_requests(request):
     if error:
         return json_response(error)
 
-    result, status = LeaveService.create_request(**data, created_by_id=request.user.id)
+    result, status = LeaveService.create_request(**data)
     return JsonResponse(result, status=status)
 
 
@@ -91,7 +91,7 @@ def leave_reject(request, leave_id):
     if error:
         return json_response(error)
 
-    result, status = LeaveService.reject(leave_id, rejected_by_id=request.user.id, **data)
+    result, status = LeaveService.reject(leave_id, approved_by_id=request.user.id, notes=data.get("notes", ""))
     return JsonResponse(result, status=status)
 
 
@@ -109,7 +109,15 @@ def leave_cancel(request, leave_id):
 def leave_balances(request):
     employee_id = request.GET.get("employee_id")
     year = request.GET.get("year")
-    result, status = LeaveService.list_balances(employee_id=employee_id, year=year)
+    if not employee_id:
+        return JsonResponse(
+            {"success": False, "message": "employee_id is required"},
+            status=400,
+        )
+    result, status = LeaveService.get_balance(
+        employee_id=int(employee_id),
+        year=int(year) if year else None,
+    )
     return JsonResponse(result, status=status)
 
 
@@ -121,7 +129,11 @@ def leave_balance_initialize(request):
     if error:
         return json_response(error)
 
-    result, status = LeaveService.initialize_balances(year=data.get("year"))
+    year = data.get("year")
+    if not year:
+        from django.utils import timezone
+        year = timezone.now().year
+    result, status = LeaveService.initialize_annual_balances(year=int(year))
     return JsonResponse(result, status=status)
 
 
@@ -130,7 +142,10 @@ def leave_balance_initialize(request):
 @admin_required
 def leave_balance_by_employee(request, employee_id):
     year = request.GET.get("year")
-    result, status = LeaveService.get_balance_by_employee(employee_id, year=year)
+    result, status = LeaveService.get_balance(
+        employee_id=employee_id,
+        year=int(year) if year else None,
+    )
     return JsonResponse(result, status=status)
 
 
@@ -140,5 +155,5 @@ def leave_balance_by_employee(request, employee_id):
 def leave_calendar(request):
     year = request.GET.get("year")
     month = request.GET.get("month")
-    result, status = LeaveService.calendar(year=year, month=month)
+    result, status = LeaveService.get_calendar(year=int(year), month=int(month))
     return JsonResponse(result, status=status)

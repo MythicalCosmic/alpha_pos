@@ -14,14 +14,23 @@ def reviews(request):
     if request.method == "GET":
         page = int(request.GET.get("page", 1))
         per_page = int(request.GET.get("per_page", 20))
-        result, status = ReviewService.list(page=page, per_page=per_page)
+        result, status = ReviewService.list_reviews(page=page, per_page=per_page)
         return JsonResponse(result, status=status)
 
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
 
-    result, status = ReviewService.create(**data, created_by_id=request.user.id)
+    result, status = ReviewService.create_review(
+        employee_id=data.get("employee_id"),
+        reviewer_id=data.get("reviewer_id", request.user.id),
+        period_start=data.get("period_start"),
+        period_end=data.get("period_end"),
+        rating=data.get("rating", 3),
+        strengths=data.get("strengths", ""),
+        improvements=data.get("improvements", ""),
+        goals=data.get("goals", ""),
+    )
     return JsonResponse(result, status=status)
 
 
@@ -30,14 +39,14 @@ def reviews(request):
 @admin_required
 def review_detail(request, review_id):
     if request.method == "GET":
-        result, status = ReviewService.get(review_id)
+        result, status = ReviewService.get_review(review_id)
         return JsonResponse(result, status=status)
 
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
 
-    result, status = ReviewService.update(review_id, **data)
+    result, status = ReviewService.update_review(review_id, **data)
     return JsonResponse(result, status=status)
 
 
@@ -45,7 +54,7 @@ def review_detail(request, review_id):
 @require_POST
 @admin_required
 def review_submit(request, review_id):
-    result, status = ReviewService.submit(review_id)
+    result, status = ReviewService.submit_review(review_id)
     return JsonResponse(result, status=status)
 
 
@@ -53,7 +62,7 @@ def review_submit(request, review_id):
 @require_POST
 @admin_required
 def review_acknowledge(request, review_id):
-    result, status = ReviewService.acknowledge(review_id)
+    result, status = ReviewService.acknowledge_review(review_id)
     return JsonResponse(result, status=status)
 
 
@@ -99,7 +108,7 @@ def goal_progress(request, goal_id):
     if error:
         return json_response(error)
 
-    result, status = ReviewService.update_goal_progress(
+    result, status = ReviewService.update_progress(
         goal_id,
         progress_percent=data.get("progress_percent"),
         status=data.get("status"),

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
@@ -19,10 +21,15 @@ def shift_templates(request):
     if error:
         return json_response(error)
 
+    start_time_str = data.get('start_time')
+    end_time_str = data.get('end_time')
+    start_time = datetime.strptime(start_time_str, '%H:%M').time() if start_time_str else None
+    end_time = datetime.strptime(end_time_str, '%H:%M').time() if end_time_str else None
+
     result, status_code = ShiftTemplateService.create(
         name=data.get('name'),
-        start_time=data.get('start_time'),
-        end_time=data.get('end_time'),
+        start_time=start_time,
+        end_time=end_time,
     )
     return JsonResponse(result, status=status_code)
 
