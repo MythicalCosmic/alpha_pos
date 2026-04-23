@@ -72,6 +72,12 @@ class Employee(SyncMixin, models.Model):
     emergency_contact_phone = models.CharField(max_length=20, blank=True, default='')
     bank_account = models.CharField(max_length=50, blank=True, default='')
     bank_name = models.CharField(max_length=100, blank=True, default='')
+    status_tags = models.JSONField(
+        default=list, blank=True,
+        help_text="Tags: BLACKLIST, POSITIVE, NEGATIVE, WARNING, VIP",
+    )
+    medical_book_number = models.CharField(max_length=50, blank=True, default='')
+    medical_book_expiry = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)

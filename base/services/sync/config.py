@@ -8,6 +8,7 @@ SYNC_ORDER = [
     # Base models (synced first - other models depend on these)
     'user', 'category', 'deliveryperson', 'place', 'table', 'product',
     'order', 'orderitem', 'cashregister', 'inkassa',
+    'shifttemplate', 'shift', 'cashreconciliation',
     # Stock models (synced after base, respecting FK dependencies)
     'stocklocation', 'stockunit', 'stockcategory', 'stockitem',
     'stockitemunit', 'supplier', 'supplierstockitem',
@@ -47,6 +48,9 @@ MODEL_MAP = {
     'inkassa': 'base.Inkassa',
     'place': 'base.Place',
     'table': 'base.Table',
+    'shifttemplate': 'base.ShiftTemplate',
+    'shift': 'base.Shift',
+    'cashreconciliation': 'base.CashReconciliation',
     # Stock models
     'stocklocation': 'stock.StockLocation',
     'stockunit': 'stock.StockUnit',
@@ -112,8 +116,12 @@ FK_UUID_MAPPINGS = {
     'category_uuid': ('base', 'Category', 'category'),
     'order_uuid': ('base', 'Order', 'order'),
     'product_uuid': ('base', 'Product', 'product'),
+    'parent_category_uuid': ('base', 'Category', 'parent'),
     'place_uuid': ('base', 'Place', 'place'),
     'table_uuid': ('base', 'Table', 'table'),
+    'shift_template_uuid': ('base', 'ShiftTemplate', 'shift_template'),
+    'shift_uuid': ('base', 'Shift', 'shift'),
+    'reconciled_by_uuid': ('base', 'User', 'reconciled_by'),
     # Stock FK mappings
     'stock_item_uuid': ('stock', 'StockItem', 'stock_item'),
     'location_uuid': ('stock', 'StockLocation', 'location'),

@@ -196,6 +196,13 @@ class Session(models.Model):
 
 class Category(SyncMixin, models.Model):
     name = models.CharField(max_length=50)
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children',
+    )
     sort_order = models.IntegerField(default=0)
     colors = models.JSONField(default=list, blank=True, help_text="Colors: ['#e74c3c', '#3498db']")
     status = models.CharField(
@@ -209,6 +216,11 @@ class Category(SyncMixin, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = SyncManager()
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['parent_category_uuid'] = str(self.parent.uuid) if self.parent else None
+        return data
 
     def __str__(self):
         return self.name
@@ -729,3 +741,82 @@ class AppSettings(models.Model):
 
     def __str__(self):
         return "App Settings"
+
+
+class ShiftTemplate(SyncMixin, models.Model):
+    name = models.CharField(max_length=100)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['start_time']
+
+    def __str__(self):
+        return f"{self.name} ({self.start_time} - {self.end_time})"
+
+
+class Shift(SyncMixin, models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        COMPLETED = 'COMPLETED', 'Completed'
+        ABANDONED = 'ABANDONED', 'Abandoned'
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='shifts')
+    shift_template = models.ForeignKey(
+        ShiftTemplate, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='shifts',
+    )
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.ACTIVE)
+    total_orders = models.PositiveIntegerField(default=0)
+    total_revenue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    cash_collected = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['-start_time']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['user_uuid'] = str(self.user.uuid) if self.user else None
+        data['shift_template_uuid'] = str(self.shift_template.uuid) if self.shift_template else None
+        return data
+
+    def __str__(self):
+        return f"Shift: {self.user} ({self.start_time})"
+
+
+class CashReconciliation(SyncMixin, models.Model):
+    shift = models.OneToOneField(Shift, on_delete=models.CASCADE, related_name='reconciliation')
+    expected_cash = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    actual_cash = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    difference = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    notes = models.TextField(blank=True, default='')
+    reconciled_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, related_name='reconciliations',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['shift_uuid'] = str(self.shift.uuid) if self.shift else None
+        data['reconciled_by_uuid'] = str(self.reconciled_by.uuid) if self.reconciled_by else None
+        return data
+
+    def __str__(self):
+        return f"Reconciliation for {self.shift} (diff: {self.difference})"

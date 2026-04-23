@@ -1,6 +1,6 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
-from admins.views import place_views, app_settings_views
+from admins.views import place_views, app_settings_views, shift_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -45,6 +45,7 @@ urlpatterns = [
 
     path('orders/stats/categories', order_views.category_stats),
     path('orders/stats/hourly', order_views.hourly_stats),
+    
 
     path('orders/stats/dashboard', order_views.dashboard_stats),
 
@@ -69,4 +70,13 @@ urlpatterns = [
     path('tables/place/<int:place_id>', place_views.tables_by_place),
 
     path('app-settings', app_settings_views.app_settings),
+
+    path('shift-templates', shift_views.shift_templates),
+    path('shift-templates/<int:template_id>', shift_views.shift_template_detail),
+    path('shifts', shift_views.shifts),
+    path('shifts/active', shift_views.active_shifts),
+    path('shifts/start', shift_views.shift_start),
+    path('shifts/<int:shift_id>', shift_views.shift_detail),
+    path('shifts/<int:shift_id>/end', shift_views.shift_end),
+    path('shifts/<int:shift_id>/reconcile', shift_views.shift_reconcile),
 ]

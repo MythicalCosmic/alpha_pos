@@ -153,5 +153,17 @@ class CategoryRepository(BaseSyncRepository):
         return cls.model.objects.filter(id__in=ids, is_deleted=False).update(is_deleted=True)
 
     @classmethod
+    def get_root_categories(cls):
+        return cls.model.objects.filter(
+            parent__isnull=True, is_deleted=False
+        ).order_by('sort_order')
+
+    @classmethod
+    def get_children(cls, parent_id):
+        return cls.model.objects.filter(
+            parent_id=parent_id, is_deleted=False
+        ).order_by('sort_order')
+
+    @classmethod
     def invalidate_cache(cls):
         CategoryCache.invalidate()

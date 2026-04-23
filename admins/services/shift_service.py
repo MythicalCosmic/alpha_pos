@@ -1,0 +1,288 @@
+from decimal import Decimal
+from django.db import transaction
+from django.db.models import Q, Sum, Count, DecimalField
+from django.db.models.functions import Coalesce
+from django.utils import timezone
+from base.repositories.shift import ShiftTemplateRepository, ShiftRepository, CashReconciliationRepository
+from base.helpers.response import ServiceResponse
+from base.models import Order
+
+
+class ShiftTemplateService:
+    @staticmethod
+    def list():
+        templates = ShiftTemplateRepository.get_active()
+        data = [
+            {
+                'id': t.id,
+                'uuid': str(t.uuid),
+                'name': t.name,
+                'start_time': t.start_time.strftime('%H:%M') if t.start_time else None,
+                'end_time': t.end_time.strftime('%H:%M') if t.end_time else None,
+                'is_active': t.is_active,
+            }
+            for t in templates
+        ]
+        return ServiceResponse.success(data=data)
+
+    @staticmethod
+    def get(template_id):
+        template = ShiftTemplateRepository.get_by_id(template_id)
+        if not template:
+            return ServiceResponse.not_found("Shift template not found")
+        return ServiceResponse.success(data={
+            'id': template.id,
+            'uuid': str(template.uuid),
+            'name': template.name,
+            'start_time': template.start_time.strftime('%H:%M') if template.start_time else None,
+            'end_time': template.end_time.strftime('%H:%M') if template.end_time else None,
+            'is_active': template.is_active,
+        })
+
+    @staticmethod
+    def create(name, start_time, end_time):
+        if not name or not start_time or not end_time:
+            return ServiceResponse.error("Name, start_time and end_time are required")
+        template = ShiftTemplateRepository.create(
+            name=name,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        return ServiceResponse.created(data={
+            'id': template.id,
+            'uuid': str(template.uuid),
+            'name': template.name,
+            'start_time': template.start_time.strftime('%H:%M') if template.start_time else None,
+            'end_time': template.end_time.strftime('%H:%M') if template.end_time else None,
+            'is_active': template.is_active,
+        })
+
+    @staticmethod
+    def update(template_id, **kwargs):
+        template = ShiftTemplateRepository.get_by_id(template_id)
+        if not template:
+            return ServiceResponse.not_found("Shift template not found")
+        allowed = {'name', 'start_time', 'end_time', 'is_active'}
+        updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
+        template = ShiftTemplateRepository.update(template, **updates)
+        return ServiceResponse.success(data={
+            'id': template.id,
+            'uuid': str(template.uuid),
+            'name': template.name,
+            'start_time': template.start_time.strftime('%H:%M') if template.start_time else None,
+            'end_time': template.end_time.strftime('%H:%M') if template.end_time else None,
+            'is_active': template.is_active,
+        })
+
+    @staticmethod
+    def delete(template_id):
+        template = ShiftTemplateRepository.get_by_id(template_id)
+        if not template:
+            return ServiceResponse.not_found("Shift template not found")
+        ShiftTemplateRepository.delete(template)
+        return ServiceResponse.success(message="Shift template deleted")
+
+
+class ShiftService:
+    @staticmethod
+    def list(page=1, per_page=20, user_id=None, status=None, date_from=None, date_to=None):
+        qs = ShiftRepository.get_all().select_related('user', 'shift_template')
+
+        if user_id:
+            qs = qs.filter(user_id=user_id)
+        if status:
+            qs = qs.filter(status=status.upper())
+        if date_from:
+            qs = qs.filter(start_time__gte=date_from)
+        if date_to:
+            qs = qs.filter(start_time__lte=date_to)
+
+        page_obj, paginator = ShiftRepository.paginate(qs, page, per_page)
+        data = [ShiftService._serialize_shift(s) for s in page_obj]
+        return ServiceResponse.success(data={
+            'shifts': data,
+            'pagination': {
+                'page': page_obj.number,
+                'per_page': per_page,
+                'total': paginator.count,
+                'pages': paginator.num_pages,
+            },
+        })
+
+    @staticmethod
+    def get(shift_id):
+        shift = ShiftRepository.get_with_relations(shift_id)
+        if not shift:
+            return ServiceResponse.not_found("Shift not found")
+
+        data = ShiftService._serialize_shift(shift)
+
+        reconciliation = CashReconciliationRepository.get_for_shift(shift_id)
+        if reconciliation:
+            data['reconciliation'] = {
+                'id': reconciliation.id,
+                'expected_cash': str(reconciliation.expected_cash),
+                'actual_cash': str(reconciliation.actual_cash),
+                'difference': str(reconciliation.difference),
+                'notes': reconciliation.notes,
+                'reconciled_by': {
+                    'id': reconciliation.reconciled_by.id,
+                    'name': f"{reconciliation.reconciled_by.first_name} {reconciliation.reconciled_by.last_name}".strip(),
+                } if reconciliation.reconciled_by else None,
+                'created_at': reconciliation.created_at.isoformat() if reconciliation.created_at else None,
+            }
+
+        return ServiceResponse.success(data=data)
+
+    @staticmethod
+    def start_shift(user_id, shift_template_id=None):
+        active = ShiftRepository.get_active_for_user(user_id)
+        if active:
+            return ServiceResponse.error("User already has an active shift")
+
+        kwargs = {
+            'user_id': user_id,
+            'start_time': timezone.now(),
+            'status': 'ACTIVE',
+        }
+        if shift_template_id:
+            template = ShiftTemplateRepository.get_by_id(shift_template_id)
+            if not template:
+                return ServiceResponse.not_found("Shift template not found")
+            kwargs['shift_template'] = template
+
+        shift = ShiftRepository.create(**kwargs)
+        shift = ShiftRepository.get_with_relations(shift.id)
+        return ServiceResponse.created(data=ShiftService._serialize_shift(shift))
+
+    @staticmethod
+    @transaction.atomic
+    def end_shift(shift_id, user_id, notes):
+        shift = ShiftRepository.get_with_relations(shift_id)
+        if not shift:
+            return ServiceResponse.not_found("Shift not found")
+        if shift.status != 'ACTIVE':
+            return ServiceResponse.error("Shift is not active")
+
+        now = timezone.now()
+
+        stats = Order.objects.filter(
+            is_deleted=False,
+            cashier_id=shift.user_id,
+            created_at__gte=shift.start_time,
+            created_at__lte=now,
+        ).aggregate(
+            total_orders=Count('id'),
+            total_revenue=Coalesce(
+                Sum('total_amount', filter=Q(is_paid=True)),
+                Decimal('0.00'),
+                output_field=DecimalField(),
+            ),
+            cash_collected=Coalesce(
+                Sum('total_amount', filter=Q(is_paid=True)),
+                Decimal('0.00'),
+                output_field=DecimalField(),
+            ),
+        )
+
+        shift = ShiftRepository.update(
+            shift,
+            end_time=now,
+            status='COMPLETED',
+            total_orders=stats['total_orders'],
+            total_revenue=stats['total_revenue'],
+            cash_collected=stats['cash_collected'],
+            notes=notes or '',
+        )
+
+        shift = ShiftRepository.get_with_relations(shift.id)
+        return ServiceResponse.success(data=ShiftService._serialize_shift(shift))
+
+    @staticmethod
+    def reconcile(shift_id, actual_cash, notes, reconciled_by_id):
+        shift = ShiftRepository.get_with_relations(shift_id)
+        if not shift:
+            return ServiceResponse.not_found("Shift not found")
+
+        existing = CashReconciliationRepository.get_for_shift(shift_id)
+        if existing:
+            return ServiceResponse.error("Reconciliation already exists for this shift")
+
+        expected_cash = shift.cash_collected
+        actual = Decimal(str(actual_cash))
+        difference = actual - expected_cash
+
+        reconciliation = CashReconciliationRepository.create(
+            shift=shift,
+            expected_cash=expected_cash,
+            actual_cash=actual,
+            difference=difference,
+            notes=notes or '',
+            reconciled_by_id=reconciled_by_id,
+        )
+
+        return ServiceResponse.created(data={
+            'id': reconciliation.id,
+            'shift_id': shift.id,
+            'expected_cash': str(reconciliation.expected_cash),
+            'actual_cash': str(reconciliation.actual_cash),
+            'difference': str(reconciliation.difference),
+            'notes': reconciliation.notes,
+            'reconciled_by_id': reconciled_by_id,
+            'created_at': reconciliation.created_at.isoformat() if reconciliation.created_at else None,
+        })
+
+    @staticmethod
+    def get_active_shifts():
+        shifts = ShiftRepository.filter_by_status('ACTIVE').select_related('user', 'shift_template')
+        data = [ShiftService._serialize_shift(s) for s in shifts]
+        return ServiceResponse.success(data=data)
+
+    @staticmethod
+    def _serialize_shift(shift):
+        duration_minutes = None
+        if shift.start_time and shift.end_time:
+            delta = shift.end_time - shift.start_time
+            duration_minutes = int(delta.total_seconds() / 60)
+
+        reconciliation = None
+        try:
+            rec = shift.reconciliation
+            if rec and not rec.is_deleted:
+                reconciliation = {
+                    'id': rec.id,
+                    'expected_cash': str(rec.expected_cash),
+                    'actual_cash': str(rec.actual_cash),
+                    'difference': str(rec.difference),
+                    'notes': rec.notes,
+                    'reconciled_by': {
+                        'id': rec.reconciled_by.id,
+                        'name': f"{rec.reconciled_by.first_name} {rec.reconciled_by.last_name}".strip(),
+                    } if rec.reconciled_by else None,
+                    'created_at': rec.created_at.isoformat() if rec.created_at else None,
+                }
+        except Exception:
+            pass
+
+        return {
+            'id': shift.id,
+            'uuid': str(shift.uuid),
+            'user': {
+                'id': shift.user.id,
+                'uuid': str(shift.user.uuid),
+                'name': f"{shift.user.first_name} {shift.user.last_name}".strip(),
+            } if shift.user else None,
+            'shift_template': {
+                'id': shift.shift_template.id,
+                'uuid': str(shift.shift_template.uuid),
+                'name': shift.shift_template.name,
+            } if shift.shift_template else None,
+            'start_time': shift.start_time.isoformat() if shift.start_time else None,
+            'end_time': shift.end_time.isoformat() if shift.end_time else None,
+            'status': shift.status,
+            'total_orders': shift.total_orders,
+            'total_revenue': str(shift.total_revenue),
+            'cash_collected': str(shift.cash_collected),
+            'duration_minutes': duration_minutes,
+            'reconciliation': reconciliation,
+        }

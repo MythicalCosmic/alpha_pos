@@ -73,6 +73,12 @@ class AuthService:
             ShiftNotification.on_cashier_login(user.id, user_name)
 
         try:
+            from admins.services.shift_service import ShiftService
+            ShiftService.start_shift(user.id)
+        except Exception:
+            pass
+
+        try:
             from hr.services import AttendanceService
             AttendanceService.auto_check_in(user.id)
         except Exception:
@@ -95,6 +101,16 @@ class AuthService:
         user = session.user_id
         if user and user.role == User.RoleChoices.CASHIER:
             ShiftNotification.on_cashier_logout(user.id)
+
+        if user:
+            try:
+                from admins.services.shift_service import ShiftService
+                from base.models import Shift
+                active = Shift.objects.filter(user=user, status='ACTIVE').first()
+                if active:
+                    ShiftService.end_shift(active.id, user.id, '')
+            except Exception:
+                pass
 
         if user:
             try:
