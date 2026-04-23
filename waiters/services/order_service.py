@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
@@ -237,8 +240,8 @@ class WaiterOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, None, 'PREPARING', stock_items, location_id, user_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Non-critical error: {e}")
 
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
@@ -420,8 +423,8 @@ class WaiterOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, old_status, 'CANCELLED', stock_items, location_id, order.user_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Non-critical error: {e}")
 
         return ServiceResponse.success(
             data={'status': 'CANCELLED'},

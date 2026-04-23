@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, F
 from django.utils import timezone
 from discounts.repositories import (
     DiscountRepository, DiscountTypeRepository,
@@ -357,7 +357,13 @@ class DiscountService:
         if not order:
             return ServiceResponse.not_found("Order not found")
 
-        discount = DiscountRepository.get_by_code(discount_code)
+        if order.is_paid:
+            return ServiceResponse.error("Cannot apply discount to a paid order")
+
+        if order.status == 'CANCELED':
+            return ServiceResponse.error("Cannot apply discount to a cancelled order")
+
+        discount = Discount.objects.select_for_update().get(id=DiscountRepository.get_by_code(discount_code).id)
 
         # Re-validate with actual order subtotal
         if discount.min_order_amount and order.subtotal < discount.min_order_amount:
@@ -413,9 +419,8 @@ class DiscountService:
                 order=order,
             )
 
-        # Increment usage count
-        discount.usage_count += 1
-        discount.save(update_fields=['usage_count'])
+        # Increment usage count atomically
+        Discount.objects.filter(id=discount.id).update(usage_count=F('usage_count') + 1)
 
         # Recalculate order totals
         total_discount = OrderDiscountRepository.get_for_order(order_id).aggregate(

@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
@@ -46,7 +49,6 @@ def _serialize_order_list(order):
         'total_amount': str(order.total_amount or 0),
         'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
         'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
-        'items_count': order.items.count(),
         'items': list(order.items.values(
             'id', 'product__id', 'product__name', 'product__category__id',
             'product__category__name', 'quantity', 'detail', 'price', 'ready_at'
@@ -327,8 +329,8 @@ class CustomerOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, None, 'PREPARING', stock_items, location_id, user_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Non-critical error: {e}")
 
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
@@ -472,8 +474,8 @@ class CustomerOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, old_status, status, stock_items, location_id, order.user_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Non-critical error: {e}")
 
         return ServiceResponse.success(
             data={'status': status},
@@ -618,8 +620,8 @@ class CustomerOrderService:
                     OrderStatusHandler.on_status_change(
                         order.id, order.status, 'PAID', stock_items, location_id, order.user_id,
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Non-critical error: {e}")
 
         return ServiceResponse.success(
             data={'is_paid': True},

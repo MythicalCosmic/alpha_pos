@@ -204,6 +204,9 @@ class ShiftService:
         if not shift:
             return ServiceResponse.not_found("Shift not found")
 
+        if shift.status != 'COMPLETED':
+            return ServiceResponse.error("Shift must be completed before reconciling")
+
         existing = CashReconciliationRepository.get_for_shift(shift_id)
         if existing:
             return ServiceResponse.error("Reconciliation already exists for this shift")

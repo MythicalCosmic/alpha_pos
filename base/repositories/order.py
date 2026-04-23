@@ -56,14 +56,14 @@ class OrderRepository(BaseSyncRepository):
     @classmethod
     def get_with_relations(cls):
         return cls.model.objects.filter(is_deleted=False).select_related(
-            'user', 'cashier', 'delivery_person'
+            'user', 'cashier', 'delivery_person', 'place', 'table'
         ).prefetch_related('items__product__category')
 
     @classmethod
     def get_by_id_with_relations(cls, pk):
         try:
             return cls.model.objects.select_related(
-                'user', 'cashier', 'delivery_person'
+                'user', 'cashier', 'delivery_person', 'place', 'table'
             ).prefetch_related('items__product__category').get(pk=pk, is_deleted=False)
         except cls.model.DoesNotExist:
             return None
