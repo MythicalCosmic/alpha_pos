@@ -45,7 +45,7 @@ def permission_required(*permissions):
                     status=401,
                 )
             user_perms = request.user.permissions or []
-            if '*' in user_perms:
+            if '*' in user_perms or request.user.role == 'ADMIN':
                 return view_func(request, *args, **kwargs)
             missing = [p for p in permissions if p not in user_perms]
             if missing:

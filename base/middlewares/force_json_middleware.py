@@ -63,15 +63,20 @@ class JSONOnlyMiddleware(MiddlewareMixin):
             }, status=500)
     
     def process_exception(self, request, exception):
+        import logging
+        from django.conf import settings as django_settings
+        logging.getLogger(__name__).exception("Unhandled exception in %s %s", request.method, request.path)
+        error_detail = {
+            "type": exception.__class__.__name__,
+            "message": str(exception),
+        } if getattr(django_settings, 'DEBUG', False) else {
+            "message": "An internal server error occurred",
+        }
         return JsonResponse({
-            "status": "Epic failure detected",
+            "status": "Internal server error",
             "status_code": 500,
             "success": False,
-            "error": {
-                "type": exception.__class__.__name__,
-                "message": str(exception),
-                "details": "Check your server logs for more information"
-            },
+            "error": error_detail,
             "meta": {
                 "path": request.path,
                 "method": request.method,

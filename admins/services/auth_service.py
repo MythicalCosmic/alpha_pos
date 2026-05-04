@@ -55,17 +55,17 @@ class AdminAuthService:
         if branch_id and user.branch_id and user.branch_id != branch_id:
             return ServiceResponse.forbidden("You are not authorized for this branch")
 
-        session_key = secrets.token_hex(10)
+        session_key = secrets.token_hex(32)
 
         SessionRepository.create(
             user_id=user,
-            ip_address=ip_address[:20],
-            user_agent=user_agent[:30],
+            ip_address=ip_address[:45],
+            user_agent=user_agent[:256],
             payload=session_key,
         )
 
         user.last_login_at = timezone.now()
-        user.last_login_api = ip_address[:20]
+        user.last_login_api = ip_address[:20]  # last_login_api field is max_length=20
         user.save(update_fields=['last_login_at', 'last_login_api'])
 
         return ServiceResponse.success(

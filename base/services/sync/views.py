@@ -25,10 +25,17 @@ def receive(request):
         return JsonResponse({'error': 'Invalid authorization'}, status=401)
 
     if auth.startswith('Cloud '):
+        from django.utils.crypto import constant_time_compare
         token = auth[6:]
         expected = getattr(settings, 'CLOUD_SYNC_TOKEN', '')
-        if not expected or token != expected:
+        if not expected or not constant_time_compare(token, expected):
             return JsonResponse({'error': 'Invalid cloud token'}, status=401)
+    elif auth.startswith('Branch '):
+        from django.utils.crypto import constant_time_compare
+        token = auth[7:]
+        allowed_tokens = getattr(settings, 'ALLOWED_BRANCH_TOKENS', [])
+        if not allowed_tokens or not any(constant_time_compare(token, t) for t in allowed_tokens):
+            return JsonResponse({'error': 'Invalid branch token'}, status=401)
 
     branch_id = request.META.get('HTTP_X_BRANCH_ID', 'unknown')
 

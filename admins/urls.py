@@ -1,6 +1,6 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
-from admins.views import place_views, app_settings_views, shift_views
+from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -68,6 +68,15 @@ urlpatterns = [
     path('tables/<int:table_id>', place_views.table_detail),
     path('tables/<int:table_id>/status', place_views.table_status),
     path('tables/place/<int:place_id>', place_views.tables_by_place),
+
+    path('users', user_views.users, name='users'),
+    path('users/<int:user_id>', user_views.user_detail, name='user_detail'),
+
+    path('inkassa/balance', inkassa_views.inkassa_balance, name='inkassa_balance'),
+    path('inkassa/stats', inkassa_views.inkassa_stats, name='inkassa_stats'),
+    path('inkassa/history', inkassa_views.inkassa_history, name='inkassa_history'),
+    path('inkassa/perform', inkassa_views.inkassa_perform, name='inkassa_perform'),
+    path('inkassa/<int:inkassa_id>', inkassa_views.inkassa_detail, name='inkassa_detail'),
 
     path('app-settings', app_settings_views.app_settings),
 

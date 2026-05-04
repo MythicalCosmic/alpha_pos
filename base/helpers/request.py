@@ -10,7 +10,7 @@ def get_client_ip(request):
 
 def get_user_agent(request):
     ua = request.META.get('HTTP_USER_AGENT', '')
-    return ua[:30]
+    return ua[:256]
 
 
 def get_session_key(request):
@@ -21,6 +21,20 @@ def get_session_key(request):
     if auth.startswith('Bearer '):
         return auth[7:]
     return None
+
+
+def validate_pagination(request, default_per_page=20):
+    from django.conf import settings
+    max_per_page = getattr(settings, 'MAX_PER_PAGE', 100)
+    try:
+        page = max(1, int(request.GET.get('page', 1)))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        per_page = max(1, min(int(request.GET.get('per_page', default_per_page)), max_per_page))
+    except (ValueError, TypeError):
+        per_page = default_per_page
+    return page, per_page
 
 
 def parse_json_body(request):

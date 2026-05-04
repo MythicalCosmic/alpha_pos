@@ -82,7 +82,11 @@ class SyncMixin(models.Model):
             from base.services.sync.service import SyncService
             SyncService.queue_record(self)
         except Exception:
-            pass
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Failed to queue {self.__class__.__name__} pk={self.pk} for sync",
+                exc_info=True,
+            )
 
     def to_sync_dict(self):
         data = {
@@ -187,11 +191,19 @@ class User(SyncMixin, models.Model):
 
 
 class Session(models.Model):
-    user_id = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
-    ip_address = models.CharField(max_length=20)
-    user_agent = models.CharField(max_length=30, null=True, blank=True, default='Chrome')
-    payload = models.CharField(max_length=20, null=True, blank=True)
+    user_id = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, db_index=True)
+    ip_address = models.CharField(max_length=45)
+    user_agent = models.CharField(max_length=256, null=True, blank=True, default='')
+    payload = models.CharField(max_length=128, null=True, blank=True, db_index=True)
     last_activity = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['payload']),
+        ]
+
+    def __str__(self):
+        return f"Session {self.pk} - user {self.user_id_id}"
 
 
 class Category(SyncMixin, models.Model):
@@ -231,6 +243,7 @@ class Product(SyncMixin, models.Model):
         Category,
         on_delete=models.CASCADE,
         related_name="products",
+        db_index=True,
     )
     colors = models.JSONField(default=list, blank=True, help_text="Colors: ['#e74c3c', '#3498db']")
     name = models.CharField(max_length=100)
@@ -437,9 +450,10 @@ class Order(SyncMixin, models.Model):
         max_length=15,
         choices=Status.choices,
         default=Status.OPEN,
+        db_index=True,
     )
 
-    is_paid = models.BooleanField(default=False)
+    is_paid = models.BooleanField(default=False, db_index=True)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

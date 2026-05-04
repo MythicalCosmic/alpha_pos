@@ -256,7 +256,7 @@ class CustomerOrderService:
                 return ServiceResponse.not_found('Table not found')
 
         last_id = OrderRepository.get_last_display_id()
-        display_id = (last_id % 100) + 1
+        display_id = last_id + 1
 
         product_ids = [item.get('product_id') for item in items]
         products = {p.id: p for p in ProductRepository.filter(id__in=product_ids)}

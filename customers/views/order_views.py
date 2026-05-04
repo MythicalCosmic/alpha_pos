@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.auth import login_required
 from customers.services.order_service import CustomerOrderService
@@ -12,8 +12,7 @@ from customers.requests.order_requests import create_order_request
 @require_GET
 @login_required
 def list_orders(request):
-    page = int(request.GET.get('page', 1))
-    per_page = int(request.GET.get('per_page', 20))
+    page, per_page = validate_pagination(request)
     payment_status = request.GET.get('payment_status')
     statuses = request.GET.get('statuses')
     category_ids = request.GET.get('category_ids')
