@@ -213,6 +213,71 @@ if not DEBUG:
 # Pagination limits
 MAX_PER_PAGE = 100
 
+# Logging — file rotation in prod, console in dev. Override the log directory
+# via LOG_DIR env if you want logs outside the project root.
+LOG_DIR = os.environ.get('LOG_DIR', str(BASE_DIR / 'logs'))
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+
+if not DEBUG:
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+    except OSError:
+        # If the configured directory isn't writable, fall back to console-only
+        # so the process still boots; an operator can fix LOG_DIR later.
+        LOG_DIR = None
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} [{process:d}] {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {name}: {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple' if DEBUG else 'verbose',
+            'level': LOG_LEVEL,
+        },
+        **(
+            {
+                'app_file': {
+                    'class': 'logging.handlers.RotatingFileHandler',
+                    'filename': os.path.join(LOG_DIR, 'app.log'),
+                    'maxBytes': 10 * 1024 * 1024,
+                    'backupCount': 5,
+                    'formatter': 'verbose',
+                    'level': LOG_LEVEL,
+                },
+                'error_file': {
+                    'class': 'logging.handlers.RotatingFileHandler',
+                    'filename': os.path.join(LOG_DIR, 'error.log'),
+                    'maxBytes': 10 * 1024 * 1024,
+                    'backupCount': 10,
+                    'formatter': 'verbose',
+                    'level': 'ERROR',
+                },
+            } if (not DEBUG and LOG_DIR) else {}
+        ),
+    },
+    'loggers': {
+        # Quiet down noisy third-party loggers; keep errors.
+        'django.utils.autoreload': {'level': 'WARNING'},
+        'urllib3': {'level': 'WARNING'},
+        'requests': {'level': 'WARNING'},
+    },
+    'root': {
+        'handlers': ['console'] + (['app_file', 'error_file'] if (not DEBUG and LOG_DIR) else []),
+        'level': LOG_LEVEL,
+    },
+}
+
 # CORS — Electron renderer talks cross-origin to the backend.
 # Origins are env-driven so production gets an explicit allowlist; in DEBUG
 # we permit all origins for local dev kiosks. Browsers reject the combination
