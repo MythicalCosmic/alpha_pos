@@ -98,6 +98,27 @@ class AttendanceService:
             "already_checked_in": False,
         }, message="Checked in successfully")
 
+    # Auto-checkout caps at this many hours; sessions longer than this are
+    # almost certainly stale (forgot to check out yesterday) and need manual
+    # reconciliation rather than booking a 24h+ shift.
+    MAX_SESSION_HOURS = Decimal("16")
+
+    @classmethod
+    def _compute_work_hours(cls, check_in_dt, check_out_dt):
+        # Returns (work_hours, error_message_or_None). Rejects negative
+        # durations and sessions longer than MAX_SESSION_HOURS so a forgotten
+        # check-out from a previous day can't book an absurd shift.
+        delta_seconds = (check_out_dt - check_in_dt).total_seconds()
+        if delta_seconds < 0:
+            return None, "check_out is before check_in"
+        work_hours = (Decimal(delta_seconds) / Decimal(3600)).quantize(Decimal("0.01"))
+        if work_hours > cls.MAX_SESSION_HOURS:
+            return None, (
+                f"Session duration {work_hours}h exceeds {cls.MAX_SESSION_HOURS}h cap; "
+                f"reconcile attendance manually."
+            )
+        return work_hours, None
+
     @classmethod
     @transaction.atomic
     def auto_check_out(cls, user_id: int) -> Tuple[Dict[str, Any], int]:
@@ -117,9 +138,11 @@ class AttendanceService:
             return ServiceResponse.error("Cannot check out without checking in first")
 
         now = timezone.now()
+        work_hours, err = cls._compute_work_hours(attendance.check_in, now)
+        if err:
+            return ServiceResponse.error(err)
+
         attendance.check_out = now
-        work_seconds = (now - attendance.check_in).total_seconds()
-        work_hours = Decimal(str(round(work_seconds / 3600, 2)))
         overtime = max(Decimal("0"), work_hours - Decimal("8"))
 
         attendance.work_hours = work_hours
@@ -199,9 +222,11 @@ class AttendanceService:
             return ServiceResponse.error("Cannot check out without checking in first")
 
         now = timezone.now()
+        work_hours, err = cls._compute_work_hours(attendance.check_in, now)
+        if err:
+            return ServiceResponse.error(err)
+
         attendance.check_out = now
-        work_seconds = (now - attendance.check_in).total_seconds()
-        work_hours = Decimal(str(round(work_seconds / 3600, 2)))
         overtime = max(Decimal("0"), work_hours - Decimal("8"))
 
         attendance.work_hours = work_hours

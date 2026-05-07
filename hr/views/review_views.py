@@ -21,9 +21,11 @@ def reviews(request):
     if error:
         return json_response(error)
 
+    # reviewer_id must be the authenticated user — ignore any value supplied
+    # in the request body to prevent posting reviews on behalf of others.
     result, status = ReviewService.create_review(
         employee_id=data.get("employee_id"),
-        reviewer_id=data.get("reviewer_id", request.user.id),
+        reviewer_id=request.user.id,
         period_start=data.get("period_start"),
         period_end=data.get("period_end"),
         rating=data.get("rating", 3),
@@ -45,6 +47,13 @@ def review_detail(request, review_id):
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
+
+    # Strip identity/audit fields from mass-assigned payload — only the
+    # editable review content (rating, strengths, improvements, goals) and
+    # period dates are user-controllable.
+    for protected in ("reviewer_id", "employee_id", "created_at",
+                      "updated_at", "id", "uuid"):
+        data.pop(protected, None)
 
     result, status = ReviewService.update_review(review_id, **data)
     return JsonResponse(result, status=status)
@@ -95,6 +104,10 @@ def goal_detail(request, goal_id):
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
+
+    for protected in ("created_by_id", "employee_id", "created_at",
+                      "updated_at", "id", "uuid"):
+        data.pop(protected, None)
 
     result, status = ReviewService.update_goal(goal_id, **data)
     return JsonResponse(result, status=status)

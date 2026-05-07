@@ -1094,6 +1094,30 @@ class AIStockAssistant:
         return any(kw in q for kw in analytics_keywords)
 
     MAX_QUERY_LENGTH = 2000
+    DAILY_QUOTA_PER_USER = 100  # configurable via settings.AI_DAILY_QUOTA_PER_USER
+
+    @classmethod
+    def _check_rate_limit(cls, user_id):
+        # Per-user daily quota in the cache. When user_id is None (anonymous
+        # internal call), no limit is applied. Failing open on cache errors
+        # is acceptable here since the AI assistant is admin-gated.
+        if user_id is None:
+            return True, None
+        from django.conf import settings as django_settings
+        from django.core.cache import cache
+        from django.utils import timezone
+
+        quota = getattr(django_settings, 'AI_DAILY_QUOTA_PER_USER', cls.DAILY_QUOTA_PER_USER)
+        today = timezone.now().date().isoformat()
+        key = f'ai:quota:{user_id}:{today}'
+        try:
+            current = cache.get(key, 0)
+            if current >= quota:
+                return False, quota
+            cache.set(key, current + 1, 86400)
+        except Exception:
+            return True, None
+        return True, None
 
     @classmethod
     def process_query(cls, query: str, context: Dict = None, user_id: int = None, location_id: int = None) -> Dict[str, Any]:
@@ -1108,6 +1132,13 @@ class AIStockAssistant:
                 "success": False,
                 "error": "query_too_long",
                 "response": f"Query exceeds {cls.MAX_QUERY_LENGTH}-character limit.",
+            }
+        ok, quota = cls._check_rate_limit(user_id)
+        if not ok:
+            return {
+                "success": False,
+                "error": "rate_limited",
+                "response": f"Daily AI query quota exceeded ({quota} per day).",
             }
         try:
             stock_data = cls._get_all_stock_data()
