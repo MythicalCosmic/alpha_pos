@@ -1,7 +1,16 @@
 import logging
+import re
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def _redact(text, secret):
+    # Strip the bot token from any string that may include it (Telegram URLs
+    # contain the token in the path, and some error paths echo the URL).
+    if not secret or not text:
+        return text
+    return str(text).replace(secret, '<REDACTED>')
 
 
 class TelegramService:
@@ -17,6 +26,7 @@ class TelegramService:
             return False, 'Bot token or chat IDs not configured'
 
         url = f'https://api.telegram.org/bot{config.bot_token}/sendMessage'
+        token = config.bot_token
         success = True
         last_error = ''
 
@@ -29,7 +39,10 @@ class TelegramService:
                 }, timeout=config.timeout)
                 if not resp.ok:
                     success = False
-                    last_error = resp.text
+                    # Don't return resp.text directly — Telegram error bodies
+                    # sometimes echo the request URL (which contains the
+                    # bot token). Keep the status code and a redacted snippet.
+                    last_error = f'HTTP {resp.status_code}: {_redact(resp.text[:200], token)}'
                     logger.warning(f'Telegram API error for {chat_id}: {resp.status_code}')
             except requests.ConnectionError:
                 success = False
@@ -41,8 +54,8 @@ class TelegramService:
                 logger.warning(f'Telegram timeout for {chat_id}')
             except Exception as e:
                 success = False
-                last_error = str(e)
-                logger.error(f'Telegram error for {chat_id}: {e}')
+                last_error = _redact(str(e), token)
+                logger.error(f'Telegram error for {chat_id}: {last_error}')
 
         return success, last_error
 

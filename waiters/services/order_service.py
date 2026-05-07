@@ -9,7 +9,7 @@ from base.repositories import (
     UserRepository, PlaceRepository, TableRepository,
 )
 from base.helpers.response import ServiceResponse
-from base.notifications import OrderNotification
+from notifications.handlers.order import OrderNotification
 from base.models import Table
 
 

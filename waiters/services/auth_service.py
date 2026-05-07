@@ -7,7 +7,7 @@ from django.utils import timezone
 from base.repositories import UserRepository, SessionRepository
 from base.security.hashing import verify_password, hash_password
 from base.helpers.response import ServiceResponse
-from base.notifications import ShiftNotification
+from notifications.handlers.shift import ShiftNotification
 from base.models import User
 
 

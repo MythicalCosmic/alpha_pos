@@ -8,7 +8,7 @@ from datetime import timedelta
 from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository, PlaceRepository, TableRepository
 from base.services.inkassa_service import InkassaService
 from base.helpers.response import ServiceResponse
-from base.notifications import OrderNotification
+from notifications.handlers.order import OrderNotification
 
 
 ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED']

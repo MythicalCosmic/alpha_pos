@@ -5,7 +5,10 @@ from base.notifications.telegram import TelegramAPI
 
 logger = logging.getLogger(__name__)
 
-QUEUE_KEY = 'notif:pending'
+# Legacy queue from base/notifications/. The newer notifications/ app uses
+# 'notif:pending' — using a distinct key here prevents the two systems from
+# trampling each other's queue while the legacy emitters are phased out.
+QUEUE_KEY = 'notif:pending:legacy'
 QUEUE_TTL = 86400
 
 
