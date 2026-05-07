@@ -888,3 +888,35 @@ class CashReconciliation(SyncMixin, models.Model):
 
     def __str__(self):
         return f"Reconciliation for {self.shift} (diff: {self.difference})"
+
+
+class SyncQueueRecord(models.Model):
+    """Durable queue for outbound sync records.
+
+    Replaces the cache-backed queue so a process restart (LocMem) or a Redis
+    crash before a flush no longer loses unsent records. Not a SyncMixin —
+    this table is local-only bookkeeping and must never sync itself.
+    """
+
+    model_name = models.CharField(max_length=100, db_index=True)
+    record_uuid = models.UUIDField(db_index=True)
+    payload = models.JSONField()
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sync_queue_record'
+        # One pending entry per (model, uuid). Re-queueing the same record
+        # collapses on the unique constraint and updates the row in place.
+        constraints = [
+            models.UniqueConstraint(
+                fields=['model_name', 'record_uuid'],
+                name='uniq_sync_queue_model_uuid',
+            ),
+        ]
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"SyncQueue<{self.model_name} {self.record_uuid}>"
