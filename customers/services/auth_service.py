@@ -78,14 +78,14 @@ class AuthService:
         try:
             from admins.services.shift_service import ShiftService
             ShiftService.start_shift(user.id)
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('shift start failed during login (user=%s)', user.id)
 
         try:
             from hr.services import AttendanceService
             AttendanceService.auto_check_in(user.id)
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('auto_check_in failed during login (user=%s)', user.id)
 
         return ServiceResponse.success(
             data={
@@ -112,15 +112,15 @@ class AuthService:
                 active = Shift.objects.filter(user=user, status='ACTIVE').first()
                 if active:
                     ShiftService.end_shift(active.id, user.id, '')
-            except Exception as e:
-                logger.warning(f"Non-critical error: {e}")
+            except Exception:
+                logger.exception('shift end failed during logout (user=%s)', user.id)
 
         if user:
             try:
                 from hr.services import AttendanceService
                 AttendanceService.auto_check_out(user.id)
-            except Exception as e:
-                logger.warning(f"Non-critical error: {e}")
+            except Exception:
+                logger.exception('auto_check_out failed during logout (user=%s)', user.id)
 
         SessionRepository.invalidate_cache(session_key)
         SessionRepository.delete(session)

@@ -349,8 +349,8 @@ class CustomerOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, None, 'PREPARING', stock_items, location_id, user_id,
                 )
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('non-critical stock-handler error in order flow')
 
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
@@ -494,8 +494,8 @@ class CustomerOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, old_status, status, stock_items, location_id, order.user_id,
                 )
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('non-critical stock-handler error in order flow')
 
         return ServiceResponse.success(
             data={'status': status},
@@ -642,8 +642,8 @@ class CustomerOrderService:
                     OrderStatusHandler.on_status_change(
                         order.id, order.status, 'PAID', stock_items, location_id, order.user_id,
                     )
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('non-critical stock-handler error in order flow')
 
         return ServiceResponse.success(
             data={'is_paid': True},

@@ -240,8 +240,8 @@ class WaiterOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, None, 'PREPARING', stock_items, location_id, user_id,
                 )
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('non-critical stock-handler error in waiter order flow')
 
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
@@ -423,8 +423,8 @@ class WaiterOrderService:
                 OrderStatusHandler.on_status_change(
                     order.id, old_status, 'CANCELLED', stock_items, location_id, order.user_id,
                 )
-        except Exception as e:
-            logger.warning(f"Non-critical error: {e}")
+        except Exception:
+            logger.exception('non-critical stock-handler error in waiter order flow')
 
         return ServiceResponse.success(
             data={'status': 'CANCELLED'},

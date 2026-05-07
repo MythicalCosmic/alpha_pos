@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q, Sum, Count, DecimalField
@@ -6,6 +7,8 @@ from django.utils import timezone
 from base.repositories.shift import ShiftTemplateRepository, ShiftRepository, CashReconciliationRepository
 from base.helpers.response import ServiceResponse
 from base.models import Order
+
+logger = logging.getLogger(__name__)
 
 
 class ShiftTemplateService:
@@ -265,7 +268,7 @@ class ShiftService:
                     'created_at': rec.created_at.isoformat() if rec.created_at else None,
                 }
         except Exception:
-            pass
+            logger.exception('failed to serialize shift reconciliation (shift=%s)', shift.id)
 
         return {
             'id': shift.id,

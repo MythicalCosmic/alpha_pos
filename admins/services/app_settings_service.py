@@ -1,5 +1,9 @@
+import logging
+
 from base.helpers.response import ServiceResponse
 from base.repositories.app_settings import AppSettingsRepository
+
+logger = logging.getLogger(__name__)
 
 
 class AppSettingsService:
@@ -43,7 +47,7 @@ class AppSettingsService:
                     stock_settings.stock_enabled = kwargs['stock_enabled']
                     stock_settings.save()
             except Exception:
-                pass
+                logger.exception('failed to mirror stock_enabled to StockSettings')
 
         return AppSettingsService.get_all()
 

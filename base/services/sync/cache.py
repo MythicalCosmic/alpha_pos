@@ -63,7 +63,7 @@ def safe_delete(key):
     try:
         _cache().delete(key)
     except Exception:
-        pass
+        logger.debug(f'Redis unavailable on delete for {key}')
 
 
 def safe_add(key, value, ttl):
