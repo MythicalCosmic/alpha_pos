@@ -79,6 +79,10 @@ urlpatterns = [
     path('documents/employee/<int:employee_id>/', document_views.documents_by_employee, name='document-by-employee'),
     path('documents/<int:doc_id>/', document_views.document_detail, name='document-detail'),
     path('documents/<int:doc_id>/verify/', document_views.document_verify, name='document-verify'),
+    # Auth-gated file download. <kind> maps via _DOWNLOADABLE_FILES to a
+    # specific (model, file_field) pair so the URL cannot be used to read
+    # arbitrary files.
+    path('documents/file/<str:kind>/<int:obj_id>/', document_views.secure_download, name='document-download'),
 
     # Reviews
     path('reviews/', review_views.reviews, name='review-list'),

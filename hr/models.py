@@ -153,7 +153,14 @@ class Expense(SyncMixin, models.Model):
         default=Status.PENDING,
     )
     receipt_number = models.CharField(max_length=100, blank=True, default='')
-    receipt_image_url = models.URLField(max_length=500, blank=True, default='')
+    receipt_image_url = models.URLField(
+        max_length=500, blank=True, default='',
+        help_text='DEPRECATED: legacy URL. New uploads should use receipt_file.',
+    )
+    receipt_file = models.FileField(
+        upload_to='hr/expenses/%Y/%m/', blank=True, null=True,
+        help_text='Private receipt file. Served via auth-gated download endpoint only.',
+    )
     created_by = models.ForeignKey(
         'base.User',
         on_delete=models.SET_NULL,
@@ -382,7 +389,14 @@ class ContractDocument(SyncMixin, models.Model):
     contract = models.ForeignKey(EmployeeContract, on_delete=models.CASCADE, related_name='documents')
     title = models.CharField(max_length=200)
     document_type = models.CharField(max_length=12, choices=DocumentType.choices, default=DocumentType.CONTRACT)
-    file_url = models.URLField(max_length=500, blank=True, default='')
+    file_url = models.URLField(
+        max_length=500, blank=True, default='',
+        help_text='DEPRECATED: legacy URL. New uploads should use file.',
+    )
+    file = models.FileField(
+        upload_to='hr/contracts/%Y/%m/', blank=True, null=True,
+        help_text='Private contract document. Served via auth-gated download endpoint only.',
+    )
     uploaded_by = models.ForeignKey(
         'base.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='uploaded_contract_docs',
     )
@@ -541,7 +555,14 @@ class EmployeeDocument(SyncMixin, models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='documents')
     document_type = models.CharField(max_length=12, choices=DocumentType.choices, default=DocumentType.OTHER)
     title = models.CharField(max_length=200)
-    file_url = models.URLField(max_length=500, blank=True, default='')
+    file_url = models.URLField(
+        max_length=500, blank=True, default='',
+        help_text='DEPRECATED: legacy URL. New uploads should use file.',
+    )
+    file = models.FileField(
+        upload_to='hr/employee_documents/%Y/%m/', blank=True, null=True,
+        help_text='Private employee document (passport/ID/etc). Served via auth-gated download endpoint only.',
+    )
     issue_date = models.DateField(null=True, blank=True)
     expiry_date = models.DateField(null=True, blank=True)
     is_verified = models.BooleanField(default=False)

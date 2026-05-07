@@ -130,6 +130,11 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Private media (HR documents). Files are NOT served by Django's static
+# file machinery — they're streamed only via auth-gated download views.
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'private_media'))
+MEDIA_URL = '/private-media/'  # not actually served; placeholder for FileField.url
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

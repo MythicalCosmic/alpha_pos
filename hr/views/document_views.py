@@ -1,10 +1,49 @@
-from django.http import JsonResponse
+from django.http import JsonResponse, FileResponse, Http404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
 from base.helpers.request import parse_json_body
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from hr.services import DocumentService
+
+
+# Whitelist of model+field combinations available to the secure download
+# endpoint. Adding a new file field requires editing this map — defense in
+# depth against a download URL being abused to read other random files.
+_DOWNLOADABLE_FILES = {
+    'employee_document': ('hr.EmployeeDocument', 'file'),
+    'contract_document': ('hr.ContractDocument', 'file'),
+    'expense_receipt': ('hr.Expense', 'receipt_file'),
+}
+
+
+@csrf_exempt
+@require_GET
+@admin_required
+def secure_download(request, kind, obj_id):
+    # Stream a private HR file (passport, contract, receipt) only after
+    # admin auth. The file lives outside DEBUG-served static dirs and the
+    # filename never appears in the URL — the (kind, id) pair maps via
+    # _DOWNLOADABLE_FILES to a known model + FileField.
+    from django.apps import apps
+
+    if kind not in _DOWNLOADABLE_FILES:
+        raise Http404('Unknown document kind')
+
+    model_label, field_name = _DOWNLOADABLE_FILES[kind]
+    model_cls = apps.get_model(model_label)
+
+    try:
+        obj = model_cls.objects.get(pk=obj_id, is_deleted=False)
+    except model_cls.DoesNotExist:
+        raise Http404('Document not found')
+
+    file_field = getattr(obj, field_name, None)
+    if not file_field or not file_field.name:
+        raise Http404('No file attached')
+
+    return FileResponse(file_field.open('rb'), as_attachment=True,
+                        filename=file_field.name.rsplit('/', 1)[-1])
 
 
 @csrf_exempt
