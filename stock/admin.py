@@ -138,9 +138,26 @@ class StockBatchAdmin(admin.ModelAdmin):
 
 @admin.register(StockTransaction)
 class StockTransactionAdmin(admin.ModelAdmin):
+    # StockTransaction is an append-only ledger; the admin must not let
+    # anyone edit or delete rows or the inventory audit trail breaks.
     list_display = ('id', 'stock_item', 'location', 'movement_type', 'quantity', 'created_at')
     list_filter = ('movement_type', 'location')
     date_hierarchy = 'created_at'
+
+    def get_readonly_fields(self, request, obj=None):
+        return [f.name for f in self.model._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        # Allow viewing the change form (Django admin requires "change" perm
+        # to render the detail page) but every field is readonly so nothing
+        # can actually be modified.
+        return True
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ProductionOrder)

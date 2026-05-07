@@ -181,6 +181,9 @@ ALLOWED_BRANCH_TOKENS = []
 BRANCH_TOKEN_MAP = {}
 SYNC_PULL_ENABLED = True
 
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+
 # Security settings for production
 if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000
@@ -189,6 +192,18 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'same-origin'
+    X_FRAME_OPTIONS = 'DENY'
+    # Only enable SSL redirect when explicitly opted in via env so reverse-proxy
+    # setups (the typical deployment) don't end up with a redirect loop.
+    SECURE_SSL_REDIRECT = os.environ.get(
+        'SECURE_SSL_REDIRECT', 'False'
+    ).lower() in ('true', '1', 'yes')
+    # Trust X-Forwarded-Proto from a known-good reverse proxy when terminating
+    # TLS at the proxy. Configure only when behind such a proxy.
+    if os.environ.get('TRUST_FORWARDED_PROTO', '').lower() in ('true', '1', 'yes'):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Pagination limits
 MAX_PER_PAGE = 100

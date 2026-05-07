@@ -1,3 +1,4 @@
+from base.helpers.request import safe_per_page
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
@@ -10,7 +11,7 @@ from customers.services.category_service import CustomerCategoryService
 @require_GET
 def list_categories(request):
     page = int(request.GET.get('page', 1))
-    per_page = int(request.GET.get('per_page', 20))
+    per_page = safe_per_page(request, 20)
     search = request.GET.get('search')
     status = request.GET.get('status')
     order_by = request.GET.get('order_by', 'sort_order')

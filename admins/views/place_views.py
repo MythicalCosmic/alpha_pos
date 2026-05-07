@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_per_page
 from base.security.permissions import admin_required
 from admins.services.place_service import PlaceService, TableService
 
@@ -12,7 +12,7 @@ from admins.services.place_service import PlaceService, TableService
 def places(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
-        per_page = int(request.GET.get('per_page', 20))
+        per_page = safe_per_page(request, 20)
         place_type = request.GET.get('place_type')
         is_active = request.GET.get('is_active')
 
@@ -65,7 +65,7 @@ def place_detail(request, place_id):
 def tables(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
-        per_page = int(request.GET.get('per_page', 20))
+        per_page = safe_per_page(request, 20)
         place_id = request.GET.get('place_id')
         status = request.GET.get('status')
 

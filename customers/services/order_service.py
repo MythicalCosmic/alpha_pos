@@ -685,17 +685,25 @@ class CustomerOrderService:
             message='Order marked as ready',
         )
 
+    DISPLAY_LIMIT = 200
+
     @staticmethod
     def get_client_display_orders():
         five_minutes_ago = timezone.now() - timedelta(minutes=5)
 
+        # Cap result counts so a busy day doesn't materialize thousands of rows
+        # into the kitchen/lobby display response.
         processing = OrderRepository.model.objects.filter(
             status='PREPARING', is_deleted=False
-        ).select_related('user').prefetch_related('items').order_by('created_at')
+        ).select_related('user').prefetch_related('items').order_by(
+            'created_at'
+        )[:CustomerOrderService.DISPLAY_LIMIT]
 
         finished = OrderRepository.model.objects.filter(
             status='READY', is_deleted=False, ready_at__gte=five_minutes_ago
-        ).select_related('user').order_by('-ready_at')
+        ).select_related('user').order_by(
+            '-ready_at'
+        )[:CustomerOrderService.DISPLAY_LIMIT]
 
         processing_list = []
         for order in processing:
@@ -737,7 +745,9 @@ class CustomerOrderService:
     def get_chef_display_orders():
         orders = OrderRepository.model.objects.filter(
             status='PREPARING', is_deleted=False
-        ).select_related('user').prefetch_related('items__product').order_by('created_at')
+        ).select_related('user').prefetch_related('items__product').order_by(
+            'created_at'
+        )[:CustomerOrderService.DISPLAY_LIMIT]
 
         orders_list = []
         for order in orders:

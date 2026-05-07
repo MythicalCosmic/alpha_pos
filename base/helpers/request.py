@@ -37,6 +37,24 @@ def validate_pagination(request, default_per_page=20):
     return page, per_page
 
 
+def safe_per_page(request, default=20):
+    # Return per_page bounded by MAX_PER_PAGE, for callers that read page
+    # separately. Use validate_pagination when both are needed.
+    from django.conf import settings
+    max_per_page = getattr(settings, 'MAX_PER_PAGE', 100)
+    try:
+        return max(1, min(int(request.GET.get('per_page', default)), max_per_page))
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_page(request, default=1):
+    try:
+        return max(1, int(request.GET.get('page', default)))
+    except (ValueError, TypeError):
+        return default
+
+
 def parse_json_body(request):
     try:
         data = json.loads(request.body)

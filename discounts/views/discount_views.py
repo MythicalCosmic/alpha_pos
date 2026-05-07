@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from discounts.services import DiscountTypeService, DiscountService
@@ -13,7 +13,7 @@ from discounts.services import DiscountTypeService, DiscountService
 def discount_types(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
-        per_page = int(request.GET.get('per_page', 20))
+        per_page = safe_per_page(request, 20)
         is_active = request.GET.get('is_active')
         if is_active is not None:
             is_active = is_active.lower() == 'true'
@@ -62,7 +62,7 @@ def discount_type_detail(request, type_id):
 def discounts(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
-        per_page = int(request.GET.get('per_page', 20))
+        per_page = safe_per_page(request, 20)
         discount_type_id = request.GET.get('discount_type_id')
         if discount_type_id:
             discount_type_id = int(discount_type_id)

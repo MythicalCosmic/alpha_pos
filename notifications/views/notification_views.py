@@ -1,3 +1,5 @@
+import string
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
@@ -8,6 +10,28 @@ from notifications.services.config_service import ConfigService
 from notifications.services.sender_service import SenderService
 from notifications.services.queue_service import QueueService
 from notifications.models import NotificationTemplate, NotificationLog
+
+
+def _validate_template_text(template_text):
+    # Reject templates whose placeholders aren't valid str.format syntax.
+    # Without this, saving e.g. "Hello {} world" or "{nonexistent_field}" would
+    # silently drop every event of that type at render time. We can't know
+    # the real allowed fields per notification_type without a registry, so we
+    # just verify the format string parses and uses named-field placeholders.
+    if not isinstance(template_text, str):
+        return 'template_text must be a string'
+    try:
+        parsed = list(string.Formatter().parse(template_text))
+    except (ValueError, IndexError) as exc:
+        return f'invalid template syntax: {exc}'
+    for _literal, field_name, _spec, _conv in parsed:
+        if field_name is None:
+            continue
+        if field_name == '':
+            return 'template uses positional {} placeholder; use named {field}'
+        if field_name.isdigit():
+            return 'template uses indexed {0} placeholder; use named {field}'
+    return None
 
 
 @csrf_exempt
@@ -73,6 +97,12 @@ def notification_type_detail(request, type_slug):
     if "is_enabled" in data:
         template.is_enabled = data["is_enabled"]
     if "template_text" in data:
+        err = _validate_template_text(data["template_text"])
+        if err:
+            return JsonResponse(
+                {"success": False, "message": err, "errors": {"template_text": err}},
+                status=422,
+            )
         template.template_text = data["template_text"]
     template.save()
 
@@ -142,6 +172,12 @@ def template_detail(request, template_id):
         return json_response(error)
 
     if "template_text" in data:
+        err = _validate_template_text(data["template_text"])
+        if err:
+            return JsonResponse(
+                {"success": False, "message": err, "errors": {"template_text": err}},
+                status=422,
+            )
         template.template_text = data["template_text"]
     template.save()
 

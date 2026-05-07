@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
@@ -27,7 +27,7 @@ def _check_permission(request, perm):
 def orders(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
-        per_page = int(request.GET.get('per_page', 20))
+        per_page = safe_per_page(request, 20)
         statuses = request.GET.get('statuses')
         payment_status = request.GET.get('payment_status')
         category_ids = request.GET.get('category_ids')
