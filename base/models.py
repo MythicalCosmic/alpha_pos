@@ -138,6 +138,7 @@ class SyncMixin(models.Model):
     @classmethod
     def from_sync_dict(cls, data, branch_id=None):
         from django.utils import timezone
+        from django.utils.dateparse import parse_datetime
 
         data = data.copy()
         uuid_val = data.pop('uuid')
@@ -147,7 +148,7 @@ class SyncMixin(models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if sync_version >= instance.sync_version:
+            if cls._should_replace(instance, sync_version, data, incoming_branch):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -169,6 +170,34 @@ class SyncMixin(models.Model):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
             return instance, 'created'
+
+    @classmethod
+    def _should_replace(cls, instance, incoming_version, incoming_data, incoming_branch):
+        # Higher sync_version always wins. On a tie, fall back to a
+        # deterministic tiebreaker so two branches that happened to land at
+        # the same version don't silently overwrite each other based on
+        # whichever batch arrived second:
+        #   1. updated_at (newer wins) when both sides have it
+        #   2. branch_id lexicographic comparison as last resort.
+        if incoming_version > instance.sync_version:
+            return True
+        if incoming_version < instance.sync_version:
+            return False
+
+        from django.utils.dateparse import parse_datetime
+        incoming_updated = incoming_data.get('updated_at')
+        if isinstance(incoming_updated, str):
+            incoming_updated = parse_datetime(incoming_updated)
+        local_updated = getattr(instance, 'updated_at', None)
+        if incoming_updated and local_updated:
+            if incoming_updated > local_updated:
+                return True
+            if incoming_updated < local_updated:
+                return False
+
+        local_branch = instance.branch_id or ''
+        incoming = incoming_branch or ''
+        return incoming > local_branch
 
 
 class User(SyncMixin, models.Model):
