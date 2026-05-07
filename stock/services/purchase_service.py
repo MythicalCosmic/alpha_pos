@@ -796,7 +796,10 @@ class PurchaseReceivingService:
             item.po_item.save(update_fields=["quantity_received"])
 
             from .item_service import StockItemService
-            cost_result, cost_status = StockItemService.update_cost(item.stock_item_id, item.unit_cost, "AVG")
+            cost_result, cost_status = StockItemService.update_cost(
+                item.stock_item_id, item.unit_cost, "AVG",
+                received_qty=item.quantity_received,
+            )
             if cost_status >= 400:
                 return cost_result, cost_status
 

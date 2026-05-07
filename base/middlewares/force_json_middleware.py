@@ -4,23 +4,32 @@ from django.utils.deprecation import MiddlewareMixin
 
 
 class JSONOnlyMiddleware(MiddlewareMixin):
+    EXEMPT_PREFIXES = ('/admin', '/static', '/media')
+
+    def _is_exempt(self, path):
+        return any(path.startswith(p) for p in self.EXEMPT_PREFIXES)
+
     def process_request(self, request):
+        if self._is_exempt(request.path):
+            return None
         if 'application/json' not in request.META.get('HTTP_ACCEPT', ''):
             request.META['HTTP_ACCEPT'] = 'application/json'
         return None
-    
+
     def process_response(self, request, response):
+        if self._is_exempt(request.path):
+            return response
         if isinstance(response, JsonResponse):
             return response
 
         status_code = response.status_code
-        
+
         if 200 <= status_code < 300:
             return response
-        
+
         if 300 <= status_code < 400:
             return response
-        
+
         status_message = self._get_fancy_status_message(status_code)
         try:
             if hasattr(response, 'content') and response.content:
@@ -65,6 +74,8 @@ class JSONOnlyMiddleware(MiddlewareMixin):
     def process_exception(self, request, exception):
         import logging
         from django.conf import settings as django_settings
+        if self._is_exempt(request.path):
+            return None
         logging.getLogger(__name__).exception("Unhandled exception in %s %s", request.method, request.path)
         error_detail = {
             "type": exception.__class__.__name__,
@@ -125,8 +136,8 @@ class JSONOnlyMiddleware(MiddlewareMixin):
             return f"Server error ({status_code})"
     
     def _get_timestamp(self):
-        from datetime import datetime
-        return datetime.utcnow().isoformat() + 'Z'
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
 
 
 class SimpleJSONMiddleware(MiddlewareMixin):

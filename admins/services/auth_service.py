@@ -46,7 +46,7 @@ class AdminAuthService:
             return ServiceResponse.unauthorized("Invalid credentials")
 
         if user.role != User.RoleChoices.ADMIN:
-            return ServiceResponse.forbidden("Hell no")
+            return ServiceResponse.forbidden("Admin access required")
 
         if user.status != User.UserStatus.ACTIVE:
             return ServiceResponse.forbidden("Account is suspended")
@@ -99,7 +99,7 @@ class AdminAuthService:
         if not user:
             return ServiceResponse.unauthorized("Invalid session")
         if user.role != User.RoleChoices.ADMIN:
-            return ServiceResponse.forbidden("Hell no")
+            return ServiceResponse.forbidden("Admin access required")
         data = AdminAuthService._user_data(user)
         data['last_login_at'] = user.last_login_at.isoformat() if user.last_login_at else None
         return ServiceResponse.success(data=data, message="User data retrieved")

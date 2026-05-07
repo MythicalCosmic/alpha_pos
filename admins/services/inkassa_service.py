@@ -124,7 +124,35 @@ class AdminInkassaService:
             register = CashRegister.objects.create(current_balance=0)
 
         balance_before = register.current_balance
+
+        method_amounts = {}
         total_removed = Decimal('0')
+        for method in ('CASH', 'UZCARD', 'HUMO', 'PAYME'):
+            amount = amounts.get(method.lower(), 0)
+            try:
+                amount = Decimal(str(amount))
+            except Exception:
+                amount = Decimal('0')
+            if amount < 0:
+                return ServiceResponse.validation_error(
+                    errors={method.lower(): 'Amount cannot be negative'},
+                    message='Invalid amount',
+                )
+            if amount > 0:
+                method_amounts[method] = amount
+                total_removed += amount
+
+        if total_removed <= 0:
+            return ServiceResponse.validation_error(
+                errors={'amount': 'At least one payment method amount must be greater than 0'},
+                message='No amounts provided',
+            )
+
+        if total_removed > balance_before:
+            return ServiceResponse.validation_error(
+                errors={'amount': f'Total {total_removed} exceeds register balance {balance_before}'},
+                message='Insufficient register balance',
+            )
 
         last_inkassa = Inkassa.objects.filter(is_deleted=False).order_by('-created_at').first()
         period_start = last_inkassa.period_end if last_inkassa else None
@@ -140,33 +168,21 @@ class AdminInkassaService:
         )
 
         created_inkassas = []
-        for method in ('CASH', 'UZCARD', 'HUMO', 'PAYME'):
-            amount = amounts.get(method.lower(), 0)
-            try:
-                amount = Decimal(str(amount))
-            except Exception:
-                amount = Decimal('0')
-
-            if amount > 0:
-                inkassa = Inkassa.objects.create(
-                    cashier=user,
-                    amount=amount,
-                    inkass_type=method,
-                    balance_before=balance_before,
-                    balance_after=balance_before - total_removed - amount,
-                    period_start=period_start,
-                    total_orders=today_agg['order_count'] or 0,
-                    total_revenue=today_agg['total_revenue'] or 0,
-                    notes=amounts.get('notes', ''),
-                )
-                total_removed += amount
-                created_inkassas.append(inkassa)
-
-        if total_removed <= 0:
-            return ServiceResponse.validation_error(
-                errors={'amount': 'At least one payment method amount must be greater than 0'},
-                message='No amounts provided',
+        running_removed = Decimal('0')
+        for method, amount in method_amounts.items():
+            inkassa = Inkassa.objects.create(
+                cashier=user,
+                amount=amount,
+                inkass_type=method,
+                balance_before=balance_before,
+                balance_after=balance_before - running_removed - amount,
+                period_start=period_start,
+                total_orders=today_agg['order_count'] or 0,
+                total_revenue=today_agg['total_revenue'] or 0,
+                notes=amounts.get('notes', ''),
             )
+            running_removed += amount
+            created_inkassas.append(inkassa)
 
         register.current_balance -= total_removed
         register.save(update_fields=['current_balance', 'last_updated'])

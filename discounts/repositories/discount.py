@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, F
 from django.core.paginator import Paginator
 from django.utils import timezone
 from base.repositories.base import BaseSyncRepository
@@ -49,7 +49,7 @@ class DiscountRepository(BaseSyncRepository):
         qs = cls.model.objects.filter(is_deleted=False, is_active=True)
         qs = qs.filter(Q(start_date__isnull=True) | Q(start_date__lte=now))
         qs = qs.filter(Q(end_date__isnull=True) | Q(end_date__gte=now))
-        qs = qs.filter(Q(usage_limit__isnull=True) | Q(usage_count__lt=Q('usage_limit')))
+        qs = qs.filter(Q(usage_limit__isnull=True) | Q(usage_count__lt=F('usage_limit')))
         return qs
 
     @classmethod

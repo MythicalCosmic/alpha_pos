@@ -495,7 +495,7 @@ class AdminOrderService:
     @staticmethod
     @transaction.atomic
     def mark_as_paid(order_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -535,7 +535,7 @@ class AdminOrderService:
     @staticmethod
     @transaction.atomic
     def mark_as_unpaid(order_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 

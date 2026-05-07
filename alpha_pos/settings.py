@@ -3,13 +3,17 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
+
 SECRET_KEY = os.environ.get('SECRET_KEY', '')
 if not SECRET_KEY:
-    import warnings
-    SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
-    warnings.warn("SECRET_KEY not set — using insecure default. Set SECRET_KEY env var in production.", stacklevel=1)
-
-DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            "SECRET_KEY environment variable must be set when DEBUG is False."
+        )
 
 if DEBUG:
     ALLOWED_HOSTS = ['*']
@@ -185,6 +189,14 @@ if not DEBUG:
 # Pagination limits
 MAX_PER_PAGE = 100
 
-# CORS — Electron renderer talks cross-origin to the backend
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS — Electron renderer talks cross-origin to the backend.
+# Origins are env-driven so production gets an explicit allowlist; in DEBUG
+# we permit all origins for local dev kiosks. Browsers reject the combination
+# of CORS_ALLOW_ALL_ORIGINS=True with credentials, so we never ship that.
+CORS_ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()
+]
 CORS_ALLOW_CREDENTIALS = True
+if DEBUG and not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = False

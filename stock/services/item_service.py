@@ -464,7 +464,8 @@ class StockItemService:
     @classmethod
     @transaction.atomic
     def update_cost(cls, item_id: int, new_cost: Decimal,
-                    update_type: str = "LAST") -> Tuple[Dict[str, Any], int]:
+                    update_type: str = "LAST",
+                    received_qty: Decimal = None) -> Tuple[Dict[str, Any], int]:
         item = StockItemRepository.get_by_id(item_id)
         if not item:
             return ServiceResponse.not_found(f"Stock item with id {item_id} not found")
@@ -478,12 +479,20 @@ class StockItemService:
             item.avg_cost_price = new_cost
             update_fields.extend(["cost_price", "avg_cost_price"])
         elif update_type == "AVG":
-            total_qty = StockLevelRepository.get_total_quantity(item.id)
+            recv_qty = to_decimal(received_qty) if received_qty is not None else None
+            total_qty = to_decimal(StockLevelRepository.get_total_quantity(item.id))
 
-            if total_qty > 0:
-                old_value = total_qty * item.avg_cost_price
-                new_avg = (old_value + new_cost) / (total_qty + 1)
+            # total_qty includes the just-received quantity (caller adjusts levels first).
+            # Old qty before this receipt = total_qty - recv_qty.
+            if recv_qty is not None and recv_qty > 0 and total_qty >= recv_qty:
+                old_qty = total_qty - recv_qty
+                if old_qty > 0:
+                    new_avg = (old_qty * item.avg_cost_price + recv_qty * new_cost) / total_qty
+                else:
+                    new_avg = new_cost
                 item.avg_cost_price = round_decimal(new_avg, 4)
+            elif total_qty > 0:
+                item.avg_cost_price = round_decimal(new_cost, 4)
             else:
                 item.avg_cost_price = new_cost
             update_fields.append("avg_cost_price")

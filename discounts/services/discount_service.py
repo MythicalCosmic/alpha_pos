@@ -12,6 +12,8 @@ from base.helpers.response import ServiceResponse
 
 
 def _serialize_discount(discount):
+    # secret_word is intentionally NOT included in the public serialization to
+    # prevent leaking the codeword to anyone with admin list access.
     data = {
         'id': discount.id,
         'uuid': str(discount.uuid),
@@ -27,7 +29,7 @@ def _serialize_discount(discount):
         'buy_quantity': discount.buy_quantity,
         'get_quantity': discount.get_quantity,
         'free_product_id': discount.free_product_id,
-        'secret_word': discount.secret_word,
+        'has_secret_word': bool(discount.secret_word),
         'usage_limit': discount.usage_limit,
         'usage_per_user': discount.usage_per_user,
         'usage_count': discount.usage_count,

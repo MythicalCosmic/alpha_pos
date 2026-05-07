@@ -32,7 +32,9 @@ def list_orders(request):
 @require_GET
 @login_required
 def get_order(request, order_id):
-    result, status_code = CustomerOrderService.get_order_by_id(order_id)
+    result, status_code = CustomerOrderService.get_order_by_id(
+        order_id, user_id=request.user.id, user_role=request.user.role,
+    )
     return JsonResponse(result, status=status_code)
 
 
@@ -87,6 +89,7 @@ def add_item(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.add_item_to_order(
         order_id, product_id, quantity, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -110,6 +113,7 @@ def update_item(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_item(
         order_id, item_id, quantity, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -121,6 +125,7 @@ def remove_item(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.remove_item_from_order(
         order_id, item_id, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -144,6 +149,7 @@ def update_status(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_status(
         order_id, status, cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -152,7 +158,11 @@ def update_status(request, order_id):
 @require_POST
 @login_required
 def pay_order(request, order_id):
-    result, status_code = CustomerOrderService.mark_as_paid(order_id, request.user.id)
+    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    result, status_code = CustomerOrderService.mark_as_paid(
+        order_id, cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
+    )
     return JsonResponse(result, status=status_code)
 
 
@@ -161,7 +171,10 @@ def pay_order(request, order_id):
 @login_required
 def mark_ready(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
-    result, status_code = CustomerOrderService.mark_order_ready(order_id, cashier_id=cashier_id)
+    result, status_code = CustomerOrderService.mark_order_ready(
+        order_id, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
+    )
     return JsonResponse(result, status=status_code)
 
 
@@ -172,6 +185,7 @@ def mark_item_ready(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.mark_item_ready(
         order_id, item_id, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -183,6 +197,7 @@ def unmark_item_ready(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.unmark_item_ready(
         order_id, item_id, cashier_id=cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
@@ -194,12 +209,14 @@ def cancel_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_status(
         order_id, 'CANCELLED', cashier_id,
+        user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)
 
 
 @csrf_exempt
 @require_GET
+@login_required
 def client_display(request):
     result, status_code = CustomerOrderService.get_client_display_orders()
     return JsonResponse(result, status=status_code)
@@ -207,6 +224,7 @@ def client_display(request):
 
 @csrf_exempt
 @require_GET
+@login_required
 def chef_display(request):
     result, status_code = CustomerOrderService.get_chef_display_orders()
     return JsonResponse(result, status=status_code)

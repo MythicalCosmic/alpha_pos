@@ -625,6 +625,8 @@ class RecipeService:
     @classmethod
     @transaction.atomic
     def check_availability(cls, recipe_id: int, quantity: Decimal = Decimal("1"), location_id: int = None, batch_multiplier: Decimal = Decimal("1")) -> Dict[str, Any]:
+        from .level_service import StockLevelService
+
         recipe = RecipeRepository.get_by_id(recipe_id)
         if not recipe:
             return ServiceResponse.not_found("Recipe not found")
@@ -635,7 +637,7 @@ class RecipeService:
             if ing.waste_percentage > 0:
                 required_qty = required_qty * (1 + ing.waste_percentage / 100)
 
-            available_stock = ing.stock_item.get_available_stock()
+            available_stock = StockLevelService.get_available(ing.stock_item_id, location_id)
             is_available = available_stock >= required_qty
 
             availability.append({

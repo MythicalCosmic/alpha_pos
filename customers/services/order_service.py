@@ -115,7 +115,22 @@ def _serialize_order_detail(order):
     }
 
 
-def _check_cashier_ownership(order, cashier_id):
+def _check_cashier_ownership(order, cashier_id, user_id=None, user_role=None):
+    # ADMIN bypass kept for support flows; USER must own; CASHIER must match if order is claimed.
+    if user_role == 'ADMIN':
+        return None
+    if user_role == 'CASHIER':
+        if order.cashier_id and order.cashier_id != cashier_id:
+            return ServiceResponse.forbidden(
+                f'You do not have permission to modify this order. Order #{order.display_id} was created by another cashier.'
+            )
+        return None
+    # USER (or any other role): require ownership of the order itself.
+    if user_id is not None and order.user_id != user_id:
+        return ServiceResponse.forbidden(
+            f'You do not have permission to modify order #{order.display_id}.'
+        )
+    # Legacy fallback when caller did not supply role/user_id.
     if order.cashier_id and order.cashier_id != cashier_id:
         return ServiceResponse.forbidden(
             f'You do not have permission to modify this order. Order #{order.display_id} was created by another cashier.'
@@ -208,10 +223,15 @@ class CustomerOrderService:
         })
 
     @staticmethod
-    def get_order_by_id(order_id):
+    def get_order_by_id(order_id, user_id=None, user_role=None):
         order = OrderRepository.get_by_id_with_relations(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
+        # Read-side ownership: ADMIN/CASHIER may read any order; USER only their own.
+        if user_role not in ('ADMIN', 'CASHIER') and user_id is not None and order.user_id != user_id:
+            return ServiceResponse.forbidden(
+                f'You do not have permission to view order #{order.display_id}.'
+            )
         return ServiceResponse.success(data={'order': _serialize_order_detail(order)})
 
     @staticmethod
@@ -339,12 +359,12 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def add_item_to_order(order_id, product_id, quantity, cashier_id=None):
+    def add_item_to_order(order_id, product_id, quantity, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -374,12 +394,12 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def update_order_item(order_id, item_id, quantity, cashier_id=None):
+    def update_order_item(order_id, item_id, quantity, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -404,12 +424,12 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def remove_item_from_order(order_id, item_id, cashier_id=None):
+    def remove_item_from_order(order_id, item_id, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -431,12 +451,12 @@ class CustomerOrderService:
         return ServiceResponse.success(message='Item removed from order successfully')
 
     @staticmethod
-    def update_order_status(order_id, status, cashier_id=None):
+    def update_order_status(order_id, status, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -484,12 +504,12 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def mark_item_ready(order_id, item_id, cashier_id=None):
+    def mark_item_ready(order_id, item_id, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id_with_relations(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -553,12 +573,12 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def unmark_item_ready(order_id, item_id, cashier_id=None):
+    def unmark_item_ready(order_id, item_id, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -585,12 +605,14 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def mark_as_paid(order_id, cashier_id):
-        order = OrderRepository.get_by_id(order_id)
+    def mark_as_paid(order_id, cashier_id, user_id=None, user_role=None):
+        # Lock the order row for the duration of payment processing to prevent
+        # double-pay races (two concurrent requests both passing is_paid check).
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 
@@ -629,12 +651,12 @@ class CustomerOrderService:
         )
 
     @staticmethod
-    def mark_order_ready(order_id, cashier_id=None):
+    def mark_order_ready(order_id, cashier_id=None, user_id=None, user_role=None):
         order = OrderRepository.get_by_id(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        ownership = _check_cashier_ownership(order, cashier_id)
+        ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
 

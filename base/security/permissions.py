@@ -21,7 +21,7 @@ def admin_required(view_func):
             )
         if session.user_id.role != 'ADMIN':
             return JsonResponse(
-                {"success": False, "message": "Hell no"},
+                {"success": False, "message": "Admin access required"},
                 status=403,
             )
         if session.user_id.status != 'ACTIVE':

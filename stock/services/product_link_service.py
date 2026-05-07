@@ -315,11 +315,15 @@ class ProductStockLinkService:
 
         elif link.link_type == "RECIPE":
             if link.recipe:
+                # Recipe ingredient quantities are for the full recipe yield
+                # (recipe.output_quantity). Scale by sale_qty * quantity_per_sale
+                # divided by output_quantity to deduct only what one sold portion uses.
+                output_qty = to_decimal(link.recipe.output_quantity) or to_decimal(1)
                 ingredients = RecipeIngredientRepository.get_for_recipe(link.recipe_id)
                 for ingredient in ingredients:
                     deductions.append({
                         "stock_item_id": ingredient.stock_item_id,
-                        "quantity": ingredient.quantity * sale_qty * link.quantity_per_sale,
+                        "quantity": ingredient.quantity * sale_qty * link.quantity_per_sale / output_qty,
                         "unit_id": ingredient.unit_id,
                     })
 

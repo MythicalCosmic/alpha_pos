@@ -60,14 +60,17 @@ class AdminUserService:
                 message='Validation failed',
             )
 
-        if not password or len(str(password)) < 4:
+        if not password or len(str(password)) < 8:
             return ServiceResponse.validation_error(
-                errors={'password': 'Password must be at least 4 characters'},
+                errors={'password': 'Password must be at least 8 characters'},
                 message='Validation failed',
             )
 
-        if role not in ('ADMIN', 'CASHIER', 'WAITER', 'USER'):
-            role = 'CASHIER'
+        if role not in User.RoleChoices.values:
+            return ServiceResponse.validation_error(
+                errors={'role': f"Must be one of {list(User.RoleChoices.values)}"},
+                message='Invalid role',
+            )
 
         if not email:
             base = f"{first_name.lower().strip()}.{last_name.lower().strip()}"
@@ -100,6 +103,20 @@ class AdminUserService:
             user = User.objects.get(pk=user_id, is_deleted=False)
         except User.DoesNotExist:
             return ServiceResponse.not_found('User not found')
+
+        if 'role' in kwargs and kwargs['role'] is not None:
+            if kwargs['role'] not in User.RoleChoices.values:
+                return ServiceResponse.validation_error(
+                    errors={'role': f"Must be one of {list(User.RoleChoices.values)}"},
+                    message='Invalid role',
+                )
+
+        if 'status' in kwargs and kwargs['status'] is not None:
+            if kwargs['status'] not in User.UserStatus.values:
+                return ServiceResponse.validation_error(
+                    errors={'status': f"Must be one of {list(User.UserStatus.values)}"},
+                    message='Invalid status',
+                )
 
         for field in ('first_name', 'last_name', 'role', 'status', 'email'):
             if field in kwargs and kwargs[field] is not None:

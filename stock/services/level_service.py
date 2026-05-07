@@ -243,12 +243,15 @@ class StockLevelService:
         level = cls.get_level(stock_item_id, location_id)
         quantity_before = level.quantity
 
+        signed_movement_types = {"COUNT_ADJUSTMENT", "ADJUSTMENT"}
         is_outgoing = movement_type in [
             "SALE_OUT", "TRANSFER_OUT", "PRODUCTION_OUT",
             "ADJUSTMENT_MINUS", "WASTE", "SPOILAGE", "RETURN_TO_SUPPLIER"
         ]
 
-        if is_outgoing:
+        if movement_type in signed_movement_types:
+            adjustment = base_quantity
+        elif is_outgoing:
             adjustment = -abs(base_quantity)
         else:
             adjustment = abs(base_quantity)

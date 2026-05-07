@@ -18,6 +18,13 @@ class OrderRepository(BaseSyncRepository):
         return cls.model.objects.filter(is_deleted=False, user=user)
 
     @classmethod
+    def get_for_update(cls, order_id):
+        try:
+            return cls.model.objects.select_for_update().get(id=order_id, is_deleted=False)
+        except cls.model.DoesNotExist:
+            return None
+
+    @classmethod
     def get_by_display_id(cls, display_id):
         try:
             return cls.model.objects.get(display_id=display_id, is_deleted=False)

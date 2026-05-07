@@ -306,8 +306,10 @@ class ProductionOrderService:
         )
 
         for recipe_ing in recipe.ingredients.select_related("stock_item", "unit"):
-            planned_qty = recipe_ing.quantity * batch_multiplier
-            if recipe_ing.is_scalable : recipe_ing.quantity
+            if recipe_ing.is_scalable:
+                planned_qty = recipe_ing.quantity * batch_multiplier
+            else:
+                planned_qty = recipe_ing.quantity
 
             if recipe_ing.waste_percentage > 0:
                 planned_qty = planned_qty * (1 + recipe_ing.waste_percentage / 100)
