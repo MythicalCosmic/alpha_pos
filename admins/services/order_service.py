@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
@@ -5,6 +6,8 @@ from datetime import timedelta, datetime
 from base.repositories import OrderRepository, OrderItemRepository, ProductRepository, UserRepository, DeliveryPersonRepository
 from base.services.inkassa_service import InkassaService
 from base.helpers.response import ServiceResponse
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED', 'COMPLETED']
@@ -346,7 +349,7 @@ class AdminOrderService:
                     order.id, None, 'PREPARING', stock_items, location_id, user_id,
                 )
         except Exception:
-            pass
+            logger.exception('stock handler failed during order create (order=%s)', order.id)
 
         return ServiceResponse.created(
             data={'order_id': order.id, 'display_id': order.display_id},
@@ -485,7 +488,10 @@ class AdminOrderService:
                     order.id, old_status, status, stock_items, location_id, order.user_id,
                 )
         except Exception:
-            pass
+            logger.exception(
+                'stock handler failed during status change (order=%s status=%s)',
+                order.id, status,
+            )
 
         return ServiceResponse.success(
             data={'status': status},
@@ -525,7 +531,7 @@ class AdminOrderService:
                         order.id, order.status, 'PAID', stock_items, location_id, order.user_id,
                     )
         except Exception:
-            pass
+            logger.exception('stock handler failed during pay (order=%s)', order.id)
 
         return ServiceResponse.success(
             data={'is_paid': True},
