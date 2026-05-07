@@ -365,7 +365,22 @@ class DiscountService:
         if order.status == 'CANCELED':
             return ServiceResponse.error("Cannot apply discount to a cancelled order")
 
-        discount = Discount.objects.select_for_update().get(id=DiscountRepository.get_by_code(discount_code).id)
+        locked = Discount.objects.select_for_update().filter(
+            code=discount_code, is_deleted=False
+        ).first()
+        if not locked:
+            return ServiceResponse.not_found("Discount code not found")
+        discount = locked
+
+        # Re-check usage limits under the row lock — validate_code's earlier
+        # read was unlocked, so two concurrent applies could both have passed.
+        if discount.usage_limit and discount.usage_count >= discount.usage_limit:
+            return ServiceResponse.error("This discount has reached its usage limit")
+
+        if discount.usage_per_user and user_id:
+            user_usage = DiscountUsageRepository.count_for_user_discount(user_id, discount.id)
+            if user_usage >= discount.usage_per_user:
+                return ServiceResponse.error("You have reached the usage limit for this discount")
 
         # Re-validate with actual order subtotal
         if discount.min_order_amount and order.subtotal < discount.min_order_amount:
@@ -468,10 +483,16 @@ class DiscountService:
         # Delete the OrderDiscount
         order_discount.delete(hard_delete=True)
 
-        # Decrement usage count
-        if discount.usage_count > 0:
-            discount.usage_count -= 1
-            discount.save(update_fields=['usage_count'])
+        # Decrement usage count atomically; clamp at zero to avoid double-removes
+        # driving the counter negative under concurrent calls.
+        from django.db.models import Case, When, Value, IntegerField
+        Discount.objects.filter(id=discount.id).update(
+            usage_count=Case(
+                When(usage_count__gt=0, then=F('usage_count') - 1),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        )
 
         # Recalculate order totals
         total_discount = OrderDiscountRepository.get_for_order(order_id).aggregate(

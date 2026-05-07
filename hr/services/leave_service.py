@@ -329,16 +329,26 @@ class LeaveService:
                 f"Cannot approve leave request in {leave_req.status} status. Must be PENDING."
             )
 
-        leave_req.status = LeaveRequest.Status.APPROVED
-        leave_req.approved_by_id = approved_by_id
-        leave_req.save(update_fields=["status", "approved_by_id", "updated_at"])
-
-        balance = LeaveBalance.objects.filter(
+        # Lock the balance row so concurrent approvals serialize and re-check
+        # the available balance under the lock — request-time validation in
+        # create_request is unlocked and may have been satisfied for both.
+        balance = LeaveBalance.objects.select_for_update().filter(
             employee_id=leave_req.employee_id,
             leave_type_id=leave_req.leave_type_id,
             year=leave_req.start_date.year,
             is_deleted=False,
         ).first()
+
+        if balance:
+            remaining = balance.remaining_days
+            if leave_req.days_count > remaining:
+                return ServiceResponse.validation_error(
+                    errors={"days_count": f"Insufficient leave balance. Remaining: {remaining}, Requested: {leave_req.days_count}"},
+                )
+
+        leave_req.status = LeaveRequest.Status.APPROVED
+        leave_req.approved_by_id = approved_by_id
+        leave_req.save(update_fields=["status", "approved_by_id", "updated_at"])
 
         if balance:
             balance.used_days += leave_req.days_count

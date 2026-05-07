@@ -1,6 +1,6 @@
 import uuid
 from decimal import Decimal
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 
 
@@ -56,7 +56,11 @@ class SyncMixin(models.Model):
                     self.synced_at = None
         super().save(*args, **kwargs)
         if not syncing and self.synced_at is None and self._is_sync_on_save():
-            self._queue_for_sync()
+            # Defer queueing until the surrounding transaction commits so a
+            # rollback doesn't leave an orphan UUID in the sync queue that
+            # the cloud cannot resolve. on_commit fires immediately when no
+            # transaction is open.
+            transaction.on_commit(self._queue_for_sync)
 
     @staticmethod
     def _is_sync_on_save():

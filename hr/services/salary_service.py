@@ -302,16 +302,21 @@ class SalaryService:
             is_deleted=False,
         )
 
-        count = pending.count()
+        # Iterate and save() per row instead of bulk .update(), otherwise
+        # SyncMixin's save() is bypassed: sync_version isn't bumped and
+        # synced_at isn't nulled, so the cloud never learns about these
+        # approvals.
+        count = 0
+        for salary in pending:
+            salary.status = SalaryPayment.Status.APPROVED
+            salary.approved_by_id = approved_by_id
+            salary.save(update_fields=["status", "approved_by_id", "updated_at"])
+            count += 1
+
         if count == 0:
             return ServiceResponse.success(data={
                 "approved": 0,
             }, message="No pending salary payments for this period")
-
-        pending.update(
-            status=SalaryPayment.Status.APPROVED,
-            approved_by_id=approved_by_id,
-        )
 
         return ServiceResponse.success(data={
             "approved": count,
