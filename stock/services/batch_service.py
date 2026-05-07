@@ -376,7 +376,7 @@ class StockBatchService:
                 reference_type: str = None,
                 reference_id: int = None,
                 notes: str = "") -> Tuple[Dict[str, Any], int]:
-        batch = StockBatchRepository.get_by_id(batch_id)
+        batch = StockBatchRepository.get_for_update(batch_id)
         if not batch:
             return ServiceResponse.not_found(f"Batch with id {batch_id} not found")
 

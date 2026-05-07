@@ -129,6 +129,11 @@ class StockLevelService:
         return StockLevelRepository.get_or_create_level(stock_item_id, location_id)
 
     @classmethod
+    def get_level_for_update(cls, stock_item_id: int, location_id: int) -> StockLevel:
+        # Row-level lock — must be called inside a @transaction.atomic block.
+        return StockLevelRepository.get_or_create_level_for_update(stock_item_id, location_id)
+
+    @classmethod
     def get_available(cls, stock_item_id: int, location_id: int = None) -> Decimal:
         if location_id:
             level = StockLevelRepository.get_for_item_and_location(stock_item_id, location_id)
@@ -240,7 +245,7 @@ class StockLevelService:
         else:
             base_quantity = quantity
 
-        level = cls.get_level(stock_item_id, location_id)
+        level = cls.get_level_for_update(stock_item_id, location_id)
         quantity_before = level.quantity
 
         signed_movement_types = {"COUNT_ADJUSTMENT", "ADJUSTMENT"}
@@ -322,7 +327,7 @@ class StockLevelService:
             return ServiceResponse.success(data={"skipped": True})
 
         quantity = abs(to_decimal(quantity))
-        level = cls.get_level(stock_item_id, location_id)
+        level = cls.get_level_for_update(stock_item_id, location_id)
 
         available = level.quantity - level.reserved_quantity
         if quantity > available:
@@ -373,7 +378,7 @@ class StockLevelService:
             return ServiceResponse.success(data={"skipped": True})
 
         quantity = abs(to_decimal(quantity))
-        level = cls.get_level(stock_item_id, location_id)
+        level = cls.get_level_for_update(stock_item_id, location_id)
 
         release_qty = min(quantity, level.reserved_quantity)
 

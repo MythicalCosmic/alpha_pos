@@ -37,6 +37,27 @@ class StockLevelRepository(BaseSyncRepository):
         return obj
 
     @classmethod
+    def get_or_create_level_for_update(cls, stock_item_id, location_id):
+        # Acquire a row-level lock for the duration of the surrounding
+        # transaction so concurrent mutations of the same level serialize.
+        # Must be called inside a @transaction.atomic block.
+        try:
+            return cls.model.objects.select_for_update().get(
+                stock_item_id=stock_item_id,
+                location_id=location_id,
+            )
+        except cls.model.DoesNotExist:
+            cls.model.objects.get_or_create(
+                stock_item_id=stock_item_id,
+                location_id=location_id,
+                defaults={'quantity': 0, 'reserved_quantity': 0},
+            )
+            return cls.model.objects.select_for_update().get(
+                stock_item_id=stock_item_id,
+                location_id=location_id,
+            )
+
+    @classmethod
     def get_total_quantity(cls, stock_item_id):
         result = cls.model.objects.filter(
             stock_item_id=stock_item_id, is_deleted=False
