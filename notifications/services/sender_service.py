@@ -1,6 +1,5 @@
 import html
 import logging
-from threading import Thread
 from notifications.models import NotificationSettings, NotificationTemplate, NotificationLog
 
 logger = logging.getLogger(__name__)
@@ -52,31 +51,8 @@ class SenderService:
 
     @classmethod
     def _send_async(cls, text, notification_type):
-        def _do():
-            from notifications.services.telegram_service import TelegramService
-            from notifications.services.queue_service import QueueService
-
-            settings = NotificationSettings.load()
-            for chat_id in (settings.chat_ids or []):
-                try:
-                    ok, error = TelegramService.send_message(text)
-                    NotificationLog.objects.create(
-                        notification_type=notification_type,
-                        recipient=str(chat_id),
-                        message_text=text,
-                        status='SENT' if ok else 'FAILED',
-                        error_message=error if not ok else '',
-                    )
-                    if not ok:
-                        QueueService.add(text, notification_type)
-                except Exception as e:
-                    NotificationLog.objects.create(
-                        notification_type=notification_type,
-                        recipient=str(chat_id),
-                        message_text=text,
-                        status='FAILED',
-                        error_message=str(e),
-                    )
-                    QueueService.add(text, notification_type)
-                break  # send_message already sends to all chat_ids
-        Thread(target=_do, daemon=True).start()
+        # Hand off to the single background worker which serializes sends and
+        # enforces a per-chat minimum interval. Avoids spawning a thread per
+        # message under burst load.
+        from notifications.services.worker import enqueue
+        enqueue(text, notification_type)
