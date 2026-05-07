@@ -1,8 +1,22 @@
+import html
 import logging
 from threading import Thread
 from notifications.models import NotificationSettings, NotificationTemplate, NotificationLog
 
 logger = logging.getLogger(__name__)
+
+
+def _escape_context(context):
+    # Escape every string value so user-controlled fields (cashier names,
+    # product names, customer phones) cannot break Telegram's HTML parser
+    # or inject markup. Templates may still contain literal <b>, <i>, etc.
+    out = {}
+    for k, v in context.items():
+        if isinstance(v, str):
+            out[k] = html.escape(v, quote=False)
+        else:
+            out[k] = v
+    return out
 
 
 class SenderService:
@@ -24,7 +38,7 @@ class SenderService:
         context['brand'] = settings.brand_name
 
         try:
-            text = template.template_text.format(**context)
+            text = template.template_text.format(**_escape_context(context))
         except (KeyError, IndexError) as e:
             logger.error(f'Template render error for {notification_type}: {e}')
             return

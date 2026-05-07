@@ -3,7 +3,7 @@ from threading import Thread
 from base.notifications.config import NotificationConfig
 from base.notifications.telegram import TelegramAPI
 from base.notifications.queue import NotificationQueue
-from base.notifications.helpers import format_datetime, format_money, format_prep_time
+from base.notifications.helpers import format_datetime, format_money, format_prep_time, html_escape
 from base.notifications import messages
 
 logger = logging.getLogger(__name__)
@@ -18,11 +18,14 @@ class OrderNotification:
 
         items_lines = []
         for item in order.items.select_related('product').all():
-            items_lines.append(f'  {item.product.name} x{item.quantity} — {format_money(item.price * item.quantity)} so\'m')
+            items_lines.append(
+                f'  {html_escape(item.product.name)} x{item.quantity} — '
+                f'{format_money(item.price * item.quantity)} so\'m'
+            )
 
         cashier_name = '—'
         if order.cashier:
-            cashier_name = f'{order.cashier.first_name} {order.cashier.last_name}'
+            cashier_name = html_escape(f'{order.cashier.first_name} {order.cashier.last_name}')
 
         order_type = messages.ORDER_TYPE_LABELS.get(order.order_type, order.order_type)
         _, time_str = format_datetime()

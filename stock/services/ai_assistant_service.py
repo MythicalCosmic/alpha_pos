@@ -1093,8 +1093,22 @@ class AIStockAssistant:
         ]
         return any(kw in q for kw in analytics_keywords)
 
+    MAX_QUERY_LENGTH = 2000
+
     @classmethod
     def process_query(cls, query: str, context: Dict = None, user_id: int = None, location_id: int = None) -> Dict[str, Any]:
+        if not isinstance(query, str) or not query.strip():
+            return {
+                "success": False,
+                "error": "invalid_query",
+                "response": "Query must be a non-empty string.",
+            }
+        if len(query) > cls.MAX_QUERY_LENGTH:
+            return {
+                "success": False,
+                "error": "query_too_long",
+                "response": f"Query exceeds {cls.MAX_QUERY_LENGTH}-character limit.",
+            }
         try:
             stock_data = cls._get_all_stock_data()
             sales_data = cls._get_sales_data()

@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timedelta
 from django.db import transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Q, Sum, F, Count
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
@@ -511,7 +511,7 @@ class StockTransactionService:
         )
 
         summary = transactions.values("movement_type").annotate(
-            count=Sum("id"),
+            count=Count("id"),
             total_qty=Sum("base_quantity")
         )
 

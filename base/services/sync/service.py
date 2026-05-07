@@ -25,6 +25,14 @@ class SyncService:
         SyncQueue.add(model_name, str(instance.uuid), instance.to_sync_dict())
 
     @classmethod
+    def queue_tombstone(cls, model_name, uuid_val, payload):
+        # Push a delete-marker payload for a record that has been hard-deleted
+        # locally, so the peer applies the same deletion semantics.
+        if not SyncConfig.is_enabled():
+            return
+        SyncQueue.add(model_name, uuid_val, payload)
+
+    @classmethod
     def push(cls):
         if not SyncConfig.is_enabled():
             return {'success': False, 'message': 'Sync not enabled'}

@@ -79,6 +79,27 @@ class SyncMixin(models.Model):
             self.save(update_fields=['is_deleted', 'synced_at', 'sync_version'])
 
     def hard_delete(self):
+        # Capture identity for a tombstone before we delete the row, then
+        # enqueue a soft-delete sync record on commit so peers also remove
+        # the record. Without this, hard deletes on one branch never
+        # propagate and leave dangling FK references on others.
+        if self._is_sync_on_save() and self.pk:
+            try:
+                from base.services.sync.service import SyncService
+                model_name = self.__class__.__name__.lower()
+                tombstone = self.to_sync_dict()
+                tombstone['is_deleted'] = True
+                tombstone['sync_version'] = (self.sync_version or 0) + 1
+                uuid_val = str(self.uuid)
+                transaction.on_commit(
+                    lambda: SyncService.queue_tombstone(model_name, uuid_val, tombstone)
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Failed to queue tombstone for {self.__class__.__name__} pk={self.pk}",
+                    exc_info=True,
+                )
         super().delete()
 
     def _queue_for_sync(self):

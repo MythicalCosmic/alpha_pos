@@ -175,6 +175,10 @@ SYNC_TIMEOUT = 30
 SYNC_MAX_RETRIES = 5
 SYNC_BATCH_SIZE = 500
 ALLOWED_BRANCH_TOKENS = []
+# Bind sync tokens to a specific branch so X-Branch-ID cannot be spoofed.
+# Format: {"branch_token_string": "branch_id"}. When set, this takes
+# precedence over ALLOWED_BRANCH_TOKENS (which has no per-branch binding).
+BRANCH_TOKEN_MAP = {}
 SYNC_PULL_ENABLED = True
 
 # Security settings for production

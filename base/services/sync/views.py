@@ -17,6 +17,22 @@ def health(request):
     })
 
 
+def _resolve_branch_token(token):
+    # Prefer BRANCH_TOKEN_MAP ({token: branch_id}) which binds each token to a
+    # single branch and lets us reject mismatched X-Branch-ID headers. Fall
+    # back to the legacy ALLOWED_BRANCH_TOKENS list (no binding) if the map
+    # isn't configured.
+    from django.utils.crypto import constant_time_compare
+    token_map = getattr(settings, 'BRANCH_TOKEN_MAP', None) or {}
+    for known_token, bound_branch in token_map.items():
+        if constant_time_compare(token, known_token):
+            return bound_branch, True
+    allowed_tokens = getattr(settings, 'ALLOWED_BRANCH_TOKENS', [])
+    if allowed_tokens and any(constant_time_compare(token, t) for t in allowed_tokens):
+        return None, True
+    return None, False
+
+
 @csrf_exempt
 @require_POST
 def receive(request):
@@ -24,6 +40,7 @@ def receive(request):
     if not auth.startswith('Branch ') and not auth.startswith('Cloud '):
         return JsonResponse({'error': 'Invalid authorization'}, status=401)
 
+    bound_branch = None
     if auth.startswith('Cloud '):
         from django.utils.crypto import constant_time_compare
         token = auth[6:]
@@ -31,13 +48,23 @@ def receive(request):
         if not expected or not constant_time_compare(token, expected):
             return JsonResponse({'error': 'Invalid cloud token'}, status=401)
     elif auth.startswith('Branch '):
-        from django.utils.crypto import constant_time_compare
         token = auth[7:]
-        allowed_tokens = getattr(settings, 'ALLOWED_BRANCH_TOKENS', [])
-        if not allowed_tokens or not any(constant_time_compare(token, t) for t in allowed_tokens):
+        bound_branch, ok = _resolve_branch_token(token)
+        if not ok:
             return JsonResponse({'error': 'Invalid branch token'}, status=401)
 
     branch_id = request.META.get('HTTP_X_BRANCH_ID', 'unknown')
+
+    # If the token was bound to a specific branch, the caller cannot claim a
+    # different branch_id — otherwise any holder of any valid token could
+    # write records as another branch and poison per-branch filtering.
+    if bound_branch is not None and branch_id not in (bound_branch, 'unknown'):
+        return JsonResponse(
+            {'error': f'X-Branch-ID does not match token (expected {bound_branch})'},
+            status=403,
+        )
+    if bound_branch is not None:
+        branch_id = bound_branch
 
     data, error = parse_json_body(request)
     if error:
@@ -151,11 +178,23 @@ def changes(request):
     if not auth.startswith('Branch '):
         return JsonResponse({'error': 'Invalid authorization'}, status=401)
 
+    token = auth[7:]
+    bound_branch, ok = _resolve_branch_token(token)
+    if not ok:
+        return JsonResponse({'error': 'Invalid branch token'}, status=401)
+
     from base.services.sync.config import SYNC_ORDER, get_all_models
     from base.services.sync.service import SyncService
     from django.utils.dateparse import parse_datetime
 
     requesting_branch = request.META.get('HTTP_X_BRANCH_ID', '')
+    if bound_branch is not None:
+        if requesting_branch and requesting_branch != bound_branch:
+            return JsonResponse(
+                {'error': f'X-Branch-ID does not match token (expected {bound_branch})'},
+                status=403,
+            )
+        requesting_branch = bound_branch
     since_param = request.GET.get('since')
     since_dt = parse_datetime(since_param) if since_param else None
     per_page = min(int(request.GET.get('per_page', 1000)), 5000)
