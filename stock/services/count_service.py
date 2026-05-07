@@ -514,8 +514,17 @@ class StockCountService:
                 notes=f"Count adjustment: {count.count_number}"
             )
 
+            if status >= 400:
+                # Surface the failure to the caller's atomic so the entire
+                # count approval rolls back instead of marking some items
+                # adjusted while leaving levels untouched for others.
+                raise RuntimeError(
+                    f"Count adjustment failed for item {item.stock_item_id}: "
+                    f"{result.get('message', 'unknown error')}"
+                )
+
             item.is_adjusted = True
-            if status < 400 and "transaction_id" in result.get("data", {}):
+            if "transaction_id" in result.get("data", {}):
                 from stock.models import StockTransaction
                 item.adjustment_transaction_id = result["data"]["transaction_id"]
             item.save(update_fields=["is_adjusted", "adjustment_transaction"])

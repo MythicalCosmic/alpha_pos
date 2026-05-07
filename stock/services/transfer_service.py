@@ -373,6 +373,7 @@ class StockTransferService:
                 notes=f"Transfer to {transfer.to_location.name}"
             )
             if status >= 400:
+                transaction.set_rollback(True)
                 return result, status
 
             item.shipped_qty = qty
@@ -417,6 +418,7 @@ class StockTransferService:
                 notes=f"Transfer from {transfer.from_location.name}"
             )
             if status >= 400:
+                transaction.set_rollback(True)
                 return result, status
 
             item.received_qty = qty
@@ -462,6 +464,7 @@ class StockTransferService:
                     notes=f"Transfer cancelled: {reason}"
                 )
                 if status >= 400:
+                    transaction.set_rollback(True)
                     return result, status
 
         transfer.status = StockTransfer.Status.CANCELLED

@@ -638,6 +638,7 @@ class ProductionOrderService:
                     notes=f"Production: {po.order_number}"
                 )
                 if status >= 400:
+                    transaction.set_rollback(True)
                     return result, status
 
                 if result.get("data", {}).get("batches"):
@@ -655,6 +656,7 @@ class ProductionOrderService:
                     notes=f"Production: {po.order_number}"
                 )
                 if status >= 400:
+                    transaction.set_rollback(True)
                     return result, status
 
             if ing.actual_quantity:
@@ -690,6 +692,7 @@ class ProductionOrderService:
                 quality_status=quality_status,
             )
             if batch_status >= 400:
+                transaction.set_rollback(True)
                 return batch_result, batch_status
             batch = StockBatch.objects.get(id=batch_result["data"]["id"])
 
@@ -706,6 +709,7 @@ class ProductionOrderService:
             notes=f"Production output: {po.order_number}"
         )
         if status >= 400:
+            transaction.set_rollback(True)
             return result, status
 
         ProductionOrderOutputRepository.create(
@@ -742,6 +746,7 @@ class ProductionOrderService:
                     notes=f"By-product from: {po.order_number}"
                 )
                 if bp_status >= 400:
+                    transaction.set_rollback(True)
                     return bp_result, bp_status
 
 

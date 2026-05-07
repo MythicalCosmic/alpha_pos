@@ -469,6 +469,7 @@ class StockBatchService:
                     notes=notes
                 )
                 if status >= 400:
+                    transaction.set_rollback(True)
                     return result, status
 
                 consumed_batches.append({
@@ -483,6 +484,7 @@ class StockBatchService:
         if remaining > 0:
             stock_item = StockItemRepository.get_by_id(stock_item_id)
             item_name = stock_item.name if stock_item else f"item {stock_item_id}"
+            transaction.set_rollback(True)
             return ServiceResponse.error(
                 f"Insufficient stock for {item_name}: "
                 f"requested {quantity}, available {quantity - remaining}"

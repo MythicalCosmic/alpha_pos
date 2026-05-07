@@ -86,6 +86,9 @@ class OrderStockService:
                     })
 
         if errors and not settings.allow_negative_stock:
+            # Roll back any deductions already applied in this transaction so the
+            # order's stock state is all-or-nothing.
+            transaction.set_rollback(True)
             return ServiceResponse.error(f"Stock deduction failed: {errors}")
 
         return ServiceResponse.success(data={
@@ -123,6 +126,7 @@ class OrderStockService:
             )
 
             if status >= 400:
+                transaction.set_rollback(True)
                 return result, status
 
             deductions.append({
@@ -164,6 +168,7 @@ class OrderStockService:
                     )
 
                     if status >= 400:
+                        transaction.set_rollback(True)
                         return result, status
 
                     deductions.append({
