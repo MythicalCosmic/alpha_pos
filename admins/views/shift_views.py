@@ -6,6 +6,8 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
+from base.security.audit import audit
+from base.models import AuditLog
 from admins.services.shift_service import ShiftTemplateService, ShiftService
 
 
@@ -149,6 +151,19 @@ def shift_reconcile(request, shift_id):
         notes=data.get('notes', ''),
         reconciled_by_id=request.user.id,
     )
+    if result.get('success'):
+        payload = result.get('data', {})
+        audit(
+            request,
+            AuditLog.Action.SHIFT_RECONCILE,
+            target_type='Shift',
+            target_id=shift_id,
+            metadata={
+                'expected_cash': payload.get('expected_cash'),
+                'actual_cash': payload.get('actual_cash'),
+                'difference': payload.get('difference'),
+            },
+        )
     return JsonResponse(result, status=status_code)
 
 

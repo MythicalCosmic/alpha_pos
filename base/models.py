@@ -920,3 +920,53 @@ class SyncQueueRecord(models.Model):
 
     def __str__(self):
         return f"SyncQueue<{self.model_name} {self.record_uuid}>"
+
+
+class AuditLog(SyncMixin, models.Model):
+    """Append-only record of sensitive admin actions.
+
+    Written from the view layer where the actor (request.user) and the client
+    IP are already known. Conflict-free under sync: each row is created once
+    with sync_version=1 and never mutated, so the standard SyncMixin tiebreak
+    naturally leaves it alone on the receiving side.
+    """
+
+    class Action(models.TextChoices):
+        INKASSA_PERFORM = "INKASSA_PERFORM", "Inkassa performed"
+        USER_DELETE = "USER_DELETE", "User deleted"
+        SHIFT_RECONCILE = "SHIFT_RECONCILE", "Shift reconciled"
+        ORDER_CANCEL = "ORDER_CANCEL", "Order canceled"
+
+    actor = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_actions',
+    )
+    action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
+    target_type = models.CharField(max_length=32, blank=True, default='', db_index=True)
+    target_id = models.PositiveBigIntegerField(null=True, blank=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    ip_address = models.CharField(max_length=45, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @classmethod
+    def record(cls, *, actor, action, target_type='', target_id=None,
+               metadata=None, ip_address=''):
+        return cls.objects.create(
+            actor=actor,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            metadata=metadata or {},
+            ip_address=ip_address,
+        )
+
+    def __str__(self):
+        return f"AuditLog<{self.action} {self.target_type}#{self.target_id}>"

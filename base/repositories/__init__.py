@@ -11,3 +11,4 @@ from base.repositories.inkassa import InkassaRepository
 from base.repositories.place import PlaceRepository
 from base.repositories.table import TableRepository
 from base.repositories.shift import ShiftTemplateRepository, ShiftRepository, CashReconciliationRepository
+from base.repositories.audit import AuditLogRepository

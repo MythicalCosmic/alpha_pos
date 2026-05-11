@@ -5,6 +5,8 @@ from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
+from base.security.audit import audit
+from base.models import AuditLog
 from admins.services.order_service import AdminOrderService
 from admins.requests.order_requests import create_order_request, update_order_request
 
@@ -223,6 +225,13 @@ def unmark_item_ready(request, order_id, item_id):
 @permission_required('order.update')
 def cancel_order(request, order_id):
     result, status_code = AdminOrderService.update_order_status(order_id, 'CANCELED')
+    if result.get('success'):
+        audit(
+            request,
+            AuditLog.Action.ORDER_CANCEL,
+            target_type='Order',
+            target_id=order_id,
+        )
     return JsonResponse(result, status=status_code)
 
 

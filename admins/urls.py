@@ -1,6 +1,7 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
+from admins.views import audit_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -88,4 +89,6 @@ urlpatterns = [
     path('shifts/<int:shift_id>', shift_views.shift_detail),
     path('shifts/<int:shift_id>/end', shift_views.shift_end),
     path('shifts/<int:shift_id>/reconcile', shift_views.shift_reconcile),
+
+    path('audit-log', audit_views.audit_log, name='audit_log'),
 ]

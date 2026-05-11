@@ -4,6 +4,8 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from base.helpers.request import parse_json_body
 from base.helpers.response import json_response
 from base.security.auth import login_required
+from base.security.audit import audit
+from base.models import AuditLog
 from waiters.services.order_service import WaiterOrderService
 
 
@@ -136,6 +138,14 @@ def mark_ready(request, order_id):
 @login_required
 def cancel_order(request, order_id):
     result, status_code = WaiterOrderService.cancel_order(order_id, waiter_user_id=request.user.id)
+    if result.get('success'):
+        audit(
+            request,
+            AuditLog.Action.ORDER_CANCEL,
+            target_type='Order',
+            target_id=order_id,
+            metadata={'role': 'WAITER'},
+        )
     return JsonResponse(result, status=status_code)
 
 

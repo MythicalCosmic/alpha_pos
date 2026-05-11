@@ -7,6 +7,8 @@ from django.views.decorators.http import require_http_methods
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.permissions import admin_required, permission_required
+from base.security.audit import audit
+from base.models import AuditLog
 from admins.services.user_service import AdminUserService
 
 
@@ -59,4 +61,11 @@ def user_detail(request, user_id):
 
     if request.method == "DELETE":
         result, status_code = AdminUserService.delete_user(user_id)
+        if result.get('success'):
+            audit(
+                request,
+                AuditLog.Action.USER_DELETE,
+                target_type='User',
+                target_id=user_id,
+            )
         return JsonResponse(result, status=status_code)

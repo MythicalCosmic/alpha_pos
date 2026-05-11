@@ -6,6 +6,8 @@ from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from base.security.auth import login_required
+from base.security.audit import audit
+from base.models import AuditLog
 from admins.services.inkassa_service import AdminInkassaService
 
 
@@ -51,4 +53,17 @@ def inkassa_perform(request):
         return json_response(error)
 
     result, status_code = AdminInkassaService.perform(request.user, data)
+    if result.get('success'):
+        payload = result.get('data', {})
+        audit(
+            request,
+            AuditLog.Action.INKASSA_PERFORM,
+            target_type='CashRegister',
+            metadata={
+                'amount_removed': payload.get('amount_removed'),
+                'balance_before': payload.get('balance_before'),
+                'balance_after': payload.get('balance_after'),
+                'inkassa_ids': [i.get('id') for i in payload.get('inkassas', [])],
+            },
+        )
     return JsonResponse(result, status=status_code)

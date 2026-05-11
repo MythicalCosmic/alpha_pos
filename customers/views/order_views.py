@@ -4,6 +4,8 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.auth import login_required
+from base.security.audit import audit
+from base.models import AuditLog
 from customers.services.order_service import CustomerOrderService
 from customers.requests.order_requests import create_order_request
 
@@ -211,6 +213,14 @@ def cancel_order(request, order_id):
         order_id, 'CANCELED', cashier_id,
         user_id=request.user.id, user_role=request.user.role,
     )
+    if result.get('success'):
+        audit(
+            request,
+            AuditLog.Action.ORDER_CANCEL,
+            target_type='Order',
+            target_id=order_id,
+            metadata={'role': request.user.role},
+        )
     return JsonResponse(result, status=status_code)
 
 
