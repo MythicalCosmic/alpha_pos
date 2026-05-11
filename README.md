@@ -76,6 +76,16 @@ Endpoint families:
 - `@login_required` — cashier / customer / waiter flows.
 - `@permission_required('order.update', …)` — fine-grained checks on top.
 
+## Idempotency
+
+Order write endpoints (`orders/create`, `orders/<id>/pay`, `orders/<id>/cancel`
+across the admin, customer, and waiter surfaces) accept an
+`Idempotency-Key: <opaque-token>` header. Clients should send a fresh UUID per
+logical request and reuse the same value on retries — the server replays the
+original response on a duplicate key instead of acting twice, and returns
+`409` while the original is still in flight. The header is optional; without
+it the endpoint behaves the same as before. Stored in `base.IdempotencyKey`.
+
 ## Sync
 
 `/api/sync/` exposes:

@@ -970,3 +970,36 @@ class AuditLog(SyncMixin, models.Model):
 
     def __str__(self):
         return f"AuditLog<{self.action} {self.target_type}#{self.target_id}>"
+
+
+class IdempotencyKey(models.Model):
+    """Local-only dedup record for retried write requests.
+
+    Keyed by (scope, key). `scope` embeds the actor id and the endpoint so two
+    clients can't accidentally replay each other's responses with the same
+    header value. `response_status == 0` flags a still-in-flight claim and
+    causes concurrent retries to fail fast with 409 instead of double-acting.
+
+    Not a SyncMixin — like SyncQueueRecord this is per-branch bookkeeping and
+    must never propagate.
+    """
+
+    scope = models.CharField(max_length=100, db_index=True)
+    key = models.CharField(max_length=128, db_index=True)
+    response_status = models.PositiveSmallIntegerField(default=0)
+    response_body = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'idempotency_key'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['scope', 'key'],
+                name='uniq_idempotency_scope_key',
+            ),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"IdempotencyKey<{self.scope} {self.key[:12]}…>"

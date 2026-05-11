@@ -5,6 +5,7 @@ from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.auth import login_required
 from base.security.audit import audit
+from base.security.idempotency import idempotent
 from base.models import AuditLog
 from customers.services.order_service import CustomerOrderService
 from customers.requests.order_requests import create_order_request
@@ -43,6 +44,7 @@ def get_order(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@idempotent('orders.create')
 def create_order(request):
     data, error = create_order_request(request)
     if error:
@@ -159,6 +161,7 @@ def update_status(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@idempotent('orders.pay')
 def pay_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.mark_as_paid(
@@ -207,6 +210,7 @@ def unmark_item_ready(request, order_id, item_id):
 @csrf_exempt
 @require_POST
 @login_required
+@idempotent('orders.cancel')
 def cancel_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_status(

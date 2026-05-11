@@ -5,6 +5,7 @@ from base.helpers.request import parse_json_body
 from base.helpers.response import json_response
 from base.security.auth import login_required
 from base.security.audit import audit
+from base.security.idempotency import idempotent
 from base.models import AuditLog
 from waiters.services.order_service import WaiterOrderService
 
@@ -29,6 +30,7 @@ def my_orders(request):
 @csrf_exempt
 @require_POST
 @login_required
+@idempotent('orders.create')
 def create_order(request):
     data, error = parse_json_body(request)
     if error:
@@ -136,6 +138,7 @@ def mark_ready(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@idempotent('orders.cancel')
 def cancel_order(request, order_id):
     result, status_code = WaiterOrderService.cancel_order(order_id, waiter_user_id=request.user.id)
     if result.get('success'):

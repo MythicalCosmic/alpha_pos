@@ -6,6 +6,7 @@ from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
 from base.security.audit import audit
+from base.security.idempotency import idempotent
 from base.models import AuditLog
 from admins.services.order_service import AdminOrderService
 from admins.requests.order_requests import create_order_request, update_order_request
@@ -26,6 +27,7 @@ def _check_permission(request, perm):
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 @admin_required
+@idempotent('orders.create')
 def orders(request):
     if request.method == "GET":
         page = int(request.GET.get('page', 1))
@@ -178,6 +180,7 @@ def update_status(request, order_id):
 @require_POST
 @admin_required
 @permission_required('order.update')
+@idempotent('orders.pay')
 def pay_order(request, order_id):
     result, status_code = AdminOrderService.mark_as_paid(order_id)
     return JsonResponse(result, status=status_code)
@@ -223,6 +226,7 @@ def unmark_item_ready(request, order_id, item_id):
 @require_POST
 @admin_required
 @permission_required('order.update')
+@idempotent('orders.cancel')
 def cancel_order(request, order_id):
     result, status_code = AdminOrderService.update_order_status(order_id, 'CANCELED')
     if result.get('success'):
