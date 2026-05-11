@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
@@ -11,6 +12,15 @@ from stock.services.ai_assistant_service import AIStockAssistant
 @require_POST
 @admin_required
 def ai_query(request):
+    # The assistant calls Gemini. Without a key the SDK raises deep in the
+    # request, surfacing as a 500 with no actionable message. Return 503 so
+    # the client can hide the feature instead of showing a generic failure.
+    if not getattr(settings, 'GEMINI_API_KEY', ''):
+        return JsonResponse({
+            'success': False,
+            'message': 'AI assistant is not configured (GEMINI_API_KEY missing).',
+        }, status=503)
+
     data, error = parse_json_body(request)
     if error:
         return json_response(error)

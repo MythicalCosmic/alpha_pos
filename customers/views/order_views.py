@@ -208,7 +208,7 @@ def unmark_item_ready(request, order_id, item_id):
 def cancel_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_status(
-        order_id, 'CANCELLED', cashier_id,
+        order_id, 'CANCELED', cashier_id,
         user_id=request.user.id, user_role=request.user.role,
     )
     return JsonResponse(result, status=status_code)

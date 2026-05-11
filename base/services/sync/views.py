@@ -33,6 +33,29 @@ def _resolve_branch_token(token):
     return None, False
 
 
+def _management_authorized(request):
+    # Management endpoints (status / trigger / queue / report …) expose internal
+    # state and can trigger full pushes. In production we require the operator
+    # to set SYNC_MANAGEMENT_TOKEN and the caller to present it; in DEBUG the
+    # endpoints stay open so local development isn't blocked.
+    from django.utils.crypto import constant_time_compare
+    expected = getattr(settings, 'SYNC_MANAGEMENT_TOKEN', '') or ''
+    if not expected:
+        return getattr(settings, 'DEBUG', False)
+    auth = request.META.get('HTTP_AUTHORIZATION', '')
+    prefix = 'Management '
+    if not auth.startswith(prefix):
+        return False
+    return constant_time_compare(auth[len(prefix):], expected)
+
+
+def _management_denied():
+    return JsonResponse(
+        {'error': 'Sync management endpoint requires Authorization: Management <token>'},
+        status=401,
+    )
+
+
 @csrf_exempt
 @require_POST
 def receive(request):
@@ -91,6 +114,9 @@ def receive(request):
 @csrf_exempt
 @require_GET
 def status(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.service import SyncService
     from base.services.sync.config import SyncConfig
 
@@ -103,6 +129,9 @@ def status(request):
 @csrf_exempt
 @require_POST
 def trigger(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.service import SyncService
     from base.services.sync.config import SyncConfig, is_local_mode
 
@@ -119,6 +148,9 @@ def trigger(request):
 @csrf_exempt
 @require_POST
 def full_push(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.service import SyncService
     from base.services.sync.config import SyncConfig, is_local_mode
 
@@ -135,6 +167,9 @@ def full_push(request):
 @csrf_exempt
 @require_GET
 def queue_view(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.queue import SyncQueue
 
     records = SyncQueue.get_all()
@@ -153,6 +188,9 @@ def queue_view(request):
 @csrf_exempt
 @require_http_methods(["DELETE"])
 def queue_clear(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     confirm = request.GET.get('confirm', '').lower() == 'true'
     if not confirm:
         return JsonResponse({
@@ -167,6 +205,9 @@ def queue_clear(request):
 @csrf_exempt
 @require_GET
 def report(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.service import SyncService
     return JsonResponse(SyncService.status_report())
 
@@ -238,6 +279,9 @@ def changes(request):
 @csrf_exempt
 @require_POST
 def trigger_pull(request):
+    if not _management_authorized(request):
+        return _management_denied()
+
     from base.services.sync.service import SyncService
     from base.services.sync.config import SyncConfig, is_local_mode
 

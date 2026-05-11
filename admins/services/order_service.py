@@ -10,7 +10,7 @@ from base.helpers.response import ServiceResponse
 logger = logging.getLogger(__name__)
 
 
-ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED', 'COMPLETED']
+ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELED', 'COMPLETED']
 
 ALLOWED_ORDER_FIELDS = {
     'created_at', '-created_at', 'updated_at', '-updated_at',
@@ -461,7 +461,7 @@ class AdminOrderService:
         if status not in ALLOWED_STATUSES:
             return ServiceResponse.error(f'Invalid status. Allowed: {", ".join(ALLOWED_STATUSES)}')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot update cancelled order')
 
         old_status = order.status
@@ -505,7 +505,7 @@ class AdminOrderService:
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cancelled order cannot be paid')
 
         if order.is_paid:
@@ -565,7 +565,7 @@ class AdminOrderService:
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot mark cancelled order as ready')
 
         if order.status == 'READY':
@@ -596,7 +596,7 @@ class AdminOrderService:
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot modify cancelled order')
 
         if order.status == 'READY':
@@ -649,7 +649,7 @@ class AdminOrderService:
         if not order:
             return ServiceResponse.not_found('Order not found')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot modify cancelled order')
 
         from base.models import OrderItem as OI

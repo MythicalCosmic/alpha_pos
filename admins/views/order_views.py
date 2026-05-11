@@ -222,7 +222,7 @@ def unmark_item_ready(request, order_id, item_id):
 @admin_required
 @permission_required('order.update')
 def cancel_order(request, order_id):
-    result, status_code = AdminOrderService.update_order_status(order_id, 'CANCELLED')
+    result, status_code = AdminOrderService.update_order_status(order_id, 'CANCELED')
     return JsonResponse(result, status=status_code)
 
 

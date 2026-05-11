@@ -11,7 +11,7 @@ from base.helpers.response import ServiceResponse
 from notifications.handlers.order import OrderNotification
 
 
-ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELLED']
+ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELED']
 
 ALLOWED_ORDER_FIELDS = {
     'created_at', '-created_at', 'updated_at', '-updated_at',
@@ -463,7 +463,7 @@ class CustomerOrderService:
         if status not in ALLOWED_STATUSES:
             return ServiceResponse.error(f'Invalid status. Allowed: {", ".join(ALLOWED_STATUSES)}')
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot update cancelled order')
 
         old_status = order.status
@@ -480,7 +480,7 @@ class CustomerOrderService:
 
         if status == 'READY':
             OrderNotification.on_order_ready(order_id)
-        elif status == 'CANCELLED':
+        elif status == 'CANCELED':
             OrderNotification.on_order_cancelled(order_id)
 
         try:
@@ -513,7 +513,7 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot modify cancelled order')
 
         if order.status == 'READY':
@@ -582,7 +582,7 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot modify cancelled order')
 
         from base.models import OrderItem
@@ -616,7 +616,7 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cancelled order cannot be paid')
 
         if order.is_paid:
@@ -660,7 +660,7 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot mark cancelled order as ready')
 
         if order.status == 'READY':

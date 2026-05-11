@@ -498,7 +498,7 @@ class OrderStatusHandler:
             )
             result["actions"].append({"action": "deduct", "result": res})
 
-        if new_status == "CANCELLED":
+        if new_status == "CANCELED":
             if settings.reserve_on_order_create:
                 OrderStockService.release_reservation(order_id, user_id)
 

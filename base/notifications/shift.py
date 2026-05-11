@@ -134,8 +134,8 @@ class ShiftNotification:
         agg = orders.aggregate(
             total=Count('id'),
             paid=Count('id', filter=Q(is_paid=True)),
-            unpaid=Count('id', filter=Q(is_paid=False) & ~Q(status='CANCELLED')),
-            cancelled=Count('id', filter=Q(status='CANCELLED')),
+            unpaid=Count('id', filter=Q(is_paid=False) & ~Q(status='CANCELED')),
+            cancelled=Count('id', filter=Q(status='CANCELED')),
             completed=Count('id', filter=Q(status='COMPLETED')),
             revenue=Sum('total_amount', filter=Q(is_paid=True)),
             avg_value=Avg('total_amount', filter=Q(is_paid=True)),

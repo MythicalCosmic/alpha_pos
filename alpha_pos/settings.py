@@ -5,7 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-SECRET_KEY = os.environ.get('SECRET_KEY', '')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'secret-key-not-set')
 if not SECRET_KEY:
     if DEBUG:
         SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
@@ -185,6 +185,12 @@ ALLOWED_BRANCH_TOKENS = []
 # precedence over ALLOWED_BRANCH_TOKENS (which has no per-branch binding).
 BRANCH_TOKEN_MAP = {}
 SYNC_PULL_ENABLED = True
+
+# Gates the sync management endpoints (status / trigger / queue / report …).
+# Production must set this — when DEBUG is off and the token is empty the
+# endpoints refuse to serve, since they expose internal queue state and can
+# trigger full pushes. DEBUG keeps them open for local development.
+SYNC_MANAGEMENT_TOKEN = os.environ.get('SYNC_MANAGEMENT_TOKEN', '')
 
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True

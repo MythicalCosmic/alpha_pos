@@ -370,7 +370,7 @@ class WaiterOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Cannot mark cancelled order as ready')
 
         if order.status == 'READY':
@@ -400,11 +400,11 @@ class WaiterOrderService:
         if ownership:
             return ownership
 
-        if order.status == 'CANCELLED':
+        if order.status == 'CANCELED':
             return ServiceResponse.error('Order is already cancelled')
 
         old_status = order.status
-        order.status = 'CANCELLED'
+        order.status = 'CANCELED'
         order.save(update_fields=['status'])
 
         if order.table:
@@ -421,13 +421,13 @@ class WaiterOrderService:
                     for i in order.items.all()
                 ]
                 OrderStatusHandler.on_status_change(
-                    order.id, old_status, 'CANCELLED', stock_items, location_id, order.user_id,
+                    order.id, old_status, 'CANCELED', stock_items, location_id, order.user_id,
                 )
         except Exception:
             logger.exception('non-critical stock-handler error in waiter order flow')
 
         return ServiceResponse.success(
-            data={'status': 'CANCELLED'},
+            data={'status': 'CANCELED'},
             message='Order cancelled successfully',
         )
 

@@ -27,7 +27,7 @@ def inkassa_stats(request):
 
 @csrf_exempt
 @require_GET
-@login_required
+@admin_required
 def inkassa_history(request):
     page, per_page = validate_pagination(request)
     result, status_code = AdminInkassaService.get_history(page=page, per_page=per_page)
@@ -36,7 +36,7 @@ def inkassa_history(request):
 
 @csrf_exempt
 @require_GET
-@login_required
+@admin_required
 def inkassa_detail(request, inkassa_id):
     result, status_code = AdminInkassaService.get_detail(inkassa_id)
     return JsonResponse(result, status=status_code)
@@ -44,7 +44,7 @@ def inkassa_detail(request, inkassa_id):
 
 @csrf_exempt
 @require_POST
-@login_required
+@admin_required
 def inkassa_perform(request):
     data, error = parse_json_body(request)
     if error:
