@@ -80,6 +80,31 @@ class Discount(SyncMixin, models.Model):
     class Meta:
         ordering = ['-created_at']
 
+    def clean(self):
+        # Bound percentage / secret-word values at the model level so an
+        # admin can't save a 150% rule that later computes
+        # discount_amount = 1.5 * subtotal in calculate_discount.
+        super().clean()
+        from django.core.exceptions import ValidationError
+        from decimal import Decimal
+        method = getattr(getattr(self, 'discount_type', None), 'method', None)
+        percent_methods = {'PERCENTAGE', 'SECRET_WORD', 'CUSTOM'}
+        if method in percent_methods:
+            if self.value is not None and (
+                self.value < Decimal('0') or self.value > Decimal('100')
+            ):
+                raise ValidationError(
+                    {'value': 'For percentage-based discounts, value must be 0–100.'},
+                )
+        if self.value is not None and self.value < Decimal('0'):
+            raise ValidationError({'value': 'Discount value cannot be negative.'})
+
+    def save(self, *args, **kwargs):
+        # Run model validation on every save so admin-bypassing code paths
+        # (DRF, custom services) still hit the bound check.
+        self.full_clean(exclude={'created_by', 'discount_type', 'free_product'})
+        super().save(*args, **kwargs)
+
     def to_sync_dict(self):
         data = super().to_sync_dict()
         data['discount_type_uuid'] = str(self.discount_type.uuid) if self.discount_type else None

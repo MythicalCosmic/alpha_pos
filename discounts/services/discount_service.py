@@ -341,6 +341,17 @@ class DiscountService:
             if discount.max_discount_amount:
                 discount_amount = min(discount_amount, discount.max_discount_amount)
 
+        # Final clamp: the discount can never exceed the applicable subtotal.
+        # Guards against badly-configured rules (e.g. a 150% PERCENTAGE that
+        # bypassed model validation, or FIXED_AMOUNT > subtotal). Without
+        # this, apply_to_order could write total_amount < 0 and mark_as_paid
+        # would call add_to_register with a negative value.
+        applicable_subtotal_dec = Decimal(str(applicable_subtotal or 0))
+        if discount_amount > applicable_subtotal_dec:
+            discount_amount = applicable_subtotal_dec
+        if discount_amount < Decimal('0'):
+            discount_amount = Decimal('0')
+
         return discount_amount.quantize(Decimal('0.01'))
 
     @staticmethod
@@ -445,7 +456,10 @@ class DiscountService:
         )['total'] or Decimal('0')
 
         order.discount_amount = total_discount
-        order.total_amount = order.subtotal - order.discount_amount
+        # Clamp at zero — defensive, since calculate_discount already caps
+        # per-rule, but multiple stackable discounts could in theory sum
+        # past subtotal.
+        order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
         order.save(update_fields=['discount_amount', 'total_amount'])
 
         return ServiceResponse.success(
@@ -500,7 +514,10 @@ class DiscountService:
         )['total'] or Decimal('0')
 
         order.discount_amount = total_discount
-        order.total_amount = order.subtotal - order.discount_amount
+        # Clamp at zero — defensive, since calculate_discount already caps
+        # per-rule, but multiple stackable discounts could in theory sum
+        # past subtotal.
+        order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
         order.save(update_fields=['discount_amount', 'total_amount'])
 
         return ServiceResponse.success(

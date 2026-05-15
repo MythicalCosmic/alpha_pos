@@ -280,6 +280,11 @@ class OrderRepository(BaseSyncRepository):
 
     @classmethod
     def get_avg_prep_time(cls, date_from=None, date_to=None):
+        # Aggregate in SQL: pre-fix this loaded every row to compute the
+        # mean in Python plus a separate count() query. On a busy day with
+        # tens of thousands of orders that's a long table scan and a lot of
+        # round-trips.
+        from django.db.models import F, Avg, ExpressionWrapper, DurationField
         qs = cls.model.objects.filter(
             is_deleted=False, status='READY', ready_at__isnull=False
         )
@@ -288,11 +293,18 @@ class OrderRepository(BaseSyncRepository):
         if date_to:
             qs = qs.filter(created_at__lte=date_to)
 
-        if not qs.exists():
+        result = qs.aggregate(
+            avg_duration=Avg(
+                ExpressionWrapper(
+                    F('ready_at') - F('created_at'),
+                    output_field=DurationField(),
+                ),
+            ),
+        )
+        avg = result.get('avg_duration')
+        if avg is None:
             return None
-
-        total = sum((o.ready_at - o.created_at).total_seconds() for o in qs.only('created_at', 'ready_at'))
-        return total / qs.count()
+        return avg.total_seconds()
 
     @classmethod
     def get_hourly_distribution(cls, date_from=None, date_to=None):

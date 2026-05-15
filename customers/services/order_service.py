@@ -711,15 +711,20 @@ class CustomerOrderService:
 
     @staticmethod
     def get_client_display_orders():
+        from django.db.models import Count, Q
         five_minutes_ago = timezone.now() - timedelta(minutes=5)
 
         # Cap result counts so a busy day doesn't materialize thousands of rows
-        # into the kitchen/lobby display response.
+        # into the kitchen/lobby display response. Annotate item counts in SQL
+        # — pre-fix each row issued two extra queries (items.count() and
+        # items.filter().count()), defeating the prefetch and turning a
+        # 200-row display into 600+ DB hits.
         processing = OrderRepository.model.objects.filter(
             status='PREPARING', is_deleted=False
-        ).select_related('user').prefetch_related('items').order_by(
-            'created_at'
-        )[:CustomerOrderService.DISPLAY_LIMIT]
+        ).select_related('user').annotate(
+            items_total=Count('items'),
+            items_ready=Count('items', filter=Q(items__ready_at__isnull=False)),
+        ).order_by('created_at')[:CustomerOrderService.DISPLAY_LIMIT]
 
         finished = OrderRepository.model.objects.filter(
             status='READY', is_deleted=False, ready_at__gte=five_minutes_ago
@@ -729,8 +734,8 @@ class CustomerOrderService:
 
         processing_list = []
         for order in processing:
-            total_items = order.items.count()
-            ready_items = order.items.filter(ready_at__isnull=False).count()
+            total_items = order.items_total
+            ready_items = order.items_ready
             processing_list.append({
                 'id': order.id,
                 'display_id': order.display_id,
