@@ -11,6 +11,7 @@ urlpatterns = [
     path('types/<str:type_slug>/', notification_views.notification_type_detail, name='type-detail'),
     path('templates/', notification_views.templates_list, name='template-list'),
     path('templates/<int:template_id>/', notification_views.template_detail, name='template-detail'),
+    path('templates/<int:template_id>/preview/', notification_views.template_preview, name='template-preview'),
     path('queue/', notification_views.queue_view, name='queue'),
     path('queue/process/', notification_views.queue_process, name='queue-process'),
     path('queue/clear/', notification_views.queue_clear, name='queue-clear'),

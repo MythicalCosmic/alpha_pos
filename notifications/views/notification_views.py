@@ -122,26 +122,91 @@ def notification_type_detail(request, type_slug):
     )
 
 
-@require_GET
-@admin_required
-def templates_list(request):
-    templates = NotificationTemplate.objects.all()
-    data = [
-        {
-            "id": t.id,
-            "notification_type": t.notification_type,
-            "name": t.name,
-            "template_text": t.template_text,
-            "is_enabled": t.is_enabled,
-            "language": t.language,
-        }
-        for t in templates
-    ]
-    return JsonResponse({"success": True, "data": data}, status=200)
+def _serialize_template(t):
+    return {
+        "id": t.id,
+        "notification_type": t.notification_type,
+        "name": t.name,
+        "template_text": t.template_text,
+        "description": t.description,
+        "is_enabled": t.is_enabled,
+        "language": t.language,
+    }
 
 
 @csrf_exempt
-@require_http_methods(["GET", "PUT"])
+@require_http_methods(["GET", "POST"])
+@admin_required
+def templates_list(request):
+    if request.method == "GET":
+        qs = NotificationTemplate.objects.all()
+        # Lightweight filters so admins can scope the list when building a
+        # dashboard.
+        ntype = request.GET.get('notification_type')
+        if ntype:
+            qs = qs.filter(notification_type=ntype)
+        language = request.GET.get('language')
+        if language:
+            qs = qs.filter(language=language)
+        if 'is_enabled' in request.GET:
+            qs = qs.filter(is_enabled=request.GET['is_enabled'].lower() in ('true', '1', 'yes'))
+        return JsonResponse(
+            {"success": True, "data": [_serialize_template(t) for t in qs]},
+            status=200,
+        )
+
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+
+    notification_type = (data.get('notification_type') or '').strip()
+    name = (data.get('name') or '').strip()
+    template_text = data.get('template_text', '')
+
+    missing = []
+    if not notification_type:
+        missing.append('notification_type')
+    if not name:
+        missing.append('name')
+    if not template_text:
+        missing.append('template_text')
+    if missing:
+        return JsonResponse(
+            {"success": False, "message": "Missing required fields",
+             "errors": {f: f"{f} is required" for f in missing}},
+            status=422,
+        )
+
+    err = _validate_template_text(template_text)
+    if err:
+        return JsonResponse(
+            {"success": False, "message": err, "errors": {"template_text": err}},
+            status=422,
+        )
+
+    if NotificationTemplate.objects.filter(notification_type=notification_type).exists():
+        return JsonResponse(
+            {"success": False, "message": "Template for this type already exists",
+             "errors": {"notification_type": "must be unique"}},
+            status=409,
+        )
+
+    template = NotificationTemplate.objects.create(
+        notification_type=notification_type,
+        name=name,
+        template_text=template_text,
+        description=data.get('description', ''),
+        is_enabled=data.get('is_enabled', True),
+        language=data.get('language', 'uz'),
+    )
+    return JsonResponse(
+        {"success": True, "message": "Created", "data": _serialize_template(template)},
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PUT", "DELETE"])
 @admin_required
 def template_detail(request, template_id):
     try:
@@ -153,17 +218,14 @@ def template_detail(request, template_id):
 
     if request.method == "GET":
         return JsonResponse(
-            {
-                "success": True,
-                "data": {
-                    "id": template.id,
-                    "notification_type": template.notification_type,
-                    "name": template.name,
-                    "template_text": template.template_text,
-                    "is_enabled": template.is_enabled,
-                    "language": template.language,
-                },
-            },
+            {"success": True, "data": _serialize_template(template)},
+            status=200,
+        )
+
+    if request.method == "DELETE":
+        template.delete()
+        return JsonResponse(
+            {"success": True, "message": "Deleted"},
             status=200,
         )
 
@@ -179,21 +241,74 @@ def template_detail(request, template_id):
                 status=422,
             )
         template.template_text = data["template_text"]
+    if "name" in data:
+        template.name = data["name"]
+    if "description" in data:
+        template.description = data["description"]
+    if "is_enabled" in data:
+        template.is_enabled = data["is_enabled"]
+    if "language" in data:
+        template.language = data["language"]
     template.save()
 
     return JsonResponse(
-        {
-            "success": True,
-            "message": "Updated",
-            "data": {
-                "id": template.id,
-                "notification_type": template.notification_type,
-                "name": template.name,
-                "template_text": template.template_text,
-                "is_enabled": template.is_enabled,
-                "language": template.language,
-            },
-        },
+        {"success": True, "message": "Updated", "data": _serialize_template(template)},
+        status=200,
+    )
+
+
+@csrf_exempt
+@require_POST
+@admin_required
+def template_preview(request, template_id):
+    """Render the template against an admin-supplied sample context without
+    sending a notification. Lets editors verify changes before they go live.
+    """
+    try:
+        template = NotificationTemplate.objects.get(id=template_id)
+    except NotificationTemplate.DoesNotExist:
+        return JsonResponse(
+            {"success": False, "message": "Template not found"}, status=404
+        )
+
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+
+    context = data.get('context') or {}
+    if not isinstance(context, dict):
+        return JsonResponse(
+            {"success": False, "message": "context must be a JSON object"},
+            status=422,
+        )
+
+    # Pull in the brand the same way SenderService does so previews match
+    # what an end recipient would see.
+    from notifications.models import NotificationSettings
+    settings = NotificationSettings.load()
+    context.setdefault('brand', settings.brand_name)
+
+    # Use the same escaping pipeline as the real send path so HTML behavior
+    # is identical between preview and live.
+    from notifications.services.sender_service import _escape_context
+    try:
+        rendered = template.template_text.format(**_escape_context(context))
+    except KeyError as exc:
+        missing_key = str(exc).strip("'")
+        return JsonResponse(
+            {"success": False,
+             "message": f"Missing context key: {missing_key}",
+             "errors": {"context": f"template references {{{missing_key}}} but context did not provide it"}},
+            status=422,
+        )
+    except (IndexError, ValueError) as exc:
+        return JsonResponse(
+            {"success": False, "message": f"Render error: {exc}"},
+            status=422,
+        )
+
+    return JsonResponse(
+        {"success": True, "data": {"rendered": rendered, "context": context}},
         status=200,
     )
 

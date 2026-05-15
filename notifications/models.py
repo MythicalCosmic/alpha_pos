@@ -31,6 +31,13 @@ class NotificationTemplate(models.Model):
     notification_type = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
     template_text = models.TextField()
+    # Free-text description listing which placeholders are valid for this
+    # template type. Surfaced on the admin UI so editors don't have to read
+    # the source to know what {variables} they can use.
+    description = models.TextField(
+        blank=True, default='',
+        help_text='Document the available {placeholders} for this template.',
+    )
     is_enabled = models.BooleanField(default=True)
     language = models.CharField(max_length=5, default='uz')
     created_at = models.DateTimeField(auto_now_add=True)
