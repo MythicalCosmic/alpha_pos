@@ -19,6 +19,7 @@ from django.http import HttpResponse
 from django.urls import path, include
 
 from base.services.sync.views import get_sync_urls
+from notifications.views import telegram_views
 
 
 def healthz(_request):
@@ -35,5 +36,10 @@ urlpatterns = [
     path('api/admins/notifications/', include('notifications.urls')),
     path('api/waiters/', include('waiters.urls')),
     path('api/sync/', include(get_sync_urls())),
+    # Telegram webhook lives at the root (not under /api/admins) because
+    # Telegram delivers it directly with a secret-token header instead of
+    # a session. Keep it short and stable so reconfiguring setWebhook is
+    # rare.
+    path('api/telegram/webhook/', telegram_views.webhook, name='telegram-webhook'),
     path('', include('customers.urls')),
 ]

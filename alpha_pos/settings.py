@@ -157,6 +157,12 @@ SYNC_ON_SAVE = False
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 
+# Secret token Telegram includes as X-Telegram-Bot-Api-Secret-Token on every
+# webhook call, set when registering the webhook URL via setWebhook. Without
+# it the webhook returns 503 (intentional — better than accepting spoofed
+# updates). Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+TELEGRAM_WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET', '')
+
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
 
 if os.environ.get('USE_REDIS', '').lower() in ('true', '1', 'yes'):

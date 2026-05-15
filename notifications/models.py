@@ -50,6 +50,44 @@ class NotificationTemplate(models.Model):
         return f"{self.name} ({self.notification_type})"
 
 
+class TelegramCustomer(models.Model):
+    """Customer-side Telegram account record.
+
+    Created the first time a Telegram user opens the bot (`/start`).
+    Optionally linked to a `base.User` once the customer authenticates
+    inside the bot — pre-link, the row tracks the chat for greetings and
+    order-status pushes only.
+
+    Not a SyncMixin: chat-id↔user mapping is per-deployment and shouldn't
+    propagate across branches.
+    """
+
+    chat_id = models.BigIntegerField(unique=True, db_index=True)
+    user = models.ForeignKey(
+        'base.User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='telegram_customers',
+    )
+    first_name = models.CharField(max_length=64, blank=True, default='')
+    last_name = models.CharField(max_length=64, blank=True, default='')
+    username = models.CharField(max_length=64, blank=True, default='')
+    language_code = models.CharField(max_length=8, blank=True, default='')
+    # Set true when sendMessage returns 403 (user blocked the bot). Avoids
+    # hammering Telegram with messages that will keep failing.
+    is_blocked = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-last_seen_at']
+        verbose_name = 'telegram customer'
+
+    def __str__(self):
+        label = self.username or self.first_name or str(self.chat_id)
+        return f'TelegramCustomer<{label}>'
+
+
 class NotificationLog(models.Model):
     class Status(models.TextChoices):
         SENT = 'SENT', 'Sent'

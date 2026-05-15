@@ -158,6 +158,30 @@ TEMPLATES = [
             'Qolgan kunlar: {days_until}'
         ),
     },
+    # Inbound Telegram bot replies. Edit via the templates API to change
+    # what the bot says without redeploying.
+    {
+        'notification_type': 'telegram.start',
+        'name': 'Bot welcome (/start)',
+        'template_text': (
+            '<b>{brand}</b>\n'
+            'Salom, {first_name}!\n'
+            '\n'
+            "Buyurtma berish uchun /menu yozing.\n"
+            "Buyurtma holatini ko'rish uchun /status yozing."
+        ),
+    },
+    {
+        'notification_type': 'telegram.unknown_command',
+        'name': 'Bot unknown command fallback',
+        'template_text': (
+            "Kechirasiz, bu buyruqni tushunmadim.\n"
+            "Mavjud buyruqlar:\n"
+            "/start — boshlash\n"
+            "/menu — ovqatlar ro'yxati (tez orada)\n"
+            "/status — buyurtma holati (tez orada)"
+        ),
+    },
 ]
 
 

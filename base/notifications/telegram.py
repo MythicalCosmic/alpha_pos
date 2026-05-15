@@ -46,6 +46,38 @@ class TelegramAPI:
         return all_ok, last_error
 
     @staticmethod
+    def send_to_chat(chat_id, text):
+        """Send `text` to a single chat_id. Used by the inbound bot to reply
+        directly to whoever messaged us, in contrast to send_message() which
+        broadcasts to every staff chat in NotificationConfig.
+
+        Returns (ok, error). On 403 (user blocked the bot), the caller
+        should mark the TelegramCustomer is_blocked so we stop trying.
+        """
+        token = NotificationConfig.get_bot_token()
+        if not token:
+            return False, 'Not configured'
+
+        url = f'https://api.telegram.org/bot{token}/sendMessage'
+        payload = {
+            'chat_id': chat_id,
+            'text': text,
+            'parse_mode': 'HTML',
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
+            if resp.status_code == 200:
+                return True, None
+            return False, f'API {resp.status_code}: {resp.text[:200]}'
+        except requests.exceptions.ConnectionError:
+            return False, 'No internet connection'
+        except requests.exceptions.Timeout:
+            return False, 'Request timeout'
+        except Exception as e:
+            logger.error(f'Telegram send_to_chat error: {e}')
+            return False, str(e)
+
+    @staticmethod
     def is_online():
         token = NotificationConfig.get_bot_token()
         if not token:
