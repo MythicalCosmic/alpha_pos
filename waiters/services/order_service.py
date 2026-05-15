@@ -164,8 +164,7 @@ class WaiterOrderService:
             if not place:
                 place = table.place
 
-        last_id = OrderRepository.get_last_display_id()
-        display_id = (last_id % 100) + 1
+        display_id = OrderRepository.next_display_id()
 
         product_ids = [item.get('product_id') for item in items]
         products = {p.id: p for p in ProductRepository.filter(id__in=product_ids)}

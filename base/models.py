@@ -232,6 +232,11 @@ class User(SyncMixin, models.Model):
 
     last_login_at = models.DateTimeField(null=True, blank=True)
     last_login_api = models.CharField(max_length=20, null=True, blank=True)
+    # Required by SyncMixin._should_replace tiebreaker: when two branches
+    # land at the same sync_version, the row with the newer updated_at
+    # wins. Without this field, equal-version syncs fell through to a
+    # branch_id comparison that wasn't deterministic for User updates.
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     objects = SyncManager()
 
@@ -344,7 +349,7 @@ class Product(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if sync_version >= instance.sync_version:
+            if cls._should_replace(instance, sync_version, data, incoming_branch):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -578,7 +583,7 @@ class Order(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if sync_version >= instance.sync_version:
+            if cls._should_replace(instance, sync_version, data, incoming_branch):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -668,7 +673,7 @@ class OrderItem(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if sync_version >= instance.sync_version:
+            if cls._should_replace(instance, sync_version, data, incoming_branch):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -770,7 +775,7 @@ class Inkassa(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if sync_version >= instance.sync_version:
+            if cls._should_replace(instance, sync_version, data, incoming_branch):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -1014,3 +1019,31 @@ class IdempotencyKey(models.Model):
 
     def __str__(self):
         return f"IdempotencyKey<{self.scope} {self.key[:12]}…>"
+
+
+class DisplayIdCounter(models.Model):
+    """Per-scope counter for Order.display_id allocation.
+
+    `display_id` is the small kitchen-handoff number ("order #42 ready") and
+    must be unique enough to be unambiguous on the line. Pre-fix, each
+    surface (admin / cashier / waiter) read the latest order's display_id
+    and added one — racy under concurrent creates, and the customer surface
+    used `last+1` while the others used `(last % 100)+1`, so the same id
+    could be assigned twice on the same day.
+
+    The counter is locked via select_for_update inside the order-create
+    transaction. One row per branch_id (default scope: 'default').
+
+    Not a SyncMixin — counters are per-branch bookkeeping and must never
+    propagate (each branch maintains its own kitchen-handoff numbering).
+    """
+
+    scope = models.CharField(max_length=64, primary_key=True)
+    value = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'display_id_counter'
+
+    def __str__(self):
+        return f"DisplayIdCounter<{self.scope}={self.value}>"

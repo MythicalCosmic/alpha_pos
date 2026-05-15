@@ -52,15 +52,42 @@ def _clean_field_value(field, value):
     return value
 
 
+# Per-model write denylist for incoming sync records. Without this, any
+# branch-token holder can POST /api/sync/receive with model=user and
+# arbitrary password / role / permissions, because _create_or_update does
+# setattr() on every cleaned field. Push-side (to_sync_dict on User) strips
+# `password`, but the receive side needs its own filter.
+WRITE_DENYLIST = {
+    # User sync should propagate profile + email but never credentials or
+    # privilege metadata — those are per-deployment policy, not sync state.
+    # `is_deleted` is intentionally NOT blocked: soft deletes are part of
+    # legitimate replication (the whole point of multi-branch sync).
+    'base.User': {'password', 'role', 'permissions', 'status'},
+}
+
+
+def _denylist_for(model_class):
+    label = f'{model_class._meta.app_label}.{model_class.__name__}'
+    return WRITE_DENYLIST.get(label, set())
+
+
 def _prepare_fields(model_class, data):
     model_fields = {}
     for f in model_class._meta.get_fields():
         if hasattr(f, 'column'):
             model_fields[f.name] = f
 
+    denied = _denylist_for(model_class)
+
     cleaned = {}
     for key, value in data.items():
         if key not in model_fields:
+            continue
+        if key in denied:
+            logger.warning(
+                'sync receive: dropping denylisted field %s on %s',
+                key, model_class.__name__,
+            )
             continue
         field = model_fields[key]
         if field.get_internal_type() == 'ForeignKey':
@@ -140,7 +167,16 @@ class CloudReceiver:
         try:
             instance = model_class.objects.get(uuid=uuid_val)
 
-            if sync_version < instance.sync_version:
+            # Route through SyncMixin._should_replace so the deterministic
+            # tiebreaker (updated_at then branch_id) applies on equal
+            # sync_version. Without this, two branches that landed at the
+            # same version silently let whichever batch arrived second win.
+            if hasattr(model_class, '_should_replace'):
+                if not model_class._should_replace(
+                    instance, sync_version, cleaned, incoming_branch,
+                ):
+                    return instance, 'skipped'
+            elif sync_version < instance.sync_version:
                 return instance, 'skipped'
 
             for key, value in cleaned.items():

@@ -683,6 +683,16 @@ function onKey(e) {
 }
 
 function fmt(text) {
+    // Escape HTML first — Gemini sees attacker-influenced data (product
+    // names, customer notes) and can be coaxed into echoing markup. Without
+    // this escape, a payload like <img src=x onerror=...> in stock data
+    // would land in the admin's DOM via the el.innerHTML assignment below.
+    text = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     // Code blocks
     text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
     // Inline code

@@ -1,9 +1,18 @@
+from django.conf import settings
+from django.db import transaction
 from django.db.models import Sum, Q, Count, Avg, DecimalField
 from django.db.models.functions import Coalesce, TruncDate, TruncMonth, TruncYear
 from django.core.paginator import Paginator
 from decimal import Decimal
 from base.repositories.base import BaseSyncRepository
-from base.models import Order
+from base.models import Order, DisplayIdCounter
+
+
+# Wrap kitchen-handoff numbers at this point so the line never has to read
+# four-digit numbers off the bumper. 100 matches what admins/waiters used
+# pre-fix; the customer surface used to monotonically increase, which the
+# kitchen flagged as confusing.
+DISPLAY_ID_WRAP_AT = 100
 
 
 class OrderRepository(BaseSyncRepository):
@@ -77,10 +86,34 @@ class OrderRepository(BaseSyncRepository):
 
     @classmethod
     def get_last_display_id(cls):
+        # Retained for back-compat; new code should call next_display_id().
         last = cls.model.objects.order_by('-id').only('display_id').first()
         if not last or not last.display_id:
             return 0
         return last.display_id
+
+    @classmethod
+    def next_display_id(cls, scope=None):
+        """Atomically allocate the next display_id for `scope`.
+
+        Replaces the racy `last_id+1` / `(last_id % 100)+1` reads each
+        order-create surface used to do. Locks the per-scope counter row
+        with select_for_update so two concurrent creates cannot allocate
+        the same number. Caller must be inside a transaction (the order
+        services already wrap create in @transaction.atomic).
+
+        scope defaults to BRANCH_ID so each branch maintains its own
+        kitchen-handoff numbering. Returns 1..DISPLAY_ID_WRAP_AT.
+        """
+        if scope is None:
+            scope = getattr(settings, 'BRANCH_ID', 'default') or 'default'
+        with transaction.atomic():
+            row, _ = DisplayIdCounter.objects.select_for_update().get_or_create(
+                scope=scope, defaults={'value': 0},
+            )
+            row.value = (row.value % DISPLAY_ID_WRAP_AT) + 1
+            row.save(update_fields=['value', 'updated_at'])
+            return row.value
 
     @classmethod
     def paginate(cls, queryset, page=1, per_page=20):
