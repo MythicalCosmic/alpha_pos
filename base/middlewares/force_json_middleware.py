@@ -30,45 +30,49 @@ class JSONOnlyMiddleware(MiddlewareMixin):
         if 300 <= status_code < 400:
             return response
 
-        status_message = self._get_fancy_status_message(status_code)
+        # StreamingHttpResponse and FileResponse don't expose .content; we
+        # can't safely re-wrap them, so pass through unchanged.
+        if getattr(response, 'streaming', False):
+            return response
+
+        status_message = self._reason_phrase(status_code)
         try:
+            content = None
             if hasattr(response, 'content') and response.content:
                 try:
                     content = json.loads(response.content)
                 except (json.JSONDecodeError, ValueError):
                     content = response.content.decode('utf-8', errors='ignore')
-            else:
-                content = None
-            
+
             json_data = {
                 "status": status_message,
                 "status_code": status_code,
                 "success": False,
+                "data": content,
                 "meta": {
                     "path": request.path,
                     "method": request.method,
-                    "timestamp": self._get_timestamp()
-                }
+                    "timestamp": self._get_timestamp(),
+                },
             }
-            
+
             return JsonResponse(
                 json_data,
                 status=status_code,
                 safe=False,
-                json_dumps_params={'indent': 2}
             )
-            
+
         except Exception as e:
             return JsonResponse({
-                "status": "Something went terribly wrong",
+                "status": "Internal server error",
                 "status_code": 500,
                 "success": False,
                 "error": str(e),
                 "meta": {
                     "path": request.path,
                     "method": request.method,
-                    "timestamp": self._get_timestamp()
-                }
+                    "timestamp": self._get_timestamp(),
+                },
             }, status=500)
     
     def process_exception(self, request, exception):
@@ -95,45 +99,28 @@ class JSONOnlyMiddleware(MiddlewareMixin):
             }
         }, status=500)
     
-    def _get_fancy_status_message(self, status_code):
-        status_messages = {
-            200: "Mission accomplished",
-            201: "Created successfully",
-            202: "Accepted and processing",
-            204: "Success with no content",
+    # Standard HTTP reason phrases — keep this map small and predictable so
+    # API consumers can switch on it.
+    _REASON_PHRASES = {
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        405: "Method Not Allowed",
+        408: "Request Timeout",
+        409: "Conflict",
+        410: "Gone",
+        422: "Unprocessable Entity",
+        429: "Too Many Requests",
+        500: "Internal Server Error",
+        501: "Not Implemented",
+        502: "Bad Gateway",
+        503: "Service Unavailable",
+        504: "Gateway Timeout",
+    }
 
-            301: "Moved permanently",
-            302: "Found elsewhere",
-            304: "Not modified, use cache",
-            
-            400: "Bad request, check your input",
-            401: "Authentication required",
-            403: "Access forbidden",
-            404: "Not found in our universe",
-            405: "Method not allowed",
-            408: "Request timeout",
-            409: "Conflict detected",
-            410: "Gone forever",
-            422: "Unprocessable entity",
-            429: "Too many requests, slow down",
-            
-            500: "Internal server error",
-            501: "Not implemented yet",
-            502: "Bad gateway",
-            503: "Service unavailable",
-            504: "Gateway timeout",
-        }
-
-        if status_code in status_messages:
-            return status_messages[status_code]
-        elif 200 <= status_code < 300:
-            return f"Success ({status_code})"
-        elif 300 <= status_code < 400:
-            return f"Redirect ({status_code})"
-        elif 400 <= status_code < 500:
-            return f"Client error ({status_code})"
-        else:
-            return f"Server error ({status_code})"
+    def _reason_phrase(self, status_code):
+        return self._REASON_PHRASES.get(status_code, f"HTTP {status_code}")
     
     def _get_timestamp(self):
         from datetime import datetime, timezone

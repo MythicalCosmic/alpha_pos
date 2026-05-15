@@ -1,0 +1,43 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+exclude = [
+    ".venv",
+    "*/migrations/*",
+    "staticfiles",
+    "logs",
+    "private_media",
+]
+
+[tool.ruff.lint]
+# Conservative ruleset: focus on real bugs (Pyflakes / PyCodeStyle errors,
+# bug-prone idioms via flake8-bugbear) rather than stylistic preferences.
+# Once the project gets a Black/Ruff-format pass we can broaden this.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes (undefined names, unused imports, etc.)
+    "B",    # flake8-bugbear (real bug patterns)
+    "UP",   # pyupgrade (modern Python idioms)
+    "S",    # flake8-bandit (security smells)
+]
+ignore = [
+    "E501",  # line length — noisy on existing code; revisit after a format pass.
+    "B008",  # function call in argument default (Django pattern)
+    "S101",  # assert used (tests)
+    "S105",  # hardcoded password string (false positives in test/dev defaults)
+    "S106",  # hardcoded password func arg (same)
+    "S311",  # non-cryptographic random (display ids, etc. don't need CSPRNG)
+    "B904",  # raise from (existing code uses bare raise; out of scope cleanup)
+    "B007",  # unused loop var (frequently intentional in Django querysets)
+    "UP007", # use X | Y instead of Optional/Union (don't enforce stylistic choice)
+    "UP031", # printf-style formatting (cleanup-only)
+    "UP032", # f-string preference (cleanup-only)
+    "UP035", # deprecated typing imports (cleanup-only)
+    "UP045", # X | None typing (cleanup-only)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can do whatever they need to set up state.
+"*/tests.py" = ["S", "F401", "F811"]
+"conftest.py" = ["S", "F401", "F811"]
+"test_*.py" = ["S", "F401", "F811"]

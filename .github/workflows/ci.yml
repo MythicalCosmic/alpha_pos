@@ -35,14 +35,23 @@ jobs:
       - name: Migrations up-to-date
         run: python manage.py makemigrations --check --dry-run
 
+      - name: Lint (ruff)
+        # Soft-fail: surface issues in the CI log without blocking merges
+        # while we work through the existing backlog. Promote to a hard
+        # fail (drop continue-on-error) after the first cleanup pass.
+        run: ruff check . --output-format=github
+        continue-on-error: true
+
+      - name: Dependency audit (pip-audit)
+        # Soft-fail: surface known-vulnerable deps in the CI log without
+        # blocking merges. After the first triage pass, drop
+        # continue-on-error and add suppressions in pip-audit.toml only for
+        # accepted risks.
+        run: pip-audit --strict
+        continue-on-error: true
+
       - name: pytest
-        # Three tests are quarantined as known pre-existing failures unrelated
-        # to the gate's purpose. Remove these deselects when the underlying
-        # bugs are fixed.
         run: |
           pytest -q \
             --ignore=test_all_endpoints.py \
-            --ignore=test_endpoints.py \
-            --deselect base/tests.py::TestSyncConflictTiebreaker::test_equal_version_newer_updated_at_wins \
-            --deselect stock/tests.py::TestStockCountVarianceDirection::test_negative_variance_decreases_stock \
-            --deselect stock/tests.py::TestStockCountVarianceDirection::test_positive_variance_increases_stock
+            --ignore=test_endpoints.py
