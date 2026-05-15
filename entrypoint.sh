@@ -1,28 +1,30 @@
-#!/bin/bash
-set -e
+#!/bin/sh
+set -eu
 
-echo "Waiting for PostgreSQL..."
-while ! python -c "
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-try:
-    s.connect(('${DB_HOST:-db}', ${DB_PORT:-5432}))
-    s.close()
-    exit(0)
-except:
-    exit(1)
-" 2>/dev/null; do
+DB_HOST="${DB_HOST:-db}"
+DB_PORT="${DB_PORT:-5432}"
+
+# Wait up to ~60s for the DB to accept connections. Bail out instead of
+# spinning forever so a misconfiguration surfaces in container logs.
+echo "Waiting for ${DB_HOST}:${DB_PORT}..."
+i=0
+until python -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0 if s.connect_ex(('${DB_HOST}', ${DB_PORT})) == 0 else 1)" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "${i}" -ge 60 ]; then
+        echo "DB not reachable after ${i}s, exiting." >&2
+        exit 1
+    fi
     sleep 1
 done
-echo "PostgreSQL ready."
+echo "DB reachable."
 
 echo "Running migrations..."
 python manage.py migrate --noinput
 
-echo "Starting server..."
+echo "Starting gunicorn..."
 exec gunicorn alpha_pos.wsgi:application \
     --bind 0.0.0.0:8000 \
-    --workers ${GUNICORN_WORKERS:-3} \
-    --timeout ${GUNICORN_TIMEOUT:-120} \
+    --workers "${GUNICORN_WORKERS:-3}" \
+    --timeout "${GUNICORN_TIMEOUT:-120}" \
     --access-logfile - \
     --error-logfile -

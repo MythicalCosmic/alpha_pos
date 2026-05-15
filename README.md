@@ -2,8 +2,8 @@
 
 Django backend for a multi-surface point-of-sale system (admin back-office,
 cashier app, waiter tablet, customer/kitchen displays). SQLite by default for
-local work, PostgreSQL + Redis in production. The full API contract lives at
-`/api/schema/` (OpenAPI) and `/api/docs/` (Swagger UI).
+local work, PostgreSQL + Redis in production. A Postman collection
+(`postman_collection.json`) ships with the repo as the working API reference.
 
 ## Apps
 
@@ -106,7 +106,7 @@ publicly even with the token set.
 ```bash
 pytest -q
 python manage.py makemigrations --check --dry-run
-python manage.py spectacular --validate --file /tmp/schema.yml
+python manage.py check --deploy
 ```
 
 ## Layout notes

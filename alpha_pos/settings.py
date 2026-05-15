@@ -5,7 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-SECRET_KEY = os.environ.get('SECRET_KEY', 'secret-key-not-set')
+SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     if DEBUG:
         SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
@@ -139,6 +139,17 @@ MEDIA_URL = '/private-media/'  # not actually served; placeholder for FileField.
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Cap upload sizes so a malicious / mistaken multi-GB upload can't OOM
+# a worker. HR documents are the only file-upload surface; 10 MB is
+# generous for ID scans / PDFs without leaving room for abuse.
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.environ.get('DATA_UPLOAD_MAX_MEMORY_SIZE', 10 * 1024 * 1024)
+)
+FILE_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.environ.get('FILE_UPLOAD_MAX_MEMORY_SIZE', 10 * 1024 * 1024)
+)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 
 BRANCH_ID = 'main'
 DEPLOYMENT_MODE = 'local'

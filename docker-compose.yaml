@@ -3,15 +3,13 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: alpha_pos
-      POSTGRES_USER: alpha_pos
-      POSTGRES_PASSWORD: alpha_pos_secret
+      POSTGRES_DB: ${DB_NAME:-alpha_pos}
+      POSTGRES_USER: ${DB_USER:-alpha_pos}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U alpha_pos"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-alpha_pos}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,8 +19,6 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -33,20 +29,17 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
+      - "${WEB_PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
-      DEBUG: "True"
-      SECRET_KEY: "django-insecure-docker-dev-key-change-in-production"
-      ALLOWED_HOSTS: "*"
-      DB_ENGINE: "django.db.backends.postgresql"
-      DB_NAME: "alpha_pos"
-      DB_USER: "alpha_pos"
-      DB_PASSWORD: "alpha_pos_secret"
-      DB_HOST: "db"
+      DB_ENGINE: ${DB_ENGINE:-django.db.backends.postgresql}
+      DB_NAME: ${DB_NAME:-alpha_pos}
+      DB_USER: ${DB_USER:-alpha_pos}
+      DB_HOST: db
       DB_PORT: "5432"
-      REDIS_URL: "redis://redis:6379/0"
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      USE_REDIS: ${USE_REDIS:-True}
     depends_on:
       db:
         condition: service_healthy
