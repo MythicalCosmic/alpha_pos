@@ -1,12 +1,18 @@
 from functools import wraps
+from django.conf import settings
 from django.core.cache import cache
 from django.http import JsonResponse
 
 
 def _get_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
+    # X-Forwarded-For is attacker-controlled when no reverse proxy strips it.
+    # Trust it only when the operator has explicitly opted in via
+    # TRUST_FORWARDED_FOR — otherwise an attacker can rotate the header to
+    # bypass the per-IP rate limit (or stuff a victim's IP to lock them out).
+    if getattr(settings, 'TRUST_FORWARDED_FOR', False):
+        xff = request.META.get('HTTP_X_FORWARDED_FOR')
+        if xff:
+            return xff.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR', '0.0.0.0')
 
 

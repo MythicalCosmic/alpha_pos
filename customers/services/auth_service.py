@@ -2,13 +2,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 import secrets
+from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
 from base.repositories import UserRepository, SessionRepository
-from base.security.hashing import verify_password, hash_password
+from base.security.hashing import verify_password, verify_password_dummy, hash_password
 from base.helpers.response import ServiceResponse
 from notifications.handlers.shift import ShiftNotification
 from base.models import User
+
+SESSION_TTL_DAYS = 7
 
 
 class AuthService:
@@ -43,6 +46,7 @@ class AuthService:
     def login(email, password, ip_address, user_agent):
         user = UserRepository.get_by_email(email)
         if not user:
+            verify_password_dummy(password)
             return ServiceResponse.unauthorized("Invalid credentials")
 
         if not verify_password(password, user.password):
@@ -65,6 +69,7 @@ class AuthService:
             ip_address=ip_address[:45],
             user_agent=user_agent[:256],
             payload=session_key,
+            expires_at=timezone.now() + timedelta(days=SESSION_TTL_DAYS),
         )
 
         user.last_login_at = timezone.now()
@@ -157,6 +162,10 @@ class AuthService:
             )
         user.password = hash_password(new_password)
         user.save(update_fields=['password'])
+        # Revoke any other live sessions so a leaked token can't survive
+        # the user's own remediation. The current session stays — the user
+        # just authenticated with the old password to reach this point.
+        SessionRepository.delete_by_user_except(user, session_key)
         return ServiceResponse.success(message="Password changed")
 
     @staticmethod

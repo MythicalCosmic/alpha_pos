@@ -227,6 +227,14 @@ if not DEBUG:
     if os.environ.get('TRUST_FORWARDED_PROTO', '').lower() in ('true', '1', 'yes'):
         SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# X-Forwarded-For trust toggle, separate from the proto toggle so an operator
+# can opt in to one without the other. Off by default — without a proxy in
+# front of the app, the header is attacker-controlled and would break IP-based
+# rate limiting and audit attribution.
+TRUST_FORWARDED_FOR = os.environ.get(
+    'TRUST_FORWARDED_FOR', ''
+).lower() in ('true', '1', 'yes')
+
 # Pagination limits
 MAX_PER_PAGE = 100
 

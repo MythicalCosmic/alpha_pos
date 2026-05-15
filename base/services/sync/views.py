@@ -35,13 +35,14 @@ def _resolve_branch_token(token):
 
 def _management_authorized(request):
     # Management endpoints (status / trigger / queue / report …) expose internal
-    # state and can trigger full pushes. In production we require the operator
-    # to set SYNC_MANAGEMENT_TOKEN and the caller to present it; in DEBUG the
-    # endpoints stay open so local development isn't blocked.
+    # state and can trigger full pushes. The token is required unconditionally:
+    # tying auth to DEBUG meant a deploy that booted with DEBUG=True (operator
+    # error, env override) would expose unauthenticated control endpoints.
+    # Local devs set SYNC_MANAGEMENT_TOKEN in their .env explicitly.
     from django.utils.crypto import constant_time_compare
     expected = getattr(settings, 'SYNC_MANAGEMENT_TOKEN', '') or ''
     if not expected:
-        return getattr(settings, 'DEBUG', False)
+        return False
     auth = request.META.get('HTTP_AUTHORIZATION', '')
     prefix = 'Management '
     if not auth.startswith(prefix):
@@ -238,7 +239,10 @@ def changes(request):
         requesting_branch = bound_branch
     since_param = request.GET.get('since')
     since_dt = parse_datetime(since_param) if since_param else None
-    per_page = min(int(request.GET.get('per_page', 1000)), 5000)
+    try:
+        per_page = min(max(1, int(request.GET.get('per_page', 1000))), 5000)
+    except (TypeError, ValueError):
+        per_page = 1000
 
     models = get_all_models()
     data = {}

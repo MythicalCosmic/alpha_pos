@@ -1,10 +1,13 @@
 import json
+from django.conf import settings
 
 
 def get_client_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    if xff:
-        return xff.split(',')[0].strip()
+    # See base/security/rate_limit.py — same trust rule.
+    if getattr(settings, 'TRUST_FORWARDED_FOR', False):
+        xff = request.META.get('HTTP_X_FORWARDED_FOR')
+        if xff:
+            return xff.split(',')[0].strip()
     return request.META.get('REMOTE_ADDR', '0.0.0.0')
 
 

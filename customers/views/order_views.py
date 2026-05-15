@@ -23,6 +23,13 @@ def list_orders(request):
     cashier_id = request.GET.get('cashier_id')
     order_by = request.GET.get('order_by', '-created_at')
 
+    # Only ADMIN/CASHIER can pull other users' orders; everyone else is
+    # pinned to their own. Without this, a USER token could pass
+    # ?user_id=N to enumerate any other customer's orders.
+    if request.user.role not in ('ADMIN', 'CASHIER'):
+        user_id = str(request.user.id)
+        cashier_id = None
+
     result, status_code = CustomerOrderService.get_all_orders(
         page=page, per_page=per_page, payment_status=payment_status,
         statuses=statuses, category_ids=category_ids, user_id=user_id,

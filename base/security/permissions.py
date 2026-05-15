@@ -19,6 +19,13 @@ def admin_required(view_func):
                 {"success": False, "message": "Invalid or expired session"},
                 status=401,
             )
+        if session.is_expired():
+            SessionRepository.invalidate_cache(session_key)
+            SessionRepository.delete(session)
+            return JsonResponse(
+                {"success": False, "message": "Invalid or expired session"},
+                status=401,
+            )
         if session.user_id.role != 'ADMIN':
             return JsonResponse(
                 {"success": False, "message": "Admin access required"},

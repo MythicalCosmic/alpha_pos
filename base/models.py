@@ -250,11 +250,22 @@ class Session(models.Model):
     user_agent = models.CharField(max_length=256, null=True, blank=True, default='')
     payload = models.CharField(max_length=128, null=True, blank=True, db_index=True)
     last_activity = models.DateTimeField(auto_now_add=True)
+    # Absolute expiry. Set by the auth services on login. Sessions with
+    # NULL expires_at (legacy rows pre-dating the migration) never expire,
+    # so an operator can purge them via a one-off `delete_by_user` call or
+    # they simply roll over the next time the user re-authenticates.
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         indexes = [
             models.Index(fields=['payload']),
         ]
+
+    def is_expired(self):
+        if self.expires_at is None:
+            return False
+        from django.utils import timezone
+        return self.expires_at <= timezone.now()
 
     def __str__(self):
         return f"Session {self.pk} - user {self.user_id_id}"

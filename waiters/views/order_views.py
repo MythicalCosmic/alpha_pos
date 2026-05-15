@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
 from base.security.auth import login_required
 from base.security.audit import audit
@@ -14,8 +14,7 @@ from waiters.services.order_service import WaiterOrderService
 @require_GET
 @login_required
 def my_orders(request):
-    page = int(request.GET.get('page', 1))
-    per_page = int(request.GET.get('per_page', 20))
+    page, per_page = validate_pagination(request)
     status = request.GET.get('status')
 
     result, status_code = WaiterOrderService.list_my_orders(
@@ -166,7 +165,13 @@ def places(request):
 def tables(request):
     place_id = request.GET.get('place_id')
     if place_id:
-        place_id = int(place_id)
+        try:
+            place_id = int(place_id)
+        except (TypeError, ValueError):
+            return json_response(({
+                "success": False,
+                "message": "place_id must be an integer",
+            }, 400))
 
     result, status_code = WaiterOrderService.list_tables(place_id=place_id)
     return JsonResponse(result, status=status_code)
@@ -176,6 +181,14 @@ def tables(request):
 @require_http_methods(["PATCH"])
 @login_required
 def table_status(request, table_id):
+    # Without a role gate, any logged-in user (including USER role) could
+    # free or occupy any table.
+    if request.user.role not in ('WAITER', 'ADMIN'):
+        return JsonResponse(
+            {"success": False, "message": "Insufficient permissions"},
+            status=403,
+        )
+
     data, error = parse_json_body(request)
     if error:
         return json_response(error)

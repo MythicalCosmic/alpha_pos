@@ -37,3 +37,12 @@ class SessionRepository(BaseRepository):
         for s in sessions:
             cache.delete(f"session:{s.payload}")
         sessions.delete()
+
+    @classmethod
+    def delete_by_user_except(cls, user, except_session_key):
+        # Used by change-password to revoke every session except the one
+        # making the change, so a leaked token doesn't survive remediation.
+        sessions = cls.model.objects.filter(user_id=user).exclude(payload=except_session_key)
+        for s in sessions:
+            cache.delete(f"session:{s.payload}")
+        sessions.delete()

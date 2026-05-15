@@ -38,7 +38,14 @@ def idempotent(scope):
                 return view_func(request, *args, **kwargs)
 
             actor = getattr(request, 'user', None)
-            actor_id = getattr(actor, 'id', None) or 0
+            actor_id = getattr(actor, 'id', None)
+            if not actor_id:
+                # No identified user → no per-user namespace. Sharing
+                # actor_id=0 across every anonymous caller would let one
+                # client's stored response replay for another. Better to
+                # fall through and execute the view; idempotency is opt-in
+                # for clients and only meaningful with a real actor.
+                return view_func(request, *args, **kwargs)
             full_scope = f"{actor_id}:{scope}"
 
             # Claim the (scope, key) row. Losing the unique-constraint race
@@ -82,14 +89,30 @@ def idempotent(scope):
             # We won the claim. Run the view and persist its response.
             response = view_func(request, *args, **kwargs)
 
+            # Streaming/file responses can't be cached: reading .content on a
+            # StreamingHttpResponse exhausts the iterator, and replaying a
+            # 200/empty body in place of the original file download would be
+            # worse than just letting the client retry. Skip persistence and
+            # delete the claim row so a retry can run fresh.
+            content_type = (response.get('Content-Type') or '').lower()
+            is_streaming = getattr(response, 'streaming', False)
+            is_json = 'application/json' in content_type
+            if is_streaming or not is_json:
+                try:
+                    IdempotencyKey.objects.filter(pk=record.pk).delete()
+                except Exception:
+                    logger.exception(
+                        'failed to drop idempotency claim for non-cacheable response '
+                        '(scope=%s key=%s ctype=%s)',
+                        full_scope, key, content_type,
+                    )
+                return response
+
             body = {}
             try:
                 if response.content:
                     body = json.loads(response.content)
             except (ValueError, TypeError):
-                # Non-JSON responses (rare on this surface) replay with an
-                # empty body but the correct status code. That's enough to
-                # tell the client "we already handled it."
                 body = {}
 
             try:

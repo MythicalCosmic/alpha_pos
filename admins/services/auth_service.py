@@ -1,10 +1,13 @@
 import secrets
+from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
 from base.repositories import UserRepository, SessionRepository
-from base.security.hashing import verify_password, hash_password
+from base.security.hashing import verify_password, verify_password_dummy, hash_password
 from base.helpers.response import ServiceResponse
 from base.models import User
+
+SESSION_TTL_DAYS = 7
 
 
 class AdminAuthService:
@@ -40,6 +43,7 @@ class AdminAuthService:
     def login(email, password, ip_address, user_agent):
         user = UserRepository.get_by_email(email)
         if not user:
+            verify_password_dummy(password)
             return ServiceResponse.unauthorized("Invalid credentials")
 
         if not verify_password(password, user.password):
@@ -62,6 +66,7 @@ class AdminAuthService:
             ip_address=ip_address[:45],
             user_agent=user_agent[:256],
             payload=session_key,
+            expires_at=timezone.now() + timedelta(days=SESSION_TTL_DAYS),
         )
 
         user.last_login_at = timezone.now()
@@ -118,6 +123,10 @@ class AdminAuthService:
             )
         user.password = hash_password(new_password)
         user.save(update_fields=['password'])
+        # A leaked token from before the password change must not survive
+        # the change. Keep the current session (the user just authenticated
+        # to perform this action) and revoke every other one.
+        SessionRepository.delete_by_user_except(user, session_key)
         return ServiceResponse.success(message="Password changed")
 
     @staticmethod

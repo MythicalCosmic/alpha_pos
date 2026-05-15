@@ -19,6 +19,13 @@ def login_required(view_func):
                 {"success": False, "message": "Invalid or expired session"},
                 status=401,
             )
+        if session.is_expired():
+            SessionRepository.invalidate_cache(session_key)
+            SessionRepository.delete(session)
+            return JsonResponse(
+                {"success": False, "message": "Invalid or expired session"},
+                status=401,
+            )
         request.user = session.user_id
         request.session_key = session_key
         return view_func(request, *args, **kwargs)
