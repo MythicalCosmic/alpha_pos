@@ -169,6 +169,11 @@ class ShiftService:
 
         now = timezone.now()
 
+        # cash_collected separates physical cash from card/Payme so the
+        # reconciliation step (expected_cash vs actual_cash) doesn't
+        # report every card-paying cashier as short on cash.
+        # Legacy paid orders pre-payment_method use NULL: treat them as
+        # CASH so historical shifts don't suddenly read zero cash.
         stats = Order.objects.filter(
             is_deleted=False,
             cashier_id=shift.user_id,
@@ -182,7 +187,12 @@ class ShiftService:
                 output_field=DecimalField(),
             ),
             cash_collected=Coalesce(
-                Sum('total_amount', filter=Q(is_paid=True)),
+                Sum(
+                    'total_amount',
+                    filter=Q(is_paid=True) & (
+                        Q(payment_method='CASH') | Q(payment_method__isnull=True)
+                    ),
+                ),
                 Decimal('0.00'),
                 output_field=DecimalField(),
             ),

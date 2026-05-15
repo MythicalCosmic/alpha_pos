@@ -622,8 +622,24 @@ class ProductionOrderService:
 
         settings = StockSettings.load()
 
+        from .level_service import StockLevelService
+
         for ing in po.ingredients.select_related("stock_item"):
             actual_qty = ing.actual_quantity or ing.planned_quantity
+
+            # Release any reservation _allocate_ingredients created before
+            # we deduct quantity. Without this, reserved_quantity climbs
+            # by `planned_quantity` per consumed ingredient and never comes
+            # back, so available = quantity - reserved eventually returns
+            # zero on healthy stock and blocks future production.
+            if ing.status == ProductionOrderIngredient.IngredientStatus.ALLOCATED:
+                StockLevelService.release_reservation(
+                    stock_item_id=ing.stock_item_id,
+                    location_id=po.source_location_id,
+                    quantity=ing.planned_quantity,
+                    user_id=user_id,
+                    notes=f"Released for consumption: {po.order_number}",
+                )
 
             if settings.track_batches or ing.stock_item.track_batches:
                 from .batch_service import StockBatchService
@@ -645,7 +661,6 @@ class ProductionOrderService:
                     first_batch = result["data"]["batches"][0]
                     ing.batch_used_id = first_batch["batch_id"]
             else:
-                from .level_service import StockLevelService
                 result, status = StockLevelService.adjust(
                     stock_item_id=ing.stock_item_id,
                     location_id=po.source_location_id,

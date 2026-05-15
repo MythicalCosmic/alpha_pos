@@ -182,7 +182,13 @@ def update_status(request, order_id):
 @permission_required('order.update')
 @idempotent('orders.pay')
 def pay_order(request, order_id):
-    result, status_code = AdminOrderService.mark_as_paid(order_id)
+    payment_method = 'CASH'
+    if request.body:
+        from base.helpers.request import parse_json_body
+        body, _ = parse_json_body(request)
+        if body:
+            payment_method = body.get('payment_method', 'CASH')
+    result, status_code = AdminOrderService.mark_as_paid(order_id, payment_method=payment_method)
     return JsonResponse(result, status=status_code)
 
 

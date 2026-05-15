@@ -523,7 +523,19 @@ class Order(SyncMixin, models.Model):
         db_index=True,
     )
 
+    class PaymentMethod(models.TextChoices):
+        CASH = "CASH", "Cash"
+        UZCARD = "UZCARD", "Uzcard"
+        HUMO = "HUMO", "Humo"
+        PAYME = "PAYME", "Payme"
+
     is_paid = models.BooleanField(default=False, db_index=True)
+    payment_method = models.CharField(
+        max_length=10,
+        choices=PaymentMethod.choices,
+        null=True, blank=True,
+        db_index=True,
+    )
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

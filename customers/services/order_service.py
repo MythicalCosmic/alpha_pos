@@ -450,8 +450,9 @@ class CustomerOrderService:
         return ServiceResponse.success(message='Item removed from order successfully')
 
     @staticmethod
+    @transaction.atomic
     def update_order_status(order_id, status, cashier_id=None, user_id=None, user_role=None):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -476,6 +477,18 @@ class CustomerOrderService:
             update_fields.append('ready_at')
 
         order.save(update_fields=update_fields)
+
+        # Cancelling a paid order must reverse the cash-register entry,
+        # otherwise the register over-reports balance while stock is
+        # reverse-deducted by the handler below. Only cash reverses through
+        # the drawer; card/Payme settle externally.
+        if (
+            status == 'CANCELED'
+            and order.is_paid
+            and order.total_amount
+            and (order.payment_method == 'CASH' or order.payment_method is None)
+        ):
+            InkassaService.add_to_register(-order.total_amount)
 
         if status == 'READY':
             OrderNotification.on_order_ready(order_id)
@@ -604,7 +617,8 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def mark_as_paid(order_id, cashier_id, user_id=None, user_role=None):
+    def mark_as_paid(order_id, cashier_id, user_id=None, user_role=None, payment_method='CASH'):
+        from base.models import Order
         # Lock the order row for the duration of payment processing to prevent
         # double-pay races (two concurrent requests both passing is_paid check).
         order = OrderRepository.get_for_update(order_id)
@@ -621,11 +635,20 @@ class CustomerOrderService:
         if order.is_paid:
             return ServiceResponse.error('Order already paid')
 
-        order.is_paid = True
-        order.paid_at = timezone.now()
-        order.save(update_fields=['is_paid', 'paid_at'])
+        valid_methods = [c[0] for c in Order.PaymentMethod.choices]
+        if payment_method not in valid_methods:
+            return ServiceResponse.validation_error(
+                errors={'payment_method': f'Must be one of {valid_methods}'},
+            )
 
-        InkassaService.add_to_register(order.total_amount)
+        order.is_paid = True
+        order.payment_method = payment_method
+        order.paid_at = timezone.now()
+        order.save(update_fields=['is_paid', 'payment_method', 'paid_at'])
+
+        # Cash drawer only tracks physical cash. Card/Payme settle externally.
+        if payment_method == 'CASH':
+            InkassaService.add_to_register(order.total_amount)
         OrderNotification.on_order_paid(order_id)
 
         try:

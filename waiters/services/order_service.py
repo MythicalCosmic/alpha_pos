@@ -391,7 +391,7 @@ class WaiterOrderService:
     @staticmethod
     @transaction.atomic
     def cancel_order(order_id, waiter_user_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -405,6 +405,16 @@ class WaiterOrderService:
         old_status = order.status
         order.status = 'CANCELED'
         order.save(update_fields=['status'])
+
+        # Cancelling a paid order must reverse the cash-register entry.
+        # Only cash reverses through the drawer; card/Payme settle externally.
+        if (
+            order.is_paid
+            and order.total_amount
+            and (order.payment_method == 'CASH' or order.payment_method is None)
+        ):
+            from base.services.inkassa_service import InkassaService
+            InkassaService.add_to_register(-order.total_amount)
 
         if order.table:
             TableRepository.update_status(order.table_id, Table.Status.AVAILABLE)

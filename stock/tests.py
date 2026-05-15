@@ -28,6 +28,20 @@ def stock_item(db, base_unit):
     )
 
 
+@pytest.fixture
+def stock_enabled(db):
+    """StockSettings is a singleton that defaults stock_enabled=False, which
+    short-circuits StockLevelService.adjust() to a no-op. Tests that exercise
+    real stock math need this fixture so they're not silently skipped."""
+    from stock.models import StockSettings
+    settings = StockSettings.load()
+    settings.stock_enabled = True
+    settings.auto_deduct_on_sale = True
+    settings.allow_negative_stock = False
+    settings.save()
+    return settings
+
+
 class TestWeightedAverageCost:
     """Pre-fix: update_cost divided new_cost by total_qty+1 regardless of
     received quantity. Receiving 100kg @ 12 vs 100kg @ 10 prior should
@@ -78,7 +92,7 @@ class TestStockCountVarianceDirection:
     """Pre-fix: COUNT_ADJUSTMENT was abs()'d and sign was inferred from a
     magic outgoing list. Negative variance (shrinkage) became a gain."""
 
-    def test_negative_variance_decreases_stock(self, stock_item, location):
+    def test_negative_variance_decreases_stock(self, stock_item, location, stock_enabled, admin_user):
         from stock.repositories import StockLevelRepository
         from stock.services.level_service import StockLevelService
 
@@ -94,13 +108,13 @@ class TestStockCountVarianceDirection:
             location_id=location.id,
             quantity=Decimal('-5'),
             movement_type='COUNT_ADJUSTMENT',
-            user_id=None,
+            user_id=admin_user.id,
         )
         assert status == 200
         level.refresh_from_db()
         assert level.quantity == Decimal('95'), 'shrinkage must decrease stock'
 
-    def test_positive_variance_increases_stock(self, stock_item, location):
+    def test_positive_variance_increases_stock(self, stock_item, location, stock_enabled, admin_user):
         from stock.repositories import StockLevelRepository
         from stock.services.level_service import StockLevelService
 
@@ -115,7 +129,7 @@ class TestStockCountVarianceDirection:
             location_id=location.id,
             quantity=Decimal('3'),
             movement_type='COUNT_ADJUSTMENT',
-            user_id=None,
+            user_id=admin_user.id,
         )
         assert status == 200
         level.refresh_from_db()

@@ -171,9 +171,15 @@ def update_status(request, order_id):
 @idempotent('orders.pay')
 def pay_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    payment_method = 'CASH'
+    if request.body:
+        body, _ = parse_json_body(request)
+        if body:
+            payment_method = body.get('payment_method', 'CASH')
     result, status_code = CustomerOrderService.mark_as_paid(
         order_id, cashier_id,
         user_id=request.user.id, user_role=request.user.role,
+        payment_method=payment_method,
     )
     return JsonResponse(result, status=status_code)
 

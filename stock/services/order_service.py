@@ -197,6 +197,23 @@ class OrderStockService:
                 "reason": "Stock system disabled"
             })
 
+        # Idempotency: if any reversal already exists for this order, treat
+        # this call as a no-op. Without this guard, double-cancel (or any
+        # path that fires the cancel handler twice — idempotency-key miss
+        # plus manual retry, sync replay, etc.) would phantom-credit stock
+        # by the order quantity each call.
+        existing_reversals = StockTransactionRepository.filter(
+            order_id=order_id,
+            movement_type="RETURN_FROM_CUSTOMER",
+        )
+        if existing_reversals.exists():
+            return ServiceResponse.success(data={
+                "skipped": True,
+                "reason": "Order already reversed",
+                "order_id": order_id,
+                "existing_reversals": existing_reversals.count(),
+            })
+
         transactions = StockTransactionRepository.filter(
             order_id=order_id,
             movement_type="SALE_OUT"
@@ -353,6 +370,19 @@ class OrderStockService:
 
         if not settings.stock_enabled:
             return ServiceResponse.success(data={"skipped": True})
+
+        # Idempotency: if releases already happened for this order, skip.
+        existing_releases = StockTransactionRepository.filter(
+            reference_type="Order",
+            reference_id=order_id,
+            movement_type="RESERVATION_RELEASE",
+        )
+        if existing_releases.exists():
+            return ServiceResponse.success(data={
+                "skipped": True,
+                "reason": "Reservations already released",
+                "order_id": order_id,
+            })
 
         reservations = StockTransactionRepository.filter(
             reference_type="Order",
