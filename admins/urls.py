@@ -1,7 +1,7 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
-from admins.views import audit_views
+from admins.views import audit_views, export_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -91,4 +91,6 @@ urlpatterns = [
     path('shifts/<int:shift_id>/reconcile', shift_views.shift_reconcile),
 
     path('audit-log', audit_views.audit_log, name='audit_log'),
+
+    path('exports/1c', export_views.one_c_export, name='export_1c'),
 ]
