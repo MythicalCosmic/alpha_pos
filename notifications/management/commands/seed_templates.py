@@ -179,7 +179,8 @@ TEMPLATES = [
             "Mavjud buyruqlar:\n"
             "/start — boshlash\n"
             "/menu — ovqatlar ro'yxati\n"
-            "/status — buyurtma holati (tez orada)"
+            "/login — raqamni ulashish\n"
+            "/status — buyurtmalaringiz"
         ),
     },
     {
@@ -245,6 +246,30 @@ TEMPLATES = [
         'name': 'Bot login wrong contact',
         'template_text': (
             "Iltimos, faqat o'z raqamingizni ulashing."
+        ),
+    },
+    {
+        'notification_type': 'telegram.status_unauthenticated',
+        'name': 'Bot status — not logged in',
+        'template_text': (
+            "Buyurtmalarni ko'rish uchun avval raqamingizni ulashing.\n"
+            "/login"
+        ),
+    },
+    {
+        'notification_type': 'telegram.status_list',
+        'name': 'Bot status — recent orders',
+        'template_text': (
+            "<b>Sizning buyurtmalaringiz</b>\n"
+            "\n"
+            "{orders_list}"
+        ),
+    },
+    {
+        'notification_type': 'telegram.status_empty',
+        'name': 'Bot status — no orders',
+        'template_text': (
+            "{phone} raqami uchun so'nggi 30 kunda buyurtma topilmadi."
         ),
     },
 ]

@@ -4,24 +4,28 @@ Replies render through the editable NotificationTemplate system so a
 restaurant can change the bot's wording from the admin UI without a deploy.
 The template names this module uses are:
 
-    telegram.start              — reply to /start
-    telegram.unknown_command    — reply when we don't recognize the input
-    telegram.menu_root          — reply to /menu (top-level category list)
-    telegram.menu_category      — reply to /menu <slug> (products in category)
-    telegram.menu_empty         — fallback when no categories are active
-    telegram.menu_not_found     — fallback when slug doesn't match
-    telegram.login_prompt       — reply to /login with the share-contact keyboard
-    telegram.login_success      — confirmation after we save the phone
-    telegram.login_other_contact — sender shared someone else's contact card
+    telegram.start                — reply to /start
+    telegram.unknown_command      — reply when we don't recognize the input
+    telegram.menu_root            — reply to /menu (top-level category list)
+    telegram.menu_category        — reply to /menu <slug> (products in category)
+    telegram.menu_empty           — fallback when no categories are active
+    telegram.menu_not_found       — fallback when slug doesn't match
+    telegram.login_prompt         — reply to /login with the share-contact keyboard
+    telegram.login_success        — confirmation after we save the phone
+    telegram.login_other_contact  — sender shared someone else's contact card
+    telegram.status_list          — reply to /status when we have orders
+    telegram.status_empty         — reply to /status when none match
+    telegram.status_unauthenticated — reply to /status before /login
 """
+import datetime as _dt
 import logging
 
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from base.models import Category, Product
+from base.models import Category, Order, Product
 from base.notifications.telegram import TelegramAPI
-from notifications.helpers import format_money
+from notifications.helpers import format_datetime, format_money
 from notifications.models import NotificationTemplate, TelegramCustomer
 
 logger = logging.getLogger(__name__)
@@ -304,3 +308,70 @@ def _handle_contact(customer, contact, sender):
         'phone': customer.phone_number,
     }) or f'Saved {customer.phone_number}.'
     return _send(customer, rendered, reply_markup=_REMOVE_KEYBOARD)
+
+
+# ---- /status ---------------------------------------------------------------
+
+_STATUS_LABELS = {
+    'OPEN': 'Ochiq',
+    'PREPARING': 'Tayyorlanmoqda',
+    'READY': 'Tayyor',
+    'COMPLETED': 'Yakunlangan',
+    'CANCELED': 'Bekor qilingan',
+}
+_STATUS_WINDOW_DAYS = 30
+_STATUS_LIMIT = 10
+
+
+@register('/status')
+def _handle_status(customer, text):
+    if not customer.phone_number:
+        rendered = _render('telegram.status_unauthenticated', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Please /login first.'
+        return _send(customer, rendered)
+
+    # Match exact phone in both with-+ and without-+ forms. The Telegram
+    # client returns the phone with no leading '+', but cashiers often type
+    # "+998..." at order time. Smarter normalization (strip all non-digits,
+    # last-9-suffix) is a follow-up if a venue's data turns out to be
+    # inconsistent — V1 keeps the lookup an exact, indexed match.
+    phone = customer.phone_number
+    candidates = {phone}
+    if phone.startswith('+'):
+        candidates.add(phone[1:])
+    else:
+        candidates.add('+' + phone)
+
+    since = timezone.now() - _dt.timedelta(days=_STATUS_WINDOW_DAYS)
+    orders = (
+        Order.objects.filter(
+            phone_number__in=candidates,
+            is_deleted=False,
+            created_at__gte=since,
+        )
+        .order_by('-created_at')[:_STATUS_LIMIT]
+    )
+
+    if not orders:
+        rendered = _render('telegram.status_empty', {
+            'first_name': customer.first_name or 'friend',
+            'phone': phone,
+        }) or 'No recent orders.'
+        return _send(customer, rendered)
+
+    lines = []
+    for order in orders:
+        date_str, time_str = format_datetime(order.created_at)
+        label = _STATUS_LABELS.get(order.status, order.status)
+        paid = '✓' if order.is_paid else '–'
+        lines.append(
+            f"#{order.display_id} · {label} · {paid} · "
+            f"{format_money(order.total_amount)} so'm · {date_str} {time_str[:5]}"
+        )
+
+    rendered = _render('telegram.status_list', {
+        'first_name': customer.first_name or 'friend',
+        'orders_list': '\n'.join(lines),
+    }) or '\n'.join(lines)
+    return _send(customer, rendered)

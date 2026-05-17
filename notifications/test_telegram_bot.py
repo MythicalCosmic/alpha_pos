@@ -521,3 +521,147 @@ class TestContactShare:
         customer = TelegramCustomer.objects.get(chat_id=555)
         assert customer.phone_number == ''
         assert len(patched_send) == 0
+
+
+# ---- /status -------------------------------------------------------------
+
+@pytest.fixture
+def status_unauth_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.status_unauthenticated',
+        name='Status unauth',
+        template_text='Login first, {first_name}.',
+    )
+
+
+@pytest.fixture
+def status_list_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.status_list',
+        name='Status list',
+        template_text='Orders for {first_name}:\n{orders_list}',
+    )
+
+
+@pytest.fixture
+def status_empty_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.status_empty',
+        name='Status empty',
+        template_text='No orders for {phone}.',
+    )
+
+
+def _logged_in_customer(chat_id=555, phone='998900000001', first_name='Adrian'):
+    return TelegramCustomer.objects.create(
+        chat_id=chat_id, phone_number=phone, first_name=first_name,
+    )
+
+
+def _status_update(chat_id=555, first_name='Adrian'):
+    update = _start_update(chat_id=chat_id, first_name=first_name)
+    update['message']['text'] = '/status'
+    return update
+
+
+def _make_order(user, phone, status='COMPLETED', is_paid=True, total='25000',
+                display_id=None, created_at=None):
+    from base.models import Order
+    order = Order.objects.create(
+        user=user,
+        phone_number=phone,
+        order_type='PICKUP',
+        status=status,
+        is_paid=is_paid,
+        total_amount=total,
+        subtotal=total,
+        display_id=display_id or (Order.objects.count() + 1),
+    )
+    if created_at:
+        # auto_now_add prevents direct assignment; bypass via update().
+        from base.models import Order as O
+        O.objects.filter(pk=order.pk).update(created_at=created_at)
+        order.refresh_from_db()
+    return order
+
+
+class TestStatusCommand:
+    def test_status_without_phone_prompts_login(
+        self, webhook_secret, patched_send, status_unauth_template,
+    ):
+        TelegramCustomer.objects.create(chat_id=555, first_name='Adrian')
+        client = Client()
+        _post(client, _status_update())
+
+        assert len(patched_send) == 1
+        assert 'Login first' in patched_send[0]['text']
+
+    def test_status_lists_recent_orders_for_phone(
+        self, webhook_secret, patched_send, status_list_template,
+        regular_user,
+    ):
+        _logged_in_customer(phone='998900000001')
+        _make_order(regular_user, '998900000001',
+                    status='COMPLETED', total='25000', display_id=42)
+        _make_order(regular_user, '998900000001',
+                    status='READY', total='30000', is_paid=False, display_id=43)
+
+        client = Client()
+        _post(client, _status_update())
+
+        sent = patched_send[0]['text']
+        assert '#42' in sent
+        assert '#43' in sent
+        assert 'Yakunlangan' in sent
+        assert 'Tayyor' in sent
+        assert '25,000' in sent
+        assert '30,000' in sent
+
+    def test_status_matches_plus_prefixed_phone(
+        self, webhook_secret, patched_send, status_list_template,
+        regular_user,
+    ):
+        # Customer's saved phone has no '+'; cashier typed it with '+'.
+        _logged_in_customer(phone='998900000001')
+        _make_order(regular_user, '+998900000001', display_id=99)
+
+        client = Client()
+        _post(client, _status_update())
+        assert '#99' in patched_send[0]['text']
+
+    def test_status_empty_when_no_orders(
+        self, webhook_secret, patched_send, status_empty_template,
+    ):
+        _logged_in_customer(phone='998900000077')
+        client = Client()
+        _post(client, _status_update())
+        assert '998900000077' in patched_send[0]['text']
+
+    def test_status_skips_orders_outside_window(
+        self, webhook_secret, patched_send, status_empty_template,
+        regular_user,
+    ):
+        from datetime import timedelta
+        from django.utils import timezone as tz
+        _logged_in_customer(phone='998900000001')
+        # Older than 30 days — must not appear.
+        _make_order(regular_user, '998900000001', display_id=1,
+                    created_at=tz.now() - timedelta(days=45))
+
+        client = Client()
+        _post(client, _status_update())
+        # Falls through to the empty-template branch.
+        assert '998900000001' in patched_send[0]['text']
+
+    def test_status_ignores_other_customers_orders(
+        self, webhook_secret, patched_send, status_empty_template,
+        regular_user,
+    ):
+        _logged_in_customer(phone='998900000001')
+        _make_order(regular_user, '998900000999', display_id=7)
+
+        client = Client()
+        _post(client, _status_update())
+        # No match → empty template (mentions our phone, not display_id).
+        assert '998900000001' in patched_send[0]['text']
+        assert '#7' not in patched_send[0]['text']
