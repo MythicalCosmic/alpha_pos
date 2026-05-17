@@ -1,7 +1,10 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
-from admins.views import audit_views, export_views, dashboard_views, forecast_views
+from admins.views import (
+    audit_views, export_views, dashboard_views, forecast_views,
+    analytics_views,
+)
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -97,4 +100,7 @@ urlpatterns = [
     path('dashboard/today', dashboard_views.today_view, name='dashboard_today'),
 
     path('forecast/tomorrow', forecast_views.tomorrow_view, name='forecast_tomorrow'),
+
+    path('analytics/shifts/<int:shift_id>', analytics_views.shift_perf_view, name='analytics_shift'),
+    path('analytics/menu-engineering', analytics_views.menu_engineering_view, name='analytics_menu_eng'),
 ]
