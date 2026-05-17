@@ -19,7 +19,7 @@ from django.http import HttpResponse
 from django.urls import path, include
 
 from base.services.sync.views import get_sync_urls
-from notifications.views import telegram_views
+from notifications.views import telegram_views, qr_order_views
 
 
 def healthz(_request):
@@ -41,5 +41,10 @@ urlpatterns = [
     # a session. Keep it short and stable so reconfiguring setWebhook is
     # rare.
     path('api/telegram/webhook/', telegram_views.webhook, name='telegram-webhook'),
+    # Public QR self-order. No auth — signed token in the URL identifies the
+    # table. See notifications/services/qr_order_service.py for the signing
+    # scheme; rate-limited per IP via base.security.rate_limit.
+    path('api/qr/menu/<str:token>/', qr_order_views.menu_view, name='qr-menu'),
+    path('api/qr/order/<str:token>/', qr_order_views.order_view, name='qr-order'),
     path('', include('customers.urls')),
 ]

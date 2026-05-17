@@ -1,5 +1,5 @@
 from django.urls import path
-from notifications.views import notification_views, loyalty_views
+from notifications.views import notification_views, loyalty_views, qr_order_views
 
 app_name = 'notifications'
 
@@ -21,4 +21,6 @@ urlpatterns = [
     path('loyalty/accounts/', loyalty_views.list_accounts, name='loyalty-accounts'),
     path('loyalty/accounts/<str:phone>/', loyalty_views.account_view, name='loyalty-account'),
     path('loyalty/accounts/<str:phone>/redeem/', loyalty_views.redeem_view, name='loyalty-redeem'),
+
+    path('qr/tables/<int:table_id>/token/', qr_order_views.mint_token, name='qr-mint'),
 ]
