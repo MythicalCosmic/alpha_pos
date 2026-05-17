@@ -94,6 +94,79 @@ class TelegramCustomer(models.Model):
         return f'TelegramCustomer<{label}>'
 
 
+class LoyaltySettings(models.Model):
+    """Singleton holding stamps-per-order and stamps-per-reward thresholds.
+
+    `pk` is pinned to 1 in save() so there is exactly one row, mirroring the
+    pattern used by NotificationSettings. An admin endpoint reads/writes
+    this row; the loyalty service consults it on every accrual.
+    """
+    is_enabled = models.BooleanField(default=True)
+    stamps_per_completed_order = models.PositiveIntegerField(default=1)
+    stamps_per_reward = models.PositiveIntegerField(default=10)
+    reward_description = models.CharField(
+        max_length=120, default='Bepul ichimlik',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'loyalty settings'
+        verbose_name_plural = 'loyalty settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return f'LoyaltySettings(per_order={self.stamps_per_completed_order}, per_reward={self.stamps_per_reward})'
+
+
+class LoyaltyAccount(models.Model):
+    """Per-customer stamp ledger, keyed by phone number.
+
+    Phone is the link key (not chat_id) because the same person may have
+    multiple Telegram clients (mobile + desktop) producing different chat_ids
+    over time, and because orders are placed against a phone — not against a
+    Telegram account. The bot looks up the account via TelegramCustomer.phone
+    after /login.
+    """
+    phone_number = models.CharField(max_length=20, unique=True, db_index=True)
+    stamps_balance = models.PositiveIntegerField(default=0)
+    stamps_earned_total = models.PositiveIntegerField(default=0)
+    stamps_redeemed_total = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        verbose_name = 'loyalty account'
+
+    def __str__(self):
+        return f'LoyaltyAccount<{self.phone_number}: {self.stamps_balance}>'
+
+
+class OrderLoyaltyCredit(models.Model):
+    """Idempotency record: which orders already credited loyalty stamps.
+
+    An order can hit the accrual hook from two paths (status→COMPLETED and
+    mark_as_paid when already COMPLETED). A unique row per order_id ensures
+    a second pass is a silent no-op instead of double-crediting stamps.
+    """
+    order_id = models.IntegerField(unique=True, db_index=True)
+    phone_number = models.CharField(max_length=20, db_index=True)
+    stamps_credited = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'OrderLoyaltyCredit<order={self.order_id} +{self.stamps_credited}>'
+
+
 class NotificationLog(models.Model):
     class Status(models.TextChoices):
         SENT = 'SENT', 'Sent'

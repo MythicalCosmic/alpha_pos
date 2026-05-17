@@ -16,6 +16,9 @@ The template names this module uses are:
     telegram.status_list          — reply to /status when we have orders
     telegram.status_empty         — reply to /status when none match
     telegram.status_unauthenticated — reply to /status before /login
+    telegram.loyalty_balance      — reply to /loyalty showing stamp progress
+    telegram.loyalty_unauthenticated — reply to /loyalty before /login
+    telegram.loyalty_disabled     — reply when loyalty is turned off
 """
 import datetime as _dt
 import logging
@@ -374,4 +377,44 @@ def _handle_status(customer, text):
         'first_name': customer.first_name or 'friend',
         'orders_list': '\n'.join(lines),
     }) or '\n'.join(lines)
+    return _send(customer, rendered)
+
+
+# ---- /loyalty --------------------------------------------------------------
+
+@register('/loyalty')
+def _handle_loyalty(customer, text):
+    from notifications.models import LoyaltySettings
+    from notifications.services import loyalty_service
+
+    settings = LoyaltySettings.load()
+    if not settings.is_enabled:
+        rendered = _render('telegram.loyalty_disabled', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Loyalty is currently disabled.'
+        return _send(customer, rendered)
+
+    if not customer.phone_number:
+        rendered = _render('telegram.loyalty_unauthenticated', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Please /login first.'
+        return _send(customer, rendered)
+
+    account = loyalty_service.get_account(customer.phone_number)
+    balance = account.stamps_balance if account else 0
+    threshold = settings.stamps_per_reward
+    remaining = max(threshold - balance, 0)
+    available_rewards = balance // threshold if threshold > 0 else 0
+
+    rendered = _render('telegram.loyalty_balance', {
+        'first_name': customer.first_name or 'friend',
+        'stamps': balance,
+        'threshold': threshold,
+        'remaining': remaining,
+        'available_rewards': available_rewards,
+        'reward': settings.reward_description,
+    }) or (
+        f'You have {balance} stamps. '
+        f'{remaining} more for {settings.reward_description}.'
+    )
     return _send(customer, rendered)

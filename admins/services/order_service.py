@@ -505,6 +505,14 @@ class AdminOrderService:
                 order.id, status,
             )
 
+        # Loyalty accrual — silent no-op for non-eligible transitions
+        # (not COMPLETED, unpaid, no phone, already credited). Idempotent.
+        try:
+            from notifications.services import loyalty_service
+            loyalty_service.maybe_accrue(order)
+        except Exception:
+            logger.exception('loyalty accrual failed for order %s', order.id)
+
         return ServiceResponse.success(
             data={'status': status},
             message=f'Order status updated to {status}',
@@ -555,6 +563,15 @@ class AdminOrderService:
                     )
         except Exception:
             logger.exception('stock handler failed during pay (order=%s)', order.id)
+
+        # Pay completes the second half of the COMPLETED + paid eligibility
+        # check for loyalty. No-op if order isn't COMPLETED yet — the next
+        # update_order_status call will pick it up.
+        try:
+            from notifications.services import loyalty_service
+            loyalty_service.maybe_accrue(order)
+        except Exception:
+            logger.exception('loyalty accrual failed for order %s', order.id)
 
         return ServiceResponse.success(
             data={'is_paid': True},

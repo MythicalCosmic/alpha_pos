@@ -180,7 +180,8 @@ TEMPLATES = [
             "/start — boshlash\n"
             "/menu — ovqatlar ro'yxati\n"
             "/login — raqamni ulashish\n"
-            "/status — buyurtmalaringiz"
+            "/status — buyurtmalaringiz\n"
+            "/loyalty — sodiqlik ballari"
         ),
     },
     {
@@ -270,6 +271,33 @@ TEMPLATES = [
         'name': 'Bot status — no orders',
         'template_text': (
             "{phone} raqami uchun so'nggi 30 kunda buyurtma topilmadi."
+        ),
+    },
+    {
+        'notification_type': 'telegram.loyalty_balance',
+        'name': 'Bot loyalty — current balance',
+        'template_text': (
+            "<b>Sodiqlik dasturi</b>\n"
+            "\n"
+            "Joriy ballaringiz: {stamps}/{threshold}\n"
+            "Mukofotgacha: {remaining}\n"
+            "Tayyor mukofotlar: {available_rewards}\n"
+            "Mukofot: {reward}"
+        ),
+    },
+    {
+        'notification_type': 'telegram.loyalty_unauthenticated',
+        'name': 'Bot loyalty — not logged in',
+        'template_text': (
+            "Ballaringizni ko'rish uchun avval raqamingizni ulashing.\n"
+            "/login"
+        ),
+    },
+    {
+        'notification_type': 'telegram.loyalty_disabled',
+        'name': 'Bot loyalty — disabled',
+        'template_text': (
+            "Sodiqlik dasturi hozir o'chirilgan."
         ),
     },
 ]

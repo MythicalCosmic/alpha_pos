@@ -1,5 +1,5 @@
 from django.urls import path
-from notifications.views import notification_views
+from notifications.views import notification_views, loyalty_views
 
 app_name = 'notifications'
 
@@ -16,4 +16,9 @@ urlpatterns = [
     path('queue/process/', notification_views.queue_process, name='queue-process'),
     path('queue/clear/', notification_views.queue_clear, name='queue-clear'),
     path('logs/', notification_views.logs_view, name='logs'),
+
+    path('loyalty/settings/', loyalty_views.settings_view, name='loyalty-settings'),
+    path('loyalty/accounts/', loyalty_views.list_accounts, name='loyalty-accounts'),
+    path('loyalty/accounts/<str:phone>/', loyalty_views.account_view, name='loyalty-account'),
+    path('loyalty/accounts/<str:phone>/redeem/', loyalty_views.redeem_view, name='loyalty-redeem'),
 ]
