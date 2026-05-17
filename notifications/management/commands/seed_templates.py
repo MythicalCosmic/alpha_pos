@@ -221,6 +221,32 @@ TEMPLATES = [
             "Asosiy menyu: /menu"
         ),
     },
+    {
+        'notification_type': 'telegram.login_prompt',
+        'name': 'Bot login prompt (/login)',
+        'template_text': (
+            "Salom, {first_name}!\n"
+            "Buyurtmalaringizni ko'rish uchun raqamingizni ulashing.\n"
+            "Quyidagi tugmani bosing."
+        ),
+    },
+    {
+        'notification_type': 'telegram.login_success',
+        'name': 'Bot login success',
+        'template_text': (
+            "Rahmat, {first_name}!\n"
+            "Raqamingiz saqlandi: {phone}\n"
+            "\n"
+            "Buyurtmalaringizni ko'rish uchun /status yozing."
+        ),
+    },
+    {
+        'notification_type': 'telegram.login_other_contact',
+        'name': 'Bot login wrong contact',
+        'template_text': (
+            "Iltimos, faqat o'z raqamingizni ulashing."
+        ),
+    },
 ]
 
 

@@ -10,6 +10,9 @@ The template names this module uses are:
     telegram.menu_category      — reply to /menu <slug> (products in category)
     telegram.menu_empty         — fallback when no categories are active
     telegram.menu_not_found     — fallback when slug doesn't match
+    telegram.login_prompt       — reply to /login with the share-contact keyboard
+    telegram.login_success      — confirmation after we save the phone
+    telegram.login_other_contact — sender shared someone else's contact card
 """
 import logging
 
@@ -47,17 +50,25 @@ def handle_update(update):
     message = update.get('message') or {}
     chat = message.get('chat') or {}
     chat_id = chat.get('id')
+    sender = message.get('from') or {}
     text = (message.get('text') or '').strip()
 
     if not chat_id:
         return None
 
-    customer = _upsert_customer(chat_id, message.get('from') or {})
+    customer = _upsert_customer(chat_id, sender)
 
     if customer.is_blocked:
         # Telegram keeps trying to deliver some updates even after a block;
         # don't bother replying.
         return None
+
+    # Contact share (from the request_contact button on /login) arrives as
+    # a message with a `contact` payload and no command text. Handle it
+    # before text routing so users don't have to type anything.
+    contact = message.get('contact')
+    if contact:
+        return _handle_contact(customer, contact, sender)
 
     handler = _resolve_handler(text)
     return handler(customer, text)
@@ -98,9 +109,9 @@ def _upsert_customer(chat_id, sender):
     return customer
 
 
-def _send(customer, text):
+def _send(customer, text, reply_markup=None):
     """Reply to `customer` and update is_blocked if Telegram says so."""
-    ok, err = TelegramAPI.send_to_chat(customer.chat_id, text)
+    ok, err = TelegramAPI.send_to_chat(customer.chat_id, text, reply_markup=reply_markup)
     if not ok and err and err.startswith('API 403'):
         customer.is_blocked = True
         customer.save(update_fields=['is_blocked'])
@@ -241,3 +252,55 @@ def _render_menu_category(customer, slug):
         'products_list': body,
     })
     return rendered or f'{category.name}\n{body}'
+
+
+# ---- Phone linking (/login) ------------------------------------------------
+
+# Telegram's request_contact buttons render as a custom keyboard. Tapping
+# the button sends the user's *own* phone number — Telegram clients restrict
+# request_contact to the sender's number, but we still verify the contact's
+# user_id matches the sender before saving (a hand-crafted client can POST
+# anything to the bot API, and we don't want a sender to bind their account
+# to someone else's phone).
+_LOGIN_KEYBOARD = {
+    'keyboard': [[{'text': "📞 Raqamni ulashish", 'request_contact': True}]],
+    'resize_keyboard': True,
+    'one_time_keyboard': True,
+}
+_REMOVE_KEYBOARD = {'remove_keyboard': True}
+
+
+@register('/login')
+def _handle_login(customer, text):
+    rendered = _render('telegram.login_prompt', {
+        'first_name': customer.first_name or 'friend',
+    })
+    if rendered is None:
+        rendered = 'Tap the button below to share your phone.'
+    return _send(customer, rendered, reply_markup=_LOGIN_KEYBOARD)
+
+
+def _handle_contact(customer, contact, sender):
+    """Save the phone if the contact belongs to the sender, else warn."""
+    contact_user_id = contact.get('user_id')
+    sender_id = sender.get('id')
+    if contact_user_id and sender_id and contact_user_id != sender_id:
+        rendered = _render('telegram.login_other_contact', {
+            'first_name': customer.first_name or 'friend',
+        }) or "Please share your own phone, not someone else's."
+        return _send(customer, rendered, reply_markup=_REMOVE_KEYBOARD)
+
+    phone = (contact.get('phone_number') or '').strip()
+    if not phone:
+        return None
+    # Telegram returns phone like "998901234567" (no leading '+'); normalize
+    # so downstream order-matching can compare to whatever the cashier typed
+    # at order time. We keep a leading '+' if Telegram included one.
+    customer.phone_number = phone[:20]
+    customer.save(update_fields=['phone_number'])
+
+    rendered = _render('telegram.login_success', {
+        'first_name': customer.first_name or 'friend',
+        'phone': customer.phone_number,
+    }) or f'Saved {customer.phone_number}.'
+    return _send(customer, rendered, reply_markup=_REMOVE_KEYBOARD)

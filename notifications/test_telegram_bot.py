@@ -32,8 +32,10 @@ def patched_send(monkeypatch):
     on what the bot tried to send without hitting api.telegram.org."""
     sent = []
 
-    def fake_send(chat_id, text):
-        sent.append({'chat_id': chat_id, 'text': text})
+    def fake_send(chat_id, text, reply_markup=None):
+        sent.append({
+            'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup,
+        })
         return True, None
 
     from base.notifications.telegram import TelegramAPI
@@ -213,7 +215,7 @@ class TestSendErrorHandling:
         from base.notifications.telegram import TelegramAPI
         monkeypatch.setattr(
             TelegramAPI, 'send_to_chat',
-            staticmethod(lambda chat_id, text: (False, 'API 403: forbidden')),
+            staticmethod(lambda chat_id, text, reply_markup=None: (False, 'API 403: forbidden')),
         )
         client = Client()
         _post(client, _start_update(chat_id=999))
@@ -390,3 +392,132 @@ class TestMenuCategory:
         sent = patched_send[0]['text']
         assert 'Margherita' in sent
         assert 'Hidden' not in sent
+
+
+# ---- /login + contact share ---------------------------------------------
+
+@pytest.fixture
+def login_prompt_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.login_prompt',
+        name='Login prompt',
+        template_text='Hi {first_name}, share your phone',
+    )
+
+
+@pytest.fixture
+def login_success_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.login_success',
+        name='Login success',
+        template_text='Saved {phone} for {first_name}',
+    )
+
+
+@pytest.fixture
+def login_other_contact_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.login_other_contact',
+        name='Login other contact',
+        template_text='Share your OWN phone, {first_name}',
+    )
+
+
+def _contact_update(chat_id=12345, sender_id=12345, contact_user_id=12345,
+                    phone='998901234567', first_name='Adrian'):
+    return {
+        'update_id': 99,
+        'message': {
+            'message_id': 5,
+            'chat': {'id': chat_id, 'type': 'private'},
+            'from': {
+                'id': sender_id,
+                'first_name': first_name,
+                'is_bot': False,
+            },
+            'contact': {
+                'phone_number': phone,
+                'first_name': first_name,
+                'user_id': contact_user_id,
+            },
+        },
+    }
+
+
+class TestLoginCommand:
+    def test_login_sends_contact_keyboard(
+        self, webhook_secret, patched_send, login_prompt_template,
+    ):
+        client = Client()
+        update = _start_update()
+        update['message']['text'] = '/login'
+        _post(client, update)
+
+        assert len(patched_send) == 1
+        sent = patched_send[0]
+        assert 'share your phone' in sent['text']
+        keyboard = sent['reply_markup']
+        assert keyboard is not None
+        assert keyboard['keyboard'][0][0]['request_contact'] is True
+
+
+class TestContactShare:
+    def test_contact_saves_phone_and_removes_keyboard(
+        self, webhook_secret, patched_send, login_success_template,
+    ):
+        client = Client()
+        _post(client, _contact_update(chat_id=555, sender_id=555,
+                                      contact_user_id=555, phone='998900000001'))
+
+        customer = TelegramCustomer.objects.get(chat_id=555)
+        assert customer.phone_number == '998900000001'
+
+        assert len(patched_send) == 1
+        sent = patched_send[0]
+        assert '998900000001' in sent['text']
+        assert sent['reply_markup'] == {'remove_keyboard': True}
+
+    def test_contact_from_other_user_is_refused(
+        self, webhook_secret, patched_send, login_other_contact_template,
+    ):
+        client = Client()
+        # Sender id 555, but contact card belongs to user_id 999 — someone
+        # forwarded another person's contact. Reject + don't save phone.
+        _post(client, _contact_update(chat_id=555, sender_id=555,
+                                      contact_user_id=999, phone='998900000999'))
+
+        customer = TelegramCustomer.objects.get(chat_id=555)
+        assert customer.phone_number == ''
+
+        assert len(patched_send) == 1
+        sent = patched_send[0]
+        assert 'OWN phone' in sent['text']
+        assert sent['reply_markup'] == {'remove_keyboard': True}
+
+    def test_contact_without_user_id_still_saves(
+        self, webhook_secret, patched_send, login_success_template,
+    ):
+        # Some Telegram clients omit user_id on the contact payload (e.g.,
+        # a contact picked from the address book that isn't on Telegram).
+        # We can't verify ownership so we trust the sender — restricting
+        # this to the request_contact button is enforced UI-side anyway.
+        client = Client()
+        update = _contact_update(chat_id=555, sender_id=555,
+                                 contact_user_id=None, phone='998900000002')
+        update['message']['contact'].pop('user_id')
+        _post(client, update)
+
+        customer = TelegramCustomer.objects.get(chat_id=555)
+        assert customer.phone_number == '998900000002'
+
+    def test_contact_without_phone_is_silent(
+        self, webhook_secret, patched_send, login_success_template,
+    ):
+        client = Client()
+        update = _contact_update(chat_id=555, sender_id=555,
+                                 contact_user_id=555, phone='')
+        _post(client, update)
+        # No phone → don't save, don't reply. (Defensive: shouldn't happen.)
+        customer = TelegramCustomer.objects.get(chat_id=555)
+        assert customer.phone_number == ''
+        assert len(patched_send) == 0

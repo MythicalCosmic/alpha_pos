@@ -46,10 +46,15 @@ class TelegramAPI:
         return all_ok, last_error
 
     @staticmethod
-    def send_to_chat(chat_id, text):
+    def send_to_chat(chat_id, text, reply_markup=None):
         """Send `text` to a single chat_id. Used by the inbound bot to reply
         directly to whoever messaged us, in contrast to send_message() which
         broadcasts to every staff chat in NotificationConfig.
+
+        `reply_markup` is an optional Telegram reply_markup dict — typically
+        a ReplyKeyboardMarkup with `request_contact` for /login, or
+        `{'remove_keyboard': True}` to drop the custom keyboard once we're
+        done with it.
 
         Returns (ok, error). On 403 (user blocked the bot), the caller
         should mark the TelegramCustomer is_blocked so we stop trying.
@@ -64,6 +69,8 @@ class TelegramAPI:
             'text': text,
             'parse_mode': 'HTML',
         }
+        if reply_markup is not None:
+            payload['reply_markup'] = reply_markup
         try:
             resp = requests.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
             if resp.status_code == 200:

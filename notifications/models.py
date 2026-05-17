@@ -73,6 +73,12 @@ class TelegramCustomer(models.Model):
     last_name = models.CharField(max_length=64, blank=True, default='')
     username = models.CharField(max_length=64, blank=True, default='')
     language_code = models.CharField(max_length=8, blank=True, default='')
+    # Saved when the user taps the request_contact button on /login.
+    # Used to match TelegramCustomer ↔ existing Orders by phone_number,
+    # and as the foundation for the upcoming loyalty linkage.
+    phone_number = models.CharField(
+        max_length=20, blank=True, default='', db_index=True,
+    )
     # Set true when sendMessage returns 403 (user blocked the bot). Avoids
     # hammering Telegram with messages that will keep failing.
     is_blocked = models.BooleanField(default=False, db_index=True)
