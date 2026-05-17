@@ -219,3 +219,174 @@ class TestSendErrorHandling:
         _post(client, _start_update(chat_id=999))
         customer = TelegramCustomer.objects.get(chat_id=999)
         assert customer.is_blocked is True
+
+
+# ---- /menu ---------------------------------------------------------------
+
+@pytest.fixture
+def menu_root_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.menu_root',
+        name='Menu root',
+        template_text='Menu for {first_name}:\n{categories_list}',
+    )
+
+
+@pytest.fixture
+def menu_category_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.menu_category',
+        name='Menu category',
+        template_text='{category_name}\n{products_list}',
+    )
+
+
+@pytest.fixture
+def menu_empty_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.menu_empty',
+        name='Menu empty',
+        template_text='Menu is empty, {first_name}.',
+    )
+
+
+@pytest.fixture
+def menu_not_found_template(db):
+    return NotificationTemplate.objects.create(
+        notification_type='telegram.menu_not_found',
+        name='Menu not found',
+        template_text="No category '{slug}'.",
+    )
+
+
+def _menu_update(chat_id=12345, first_name='Adrian', text='/menu'):
+    update = _start_update(chat_id=chat_id, first_name=first_name)
+    update['message']['text'] = text
+    return update
+
+
+def _make_category(name, slug, parent=None, status='ACTIVE'):
+    from base.models import Category
+    return Category.objects.create(
+        name=name, slug=slug, parent=parent, status=status,
+    )
+
+
+def _make_product(name, price, category):
+    from base.models import Product
+    return Product.objects.create(name=name, price=price, category=category)
+
+
+class TestMenuRoot:
+    def test_menu_lists_top_level_categories_with_counts(
+        self, webhook_secret, patched_send, menu_root_template,
+    ):
+        pizza = _make_category('Pizza', 'pizza')
+        _make_category('Salads', 'salads')
+        _make_product('Margherita', '50000', pizza)
+        _make_product('Pepperoni', '60000', pizza)
+
+        client = Client()
+        _post(client, _menu_update(text='/menu'))
+
+        assert len(patched_send) == 1
+        sent = patched_send[0]['text']
+        assert 'Pizza (2)' in sent
+        assert '/menu pizza' in sent
+        assert 'Salads (0)' in sent
+        assert '/menu salads' in sent
+
+    def test_menu_skips_deleted_and_inactive_categories(
+        self, webhook_secret, patched_send, menu_root_template,
+    ):
+        _make_category('Visible', 'visible')
+        inactive = _make_category('Inactive', 'inactive', status='INACTIVE')
+        deleted = _make_category('Deleted', 'deleted')
+        deleted.is_deleted = True
+        deleted.save()
+        assert inactive  # silence unused
+
+        client = Client()
+        _post(client, _menu_update(text='/menu'))
+
+        sent = patched_send[0]['text']
+        assert 'Visible' in sent
+        assert 'Inactive' not in sent
+        assert 'Deleted' not in sent
+
+    def test_menu_skips_subcategories_at_root(
+        self, webhook_secret, patched_send, menu_root_template,
+    ):
+        parent = _make_category('Drinks', 'drinks')
+        _make_category('Hot drinks', 'hot-drinks', parent=parent)
+        client = Client()
+        _post(client, _menu_update(text='/menu'))
+        sent = patched_send[0]['text']
+        assert 'Drinks' in sent
+        # Subcategory only appears when drilling into the parent.
+        assert 'Hot drinks' not in sent
+
+    def test_menu_empty_falls_back(
+        self, webhook_secret, patched_send, menu_empty_template,
+    ):
+        client = Client()
+        _post(client, _menu_update(text='/menu'))
+        assert len(patched_send) == 1
+        assert 'Menu is empty' in patched_send[0]['text']
+
+
+class TestMenuCategory:
+    def test_menu_slug_lists_products_with_prices(
+        self, webhook_secret, patched_send, menu_category_template,
+    ):
+        pizza = _make_category('Pizza', 'pizza')
+        _make_product('Margherita', '50000', pizza)
+        _make_product('Pepperoni', '60000', pizza)
+
+        client = Client()
+        _post(client, _menu_update(text='/menu pizza'))
+
+        sent = patched_send[0]['text']
+        assert 'Pizza' in sent
+        assert 'Margherita' in sent
+        assert '50,000' in sent
+        assert 'Pepperoni' in sent
+        assert '60,000' in sent
+
+    def test_menu_slug_includes_subcategories(
+        self, webhook_secret, patched_send, menu_category_template,
+    ):
+        drinks = _make_category('Drinks', 'drinks')
+        _make_category('Hot', 'drinks-hot', parent=drinks)
+        _make_category('Cold', 'drinks-cold', parent=drinks)
+
+        client = Client()
+        _post(client, _menu_update(text='/menu drinks'))
+
+        sent = patched_send[0]['text']
+        assert 'Drinks' in sent
+        assert '/menu drinks-hot' in sent
+        assert '/menu drinks-cold' in sent
+
+    def test_menu_slug_unknown_falls_back(
+        self, webhook_secret, patched_send, menu_not_found_template,
+    ):
+        client = Client()
+        _post(client, _menu_update(text='/menu nope'))
+        sent = patched_send[0]['text']
+        assert "No category 'nope'" in sent
+
+    def test_menu_slug_skips_deleted_products(
+        self, webhook_secret, patched_send, menu_category_template,
+    ):
+        pizza = _make_category('Pizza', 'pizza')
+        _make_product('Margherita', '50000', pizza)
+        deleted = _make_product('Hidden', '99999', pizza)
+        deleted.is_deleted = True
+        deleted.save()
+
+        client = Client()
+        _post(client, _menu_update(text='/menu pizza'))
+        sent = patched_send[0]['text']
+        assert 'Margherita' in sent
+        assert 'Hidden' not in sent

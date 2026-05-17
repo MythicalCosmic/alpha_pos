@@ -1,21 +1,24 @@
 """Inbound Telegram bot: dispatch incoming updates to command handlers.
 
-Today this only handles `/start` — the foothold for the upcoming
-customer-facing layer (menu / order / status / loyalty). The dispatcher
-is intentionally tiny so adding `/menu` etc. is a one-line registration.
-
 Replies render through the editable NotificationTemplate system so a
 restaurant can change the bot's wording from the admin UI without a deploy.
 The template names this module uses are:
 
     telegram.start              — reply to /start
     telegram.unknown_command    — reply when we don't recognize the input
+    telegram.menu_root          — reply to /menu (top-level category list)
+    telegram.menu_category      — reply to /menu <slug> (products in category)
+    telegram.menu_empty         — fallback when no categories are active
+    telegram.menu_not_found     — fallback when slug doesn't match
 """
 import logging
 
+from django.db.models import Count, Q
 from django.utils import timezone
 
+from base.models import Category, Product
 from base.notifications.telegram import TelegramAPI
+from notifications.helpers import format_money
 from notifications.models import NotificationTemplate, TelegramCustomer
 
 logger = logging.getLogger(__name__)
@@ -151,3 +154,90 @@ def _handle_unknown(customer, text):
     if rendered is None:
         rendered = "Sorry, I don't recognize that command yet."
     return _send(customer, rendered)
+
+
+@register('/menu')
+def _handle_menu(customer, text):
+    """Show the menu.
+
+    Without args: list top-level active categories with item counts.
+    With `<slug>`: list that category's products and any subcategories.
+
+    Categories are filtered through the SyncManager's `active()` (excludes
+    soft-deleted rows) and the explicit ACTIVE status. Products use the
+    default manager and we filter is_deleted in the query.
+    """
+    parts = text.split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ''
+
+    if not arg:
+        return _send(customer, _render_menu_root(customer))
+    return _send(customer, _render_menu_category(customer, arg))
+
+
+def _render_menu_root(customer):
+    categories = (
+        Category.objects.active()
+        .filter(parent__isnull=True, status='ACTIVE')
+        .annotate(product_count=Count(
+            'products', filter=Q(products__is_deleted=False),
+        ))
+        .order_by('sort_order', 'name')
+    )
+    if not categories.exists():
+        rendered = _render('telegram.menu_empty', {
+            'first_name': customer.first_name or 'friend',
+        })
+        return rendered or 'No menu items are available right now.'
+
+    # Plain text only — the dispatcher's _escape_context HTML-escapes any
+    # string value passed in the template context, so inline <b> would
+    # render as literal "&lt;b&gt;" markup. Bold lives in the static
+    # template_text wrapper instead.
+    lines = []
+    for cat in categories:
+        lines.append(f'• {cat.name} ({cat.product_count}) — /menu {cat.slug}')
+
+    rendered = _render('telegram.menu_root', {
+        'first_name': customer.first_name or 'friend',
+        'categories_list': '\n'.join(lines),
+    })
+    return rendered or '\n'.join(lines)
+
+
+def _render_menu_category(customer, slug):
+    try:
+        category = Category.objects.active().get(slug=slug, status='ACTIVE')
+    except Category.DoesNotExist:
+        rendered = _render('telegram.menu_not_found', {'slug': slug})
+        return rendered or f"No category '{slug}'."
+
+    products = (
+        Product.objects.filter(category=category, is_deleted=False)
+        .order_by('name')
+    )
+    product_lines = [
+        f"• {p.name} — {format_money(p.price)} so'm"
+        for p in products
+    ]
+    subcategories = (
+        Category.objects.active()
+        .filter(parent=category, status='ACTIVE')
+        .order_by('sort_order', 'name')
+    )
+    subcat_lines = [
+        f'• {c.name} — /menu {c.slug}' for c in subcategories
+    ]
+
+    body_parts = []
+    if product_lines:
+        body_parts.append('\n'.join(product_lines))
+    if subcat_lines:
+        body_parts.append('\n'.join(subcat_lines))
+    body = '\n\n'.join(body_parts) if body_parts else '(empty)'
+
+    rendered = _render('telegram.menu_category', {
+        'category_name': category.name,
+        'products_list': body,
+    })
+    return rendered or f'{category.name}\n{body}'

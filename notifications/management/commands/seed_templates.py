@@ -178,8 +178,47 @@ TEMPLATES = [
             "Kechirasiz, bu buyruqni tushunmadim.\n"
             "Mavjud buyruqlar:\n"
             "/start — boshlash\n"
-            "/menu — ovqatlar ro'yxati (tez orada)\n"
+            "/menu — ovqatlar ro'yxati\n"
             "/status — buyurtma holati (tez orada)"
+        ),
+    },
+    {
+        'notification_type': 'telegram.menu_root',
+        'name': 'Bot menu (top-level categories)',
+        'template_text': (
+            '<b>{brand}</b>\n'
+            "Ovqatlar ro'yxati:\n"
+            '\n'
+            '{categories_list}\n'
+            '\n'
+            "Toifani ochish uchun yuqoridagi /menu &lt;slug&gt; ni yuboring."
+        ),
+    },
+    {
+        'notification_type': 'telegram.menu_category',
+        'name': 'Bot menu (single category)',
+        'template_text': (
+            '<b>{category_name}</b>\n'
+            '\n'
+            '{products_list}\n'
+            '\n'
+            "Asosiyga qaytish: /menu"
+        ),
+    },
+    {
+        'notification_type': 'telegram.menu_empty',
+        'name': 'Bot menu empty fallback',
+        'template_text': (
+            "Hozircha ovqatlar ro'yxati bo'sh.\n"
+            "Iltimos, keyinroq qayta urinib ko'ring."
+        ),
+    },
+    {
+        'notification_type': 'telegram.menu_not_found',
+        'name': 'Bot menu unknown slug',
+        'template_text': (
+            "Bunday toifa topilmadi: {slug}\n"
+            "Asosiy menyu: /menu"
         ),
     },
 ]
