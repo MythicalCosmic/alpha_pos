@@ -1,7 +1,7 @@
 from django.urls import path
 from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
-from admins.views import audit_views, export_views, dashboard_views
+from admins.views import audit_views, export_views, dashboard_views, forecast_views
 
 urlpatterns = [
     path('auth-login', auth_views.login),
@@ -95,4 +95,6 @@ urlpatterns = [
     path('exports/1c', export_views.one_c_export, name='export_1c'),
 
     path('dashboard/today', dashboard_views.today_view, name='dashboard_today'),
+
+    path('forecast/tomorrow', forecast_views.tomorrow_view, name='forecast_tomorrow'),
 ]
