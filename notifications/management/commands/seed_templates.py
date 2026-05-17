@@ -180,6 +180,7 @@ TEMPLATES = [
             "/start — boshlash\n"
             "/menu — ovqatlar ro'yxati\n"
             "/login — raqamni ulashish\n"
+            "/order — savatcha va buyurtma\n"
             "/status — buyurtmalaringiz\n"
             "/loyalty — sodiqlik ballari"
         ),
@@ -298,6 +299,88 @@ TEMPLATES = [
         'name': 'Bot loyalty — disabled',
         'template_text': (
             "Sodiqlik dasturi hozir o'chirilgan."
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_cart',
+        'name': 'Bot order — show cart',
+        'template_text': (
+            "<b>Sizning savatchangiz</b>\n"
+            "\n"
+            "{items_list}\n"
+            "\n"
+            "Jami: {total} so'm\n"
+            "\n"
+            "Buyurtma berish: /order checkout"
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_empty',
+        'name': 'Bot order — empty cart',
+        'template_text': (
+            "Savatcha bo'sh.\n"
+            "Mahsulot qo'shing: /order add &lt;id&gt; [qty]"
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_added',
+        'name': 'Bot order — item added',
+        'template_text': (
+            "✓ {product_name} x{quantity} qo'shildi."
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_removed',
+        'name': 'Bot order — item removed',
+        'template_text': (
+            "✓ #{product_id} o'chirildi."
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_cleared',
+        'name': 'Bot order — cart cleared',
+        'template_text': (
+            "Savatcha tozalandi."
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_checked_out',
+        'name': 'Bot order — checked out',
+        'template_text': (
+            "<b>Buyurtma qabul qilindi!</b>\n"
+            "\n"
+            "Raqam: #{display_id}\n"
+            "Jami: {total} so'm\n"
+            "\n"
+            "Holatni ko'rish: /status"
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_help',
+        'name': 'Bot order — help',
+        'template_text': (
+            "<b>Buyurtma berish</b>\n"
+            "\n"
+            "/order — savatchani ko'rish\n"
+            "/order add &lt;id&gt; [qty] — mahsulot qo'shish\n"
+            "/order remove &lt;id&gt; — o'chirish\n"
+            "/order clear — savatchani tozalash\n"
+            "/order checkout — buyurtma berish"
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_no_phone',
+        'name': 'Bot order — checkout without phone',
+        'template_text': (
+            "Buyurtma uchun avval raqamingizni ulashing.\n"
+            "/login"
+        ),
+    },
+    {
+        'notification_type': 'telegram.order_invalid_product',
+        'name': 'Bot order — invalid product',
+        'template_text': (
+            "Bunday mahsulot topilmadi: #{product_id}"
         ),
     },
 ]

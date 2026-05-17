@@ -167,6 +167,83 @@ class OrderLoyaltyCredit(models.Model):
         return f'OrderLoyaltyCredit<order={self.order_id} +{self.stamps_credited}>'
 
 
+class Cart(models.Model):
+    """One-active-cart-per-TelegramCustomer holding items in progress.
+
+    The cart is the customer's draft order before checkout. We keep it
+    server-side (rather than reconstructing from messages) so the customer
+    can browse /menu in between adds without losing state. On /order
+    checkout, the cart is converted to a real base.Order and the row stays
+    for history (status=CHECKED_OUT) — never deleted, so we can recover
+    if the resulting Order failed to persist.
+    """
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        CHECKED_OUT = 'CHECKED_OUT', 'Checked out'
+        ABANDONED = 'ABANDONED', 'Abandoned'
+
+    customer = models.ForeignKey(
+        'notifications.TelegramCustomer',
+        on_delete=models.CASCADE,
+        related_name='carts',
+    )
+    status = models.CharField(
+        max_length=12, choices=Status.choices, default=Status.ACTIVE,
+        db_index=True,
+    )
+    # The base.Order this cart became, if checkout succeeded.
+    order = models.ForeignKey(
+        'base.Order', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='source_carts',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        constraints = [
+            # Enforce exactly one ACTIVE cart per customer at DB level so a
+            # race between two simultaneous /order add calls can't create
+            # two parallel carts. The status field is part of the index so
+            # checked-out carts (historical) don't clash.
+            models.UniqueConstraint(
+                fields=['customer'], condition=models.Q(status='ACTIVE'),
+                name='one_active_cart_per_customer',
+            ),
+        ]
+
+    def __str__(self):
+        return f'Cart<customer={self.customer_id} status={self.status}>'
+
+
+class CartItem(models.Model):
+    """A line on a Cart. Price is snapshotted at add time so a mid-cart
+    price change on the menu doesn't surprise the customer at checkout."""
+    cart = models.ForeignKey(
+        Cart, on_delete=models.CASCADE, related_name='items',
+    )
+    product = models.ForeignKey(
+        'base.Product', on_delete=models.CASCADE,
+    )
+    quantity = models.PositiveIntegerField(default=1)
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at']
+        constraints = [
+            # One row per (cart, product). /order add bumps quantity on the
+            # existing row instead of creating duplicates.
+            models.UniqueConstraint(
+                fields=['cart', 'product'], name='unique_product_per_cart',
+            ),
+        ]
+
+    def __str__(self):
+        return f'CartItem<{self.product_id} x{self.quantity}>'
+
+
 class NotificationLog(models.Model):
     class Status(models.TextChoices):
         SENT = 'SENT', 'Sent'

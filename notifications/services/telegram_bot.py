@@ -19,6 +19,15 @@ The template names this module uses are:
     telegram.loyalty_balance      — reply to /loyalty showing stamp progress
     telegram.loyalty_unauthenticated — reply to /loyalty before /login
     telegram.loyalty_disabled     — reply when loyalty is turned off
+    telegram.order_cart           — show current cart contents
+    telegram.order_empty          — cart is empty
+    telegram.order_added          — item added confirmation
+    telegram.order_removed        — item removed confirmation
+    telegram.order_cleared        — cart cleared confirmation
+    telegram.order_checked_out    — order placed confirmation
+    telegram.order_help           — /order usage help
+    telegram.order_no_phone       — checkout needs /login first
+    telegram.order_invalid_product — /order add unknown product id
 """
 import datetime as _dt
 import logging
@@ -234,8 +243,10 @@ def _render_menu_category(customer, slug):
         Product.objects.filter(category=category, is_deleted=False)
         .order_by('name')
     )
+    # Include product id so the customer can /order add <id>. Once inline
+    # keyboards land we can drop the visible id.
     product_lines = [
-        f"• {p.name} — {format_money(p.price)} so'm"
+        f"• {p.name} — {format_money(p.price)} so'm  (id: {p.id})"
         for p in products
     ]
     subcategories = (
@@ -378,6 +389,144 @@ def _handle_status(customer, text):
         'orders_list': '\n'.join(lines),
     }) or '\n'.join(lines)
     return _send(customer, rendered)
+
+
+# ---- /order ----------------------------------------------------------------
+
+@register('/order')
+def _handle_order(customer, text):
+    """Manage the customer's cart.
+
+      /order                       → show cart
+      /order add <id> [qty]        → add item (default qty=1)
+      /order remove <id>           → remove item
+      /order clear                 → empty cart
+      /order checkout              → place order from cart
+      /order help                  → list these commands
+    """
+    from notifications.services import cart_service
+
+    parts = text.split()
+    sub = parts[1].lower() if len(parts) > 1 else ''
+
+    if sub == 'add':
+        return _order_add(customer, parts[2:])
+    if sub == 'remove':
+        return _order_remove(customer, parts[2:])
+    if sub == 'clear':
+        cart_service.clear(customer)
+        rendered = _render('telegram.order_cleared', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Cart cleared.'
+        return _send(customer, rendered)
+    if sub == 'checkout':
+        return _order_checkout(customer)
+    if sub == 'help':
+        return _send(customer, _order_help_text(customer))
+    return _send(customer, _render_cart(customer))
+
+
+def _render_cart(customer):
+    from notifications.services import cart_service
+    cart = cart_service.get_or_create_active_cart(customer)
+    items = list(cart.items.select_related('product'))
+    if not items:
+        rendered = _render('telegram.order_empty', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Your cart is empty.'
+        return rendered
+
+    lines = []
+    for item in items:
+        subtotal = item.price * item.quantity
+        lines.append(
+            f"• {item.product.name} x{item.quantity} — "
+            f"{format_money(subtotal)} so'm"
+        )
+    total = cart_service.cart_total(cart)
+    rendered = _render('telegram.order_cart', {
+        'first_name': customer.first_name or 'friend',
+        'items_list': '\n'.join(lines),
+        'total': format_money(total),
+    }) or '\n'.join(lines) + f"\n\nTotal: {format_money(total)} so'm"
+    return rendered
+
+
+def _order_add(customer, args):
+    from notifications.services import cart_service
+    if not args:
+        return _send(customer, _order_help_text(customer))
+    try:
+        product_id = int(args[0])
+        qty = int(args[1]) if len(args) > 1 else 1
+    except (ValueError, IndexError):
+        return _send(customer, _order_help_text(customer))
+
+    cart, result = cart_service.add_item(customer, product_id, qty)
+    if cart is None:
+        rendered = _render('telegram.order_invalid_product', {
+            'product_id': product_id,
+        }) or f'No product with id {product_id}.'
+        return _send(customer, rendered)
+
+    rendered = _render('telegram.order_added', {
+        'product_name': result.name,
+        'quantity': qty,
+    }) or f'Added {result.name} x{qty}.'
+    return _send(customer, rendered + '\n\n' + _render_cart(customer))
+
+
+def _order_remove(customer, args):
+    from notifications.services import cart_service
+    if not args:
+        return _send(customer, _order_help_text(customer))
+    try:
+        product_id = int(args[0])
+    except ValueError:
+        return _send(customer, _order_help_text(customer))
+    removed = cart_service.remove_item(customer, product_id)
+    if not removed:
+        return _send(customer, _render_cart(customer))
+    rendered = _render('telegram.order_removed', {
+        'product_id': product_id,
+    }) or 'Removed.'
+    return _send(customer, rendered + '\n\n' + _render_cart(customer))
+
+
+def _order_checkout(customer):
+    from notifications.services import cart_service
+    order, err = cart_service.checkout(customer)
+    if err == 'empty':
+        return _send(customer, _render('telegram.order_empty', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Your cart is empty.')
+    if err == 'no_phone':
+        rendered = _render('telegram.order_no_phone', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Please /login before checkout.'
+        return _send(customer, rendered)
+
+    rendered = _render('telegram.order_checked_out', {
+        'first_name': customer.first_name or 'friend',
+        'display_id': order.display_id,
+        'total': format_money(order.total_amount),
+    }) or f"Order #{order.display_id} placed. Total: {format_money(order.total_amount)} so'm."
+    return _send(customer, rendered)
+
+
+def _order_help_text(customer):
+    rendered = _render('telegram.order_help', {
+        'first_name': customer.first_name or 'friend',
+    })
+    if rendered:
+        return rendered
+    return (
+        '/order — show cart\n'
+        '/order add <id> [qty] — add item\n'
+        '/order remove <id> — remove item\n'
+        '/order clear — empty cart\n'
+        '/order checkout — place order'
+    )
 
 
 # ---- /loyalty --------------------------------------------------------------
