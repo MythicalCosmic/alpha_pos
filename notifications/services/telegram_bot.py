@@ -59,10 +59,13 @@ def register(command):
 def handle_update(update):
     """Top-level entry point invoked from the webhook view.
 
-    `update` is the raw Telegram update dict. We only handle `message`
-    updates today; callback queries / inline queries are silently ignored
-    so an admin who's enabled them in BotFather doesn't get error spam.
+    Dispatches `message` and `callback_query` updates. Inline queries and
+    other update types are silently ignored.
     """
+    callback = update.get('callback_query')
+    if callback:
+        return _handle_callback_query(callback)
+
     message = update.get('message') or {}
     chat = message.get('chat') or {}
     chat_id = chat.get('id')
@@ -199,7 +202,8 @@ def _handle_menu(customer, text):
 
     if not arg:
         return _send(customer, _render_menu_root(customer))
-    return _send(customer, _render_menu_category(customer, arg))
+    text, keyboard = _render_menu_category(customer, arg)
+    return _send(customer, text, reply_markup=keyboard)
 
 
 def _render_menu_root(customer):
@@ -237,16 +241,14 @@ def _render_menu_category(customer, slug):
         category = Category.objects.active().get(slug=slug, status='ACTIVE')
     except Category.DoesNotExist:
         rendered = _render('telegram.menu_not_found', {'slug': slug})
-        return rendered or f"No category '{slug}'."
+        return rendered or f"No category '{slug}'.", None
 
-    products = (
+    products = list(
         Product.objects.filter(category=category, is_deleted=False)
         .order_by('name')
     )
-    # Include product id so the customer can /order add <id>. Once inline
-    # keyboards land we can drop the visible id.
     product_lines = [
-        f"• {p.name} — {format_money(p.price)} so'm  (id: {p.id})"
+        f"• {p.name} — {format_money(p.price)} so'm"
         for p in products
     ]
     subcategories = (
@@ -268,8 +270,9 @@ def _render_menu_category(customer, slug):
     rendered = _render('telegram.menu_category', {
         'category_name': category.name,
         'products_list': body,
-    })
-    return rendered or f'{category.name}\n{body}'
+    }) or f'{category.name}\n{body}'
+
+    return rendered, _menu_category_keyboard(products)
 
 
 # ---- Phone linking (/login) ------------------------------------------------
@@ -423,7 +426,8 @@ def _handle_order(customer, text):
         return _order_checkout(customer)
     if sub == 'help':
         return _send(customer, _order_help_text(customer))
-    return _send(customer, _render_cart(customer))
+    return _send(customer, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
 
 
 def _render_cart(customer):
@@ -567,3 +571,207 @@ def _handle_loyalty(customer, text):
         f'{remaining} more for {settings.reward_description}.'
     )
     return _send(customer, rendered)
+
+
+# ---- Callback queries (inline keyboards) -----------------------------------
+
+# Same registration pattern as /commands. Handlers are keyed by the first
+# colon-delimited part of `callback_data` ("inc:42" → handler "inc"). Tap
+# handlers should always answer_callback_query to dismiss the spinner and
+# typically call edit_message_text to update the in-place view.
+CALLBACK_HANDLERS = {}
+
+
+def register_callback(prefix):
+    def decorator(fn):
+        CALLBACK_HANDLERS[prefix] = fn
+        return fn
+    return decorator
+
+
+def _handle_callback_query(callback):
+    """Route a callback_query update to the right handler.
+
+    `callback` is the raw dict from Telegram. We always answer (even on
+    error / unknown data) so the user's spinner doesn't hang.
+    """
+    callback_id = callback.get('id')
+    sender = callback.get('from') or {}
+    message = callback.get('message') or {}
+    chat = message.get('chat') or {}
+    chat_id = chat.get('id')
+    message_id = message.get('message_id')
+    data = callback.get('data') or ''
+
+    if not chat_id or not message_id:
+        if callback_id:
+            TelegramAPI.answer_callback_query(callback_id)
+        return None
+
+    customer = _upsert_customer(chat_id, sender)
+    if customer.is_blocked:
+        TelegramAPI.answer_callback_query(callback_id)
+        return None
+
+    prefix = data.split(':', 1)[0] if data else ''
+    handler = CALLBACK_HANDLERS.get(prefix)
+    if not handler:
+        TelegramAPI.answer_callback_query(callback_id)
+        return None
+    return handler(customer, callback_id, message_id, data)
+
+
+def _edit(customer, message_id, text, reply_markup=None):
+    ok, err = TelegramAPI.edit_message_text(
+        customer.chat_id, message_id, text, reply_markup=reply_markup,
+    )
+    if not ok and err and err.startswith('API 403'):
+        customer.is_blocked = True
+        customer.save(update_fields=['is_blocked'])
+    return ok
+
+
+@register_callback('add')
+def _cb_add(customer, callback_id, message_id, data):
+    """callback_data = "add:<product_id>" — add 1 to cart from /menu."""
+    from notifications.services import cart_service
+    try:
+        product_id = int(data.split(':')[1])
+    except (IndexError, ValueError):
+        TelegramAPI.answer_callback_query(callback_id, 'Bad data')
+        return None
+    _cart, product = cart_service.add_item(customer, product_id, 1)
+    if _cart is None:
+        TelegramAPI.answer_callback_query(callback_id, 'Product not available')
+        return None
+    TelegramAPI.answer_callback_query(callback_id, f'+ {product.name}')
+    # Don't edit /menu (the user may keep browsing). Send a brief cart
+    # status as a new message so they know it landed.
+    return _send(customer, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
+
+
+@register_callback('inc')
+def _cb_inc(customer, callback_id, message_id, data):
+    from notifications.services import cart_service
+    try:
+        product_id = int(data.split(':')[1])
+    except (IndexError, ValueError):
+        TelegramAPI.answer_callback_query(callback_id)
+        return None
+    cart_service.add_item(customer, product_id, 1)
+    TelegramAPI.answer_callback_query(callback_id)
+    return _edit(customer, message_id, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
+
+
+@register_callback('dec')
+def _cb_dec(customer, callback_id, message_id, data):
+    """Decrement quantity. Removes the row if quantity drops to 0."""
+    from notifications.models import CartItem
+    from notifications.services import cart_service
+    try:
+        product_id = int(data.split(':')[1])
+    except (IndexError, ValueError):
+        TelegramAPI.answer_callback_query(callback_id)
+        return None
+    cart = cart_service.get_or_create_active_cart(customer)
+    item = CartItem.objects.filter(cart=cart, product_id=product_id).first()
+    if item:
+        if item.quantity <= 1:
+            item.delete()
+        else:
+            item.quantity -= 1
+            item.save(update_fields=['quantity', 'updated_at'])
+    TelegramAPI.answer_callback_query(callback_id)
+    return _edit(customer, message_id, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
+
+
+@register_callback('rm')
+def _cb_rm(customer, callback_id, message_id, data):
+    from notifications.services import cart_service
+    try:
+        product_id = int(data.split(':')[1])
+    except (IndexError, ValueError):
+        TelegramAPI.answer_callback_query(callback_id)
+        return None
+    cart_service.remove_item(customer, product_id)
+    TelegramAPI.answer_callback_query(callback_id)
+    return _edit(customer, message_id, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
+
+
+@register_callback('clear')
+def _cb_clear(customer, callback_id, message_id, data):
+    from notifications.services import cart_service
+    cart_service.clear(customer)
+    TelegramAPI.answer_callback_query(callback_id, 'Cleared')
+    return _edit(customer, message_id, _render_cart(customer),
+                 reply_markup=_cart_keyboard(customer))
+
+
+@register_callback('checkout')
+def _cb_checkout(customer, callback_id, message_id, data):
+    from notifications.services import cart_service
+    order, err = cart_service.checkout(customer)
+    if err == 'empty':
+        TelegramAPI.answer_callback_query(callback_id, 'Cart is empty')
+        return None
+    if err == 'no_phone':
+        TelegramAPI.answer_callback_query(callback_id, 'Use /login first')
+        rendered = _render('telegram.order_no_phone', {
+            'first_name': customer.first_name or 'friend',
+        }) or 'Please /login before checkout.'
+        return _send(customer, rendered)
+
+    TelegramAPI.answer_callback_query(callback_id, f'Order #{order.display_id}')
+    rendered = _render('telegram.order_checked_out', {
+        'first_name': customer.first_name or 'friend',
+        'display_id': order.display_id,
+        'total': format_money(order.total_amount),
+    }) or f"Order #{order.display_id} placed."
+    # Replace the cart-with-buttons message with the confirmation (no kb).
+    return _edit(customer, message_id, rendered, reply_markup=None)
+
+
+# ---- Inline keyboard builders ----------------------------------------------
+
+def _menu_category_keyboard(products):
+    """One button per product labeled with name + price. Tapping adds 1
+    to the cart. Telegram caps callback_data at 64 bytes — "add:<id>"
+    stays well under that for any practical id range."""
+    rows = []
+    for p in products:
+        label = f"+ {p.name} — {format_money(p.price)} so'm"
+        # Trim to 64 chars max (Telegram button text limit is 64 chars in
+        # practice; longer is silently truncated and breaks alignment).
+        if len(label) > 60:
+            label = label[:57] + '...'
+        rows.append([{
+            'text': label,
+            'callback_data': f'add:{p.id}',
+        }])
+    return {'inline_keyboard': rows} if rows else None
+
+
+def _cart_keyboard(customer):
+    """Per-item -/+/× row plus Checkout/Clear at the bottom."""
+    from notifications.services import cart_service
+    cart = cart_service.get_or_create_active_cart(customer)
+    items = list(cart.items.select_related('product')[:10])
+    if not items:
+        return None
+    rows = []
+    for item in items:
+        rows.append([
+            {'text': f'➖ {item.product.name[:24]}',
+             'callback_data': f'dec:{item.product_id}'},
+            {'text': f'x{item.quantity}', 'callback_data': f'inc:{item.product_id}'},
+            {'text': '✕', 'callback_data': f'rm:{item.product_id}'},
+        ])
+    rows.append([
+        {'text': '🧹 Tozalash', 'callback_data': 'clear'},
+        {'text': '✅ Buyurtma', 'callback_data': 'checkout'},
+    ])
+    return {'inline_keyboard': rows}

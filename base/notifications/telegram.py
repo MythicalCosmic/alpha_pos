@@ -85,6 +85,53 @@ class TelegramAPI:
             return False, str(e)
 
     @staticmethod
+    def answer_callback_query(callback_query_id, text=None):
+        """Dismiss the loading spinner on an inline-keyboard button tap.
+
+        Telegram requires *some* answer within ~10s or the spinner stalls
+        forever on the user's end. `text`, if provided, shows as a toast.
+        """
+        token = NotificationConfig.get_bot_token()
+        if not token:
+            return False, 'Not configured'
+        url = f'https://api.telegram.org/bot{token}/answerCallbackQuery'
+        payload = {'callback_query_id': callback_query_id}
+        if text:
+            payload['text'] = text[:200]
+        try:
+            resp = requests.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
+            return resp.status_code == 200, None if resp.status_code == 200 else f'API {resp.status_code}'
+        except Exception as e:
+            logger.error(f'Telegram answer_callback_query error: {e}')
+            return False, str(e)
+
+    @staticmethod
+    def edit_message_text(chat_id, message_id, text, reply_markup=None):
+        """In-place message edit. Used by inline-keyboard handlers so that
+        repeated +/- taps update the same message instead of flooding the
+        chat with new replies. Returns (ok, error)."""
+        token = NotificationConfig.get_bot_token()
+        if not token:
+            return False, 'Not configured'
+        url = f'https://api.telegram.org/bot{token}/editMessageText'
+        payload = {
+            'chat_id': chat_id,
+            'message_id': message_id,
+            'text': text,
+            'parse_mode': 'HTML',
+        }
+        if reply_markup is not None:
+            payload['reply_markup'] = reply_markup
+        try:
+            resp = requests.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
+            if resp.status_code == 200:
+                return True, None
+            return False, f'API {resp.status_code}: {resp.text[:200]}'
+        except Exception as e:
+            logger.error(f'Telegram edit_message_text error: {e}')
+            return False, str(e)
+
+    @staticmethod
     def is_online():
         token = NotificationConfig.get_bot_token()
         if not token:
