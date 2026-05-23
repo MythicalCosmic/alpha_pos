@@ -373,7 +373,12 @@ class AdminOrderService:
     @staticmethod
     @transaction.atomic
     def add_item_to_order(order_id, product_id, quantity):
-        order = OrderRepository.get_by_id(order_id)
+        # Lock the order for the duration of the recalculate so two concurrent
+        # add-item calls don't both read order.subtotal, both compute their own
+        # new total, and one clobber the other. Without the lock the quantity
+        # update below also races: existing.quantity += q + save() loses one
+        # of the increments under concurrency.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -386,8 +391,13 @@ class AdminOrderService:
 
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
         if existing:
-            existing.quantity += quantity
-            existing.save(update_fields=['quantity'])
+            # F-expression so the increment happens in SQL — read-modify-write
+            # in Python would lose increments under concurrent calls even with
+            # the row lock above (different OrderItem rows would race).
+            from django.db.models import F
+            OrderItemRepository.model.objects.filter(pk=existing.pk).update(
+                quantity=F('quantity') + quantity,
+            )
         else:
             OrderItemRepository.create(
                 order=order, product=product, quantity=quantity, price=product.price
