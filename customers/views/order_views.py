@@ -3,10 +3,17 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.auth import login_required
+from base.security.auth import login_required, role_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
 from base.models import AuditLog
+
+# Roles permitted to advance an order beyond the customer's own scope: take
+# payment, mark items / orders ready, force a status transition, or apply a
+# discount at the till. USER (the customer-facing role) must never do these,
+# otherwise a customer with their own order can self-issue a CASH receipt
+# (and inflate the cash register) or skip the kitchen workflow.
+STAFF_ROLES = ('ADMIN', 'CASHIER', 'WAITER')
 from customers.services.order_service import CustomerOrderService
 from customers.requests.order_requests import create_order_request
 
@@ -144,6 +151,7 @@ def remove_item(request, order_id, item_id):
 @csrf_exempt
 @require_http_methods(["PATCH"])
 @login_required
+@role_required(*STAFF_ROLES)
 def update_status(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -168,6 +176,7 @@ def update_status(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 @idempotent('orders.pay')
 def pay_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
@@ -187,6 +196,7 @@ def pay_order(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def mark_ready(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.mark_order_ready(
@@ -199,6 +209,7 @@ def mark_ready(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def mark_item_ready(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.mark_item_ready(
@@ -211,6 +222,7 @@ def mark_item_ready(request, order_id, item_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def unmark_item_ready(request, order_id, item_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.unmark_item_ready(
@@ -252,6 +264,7 @@ def client_display(request):
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*STAFF_ROLES)
 def chef_display(request):
     result, status_code = CustomerOrderService.get_chef_display_orders()
     return JsonResponse(result, status=status_code)
@@ -260,6 +273,7 @@ def chef_display(request):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def apply_discount(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -272,6 +286,7 @@ def apply_discount(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def remove_discount(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -284,6 +299,7 @@ def remove_discount(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*STAFF_ROLES)
 def check_secret_word(request, order_id):
     data, error = parse_json_body(request)
     if error:
