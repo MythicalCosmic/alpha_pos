@@ -480,6 +480,15 @@ class DiscountService:
         if not order:
             return ServiceResponse.not_found("Order not found")
 
+        # Removing a discount from a paid order raises `total_amount` but
+        # has no path to also bump the cash register, so the drawer would
+        # under-report by the discount amount. The legitimate "fix a paid
+        # order" flow is cancel-and-reissue, which already reverses cash.
+        if order.is_paid:
+            return ServiceResponse.error(
+                "Cannot remove discount from a paid order — cancel and reissue instead",
+            )
+
         order_discount = OrderDiscountRepository.get_with_relations(order_discount_id)
         if not order_discount or order_discount.order_id != order_id:
             return ServiceResponse.not_found("Order discount not found")
