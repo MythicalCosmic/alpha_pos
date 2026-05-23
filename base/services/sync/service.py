@@ -221,13 +221,14 @@ class SyncService:
     @classmethod
     def acknowledge(cls, data):
         models = get_all_models()
+        now = timezone.now()
         for name, uuids in data.items():
             model_class = models.get(name)
             if model_class and uuids:
-                now = timezone.now()
-                for obj in model_class.objects.filter(uuid__in=uuids):
-                    obj.synced_at = now
-                    obj.save(_syncing=True, update_fields=['synced_at'])
+                # `.update()` is one SQL statement; the previous loop fired
+                # one UPDATE per row plus all SyncMixin.save() side effects
+                # (queue add, signals). Acknowledgement should be cheap.
+                model_class.objects.filter(uuid__in=uuids).update(synced_at=now)
         return {'success': True, 'message': 'Records acknowledged'}
 
     @classmethod
@@ -308,15 +309,20 @@ class SyncService:
             if branch:
                 qs = qs.filter(branch_id=branch)
 
-            total = qs.count()
-            synced = qs.exclude(synced_at__isnull=True).count()
-            unsynced = qs.filter(synced_at__isnull=True).count()
-            last_synced = (
-                qs.exclude(synced_at__isnull=True)
-                .order_by('-synced_at')
-                .values_list('synced_at', flat=True)
-                .first()
+            # One aggregate instead of three full scans. The `last_synced`
+            # lookup still needs its own query (a Max() aggregate over the
+            # same row set), so we keep that as the cheaper of the two.
+            from django.db.models import Count, Q, Max
+            counts = qs.aggregate(
+                total=Count('id'),
+                synced=Count('id', filter=Q(synced_at__isnull=False)),
+                unsynced=Count('id', filter=Q(synced_at__isnull=True)),
+                last_synced=Max('synced_at'),
             )
+            total = counts['total']
+            synced = counts['synced']
+            unsynced = counts['unsynced']
+            last_synced = counts['last_synced']
 
             models_status[name] = {
                 'total': total,
