@@ -127,17 +127,3 @@ class JSONOnlyMiddleware(MiddlewareMixin):
         return datetime.now(timezone.utc).isoformat()
 
 
-class SimpleJSONMiddleware(MiddlewareMixin):
-    def process_response(self, request, response):
-        if not isinstance(response, JsonResponse):
-            try:
-                content = json.loads(response.content) if response.content else {}
-            except (json.JSONDecodeError, ValueError):
-                content = {"message": response.content.decode('utf-8', errors='ignore')}
-            
-            return JsonResponse({
-                "status": response.status_code,
-                "data": content
-            }, status=response.status_code)
-        
-        return response

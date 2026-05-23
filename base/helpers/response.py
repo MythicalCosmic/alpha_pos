@@ -44,6 +44,3 @@ class ServiceResponse:
     def validation_error(errors, message="Validation failed"):
         return {"success": False, "message": message, "errors": errors}, 422
 
-    @staticmethod
-    def rate_limited(message="Too many requests"):
-        return {"success": False, "message": message}, 429
