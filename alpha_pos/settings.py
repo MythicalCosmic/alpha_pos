@@ -39,10 +39,19 @@ INSTALLED_APPS = [
     'waiters',
     'discounts',
     'notifications',
+    # Licensing must boot before any app whose endpoints we want to gate;
+    # the middleware checks the singleton row at request time.
+    'licensing',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    # License kill switch sits as early as possible while still being
+    # AFTER corsheaders, so a 503 response carries CORS headers (the
+    # Electron renderer would otherwise see only a CORS error and not
+    # the license_inactive payload). Position-asserted at boot in
+    # licensing/apps.py — moving this line will fail `manage.py check`.
+    'licensing.middleware.LicenseEnforcementMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -313,6 +322,50 @@ LOGGING = {
 # Origins are env-driven so production gets an explicit allowlist; in DEBUG
 # we permit all origins for local dev kiosks. Browsers reject the combination
 # of CORS_ALLOW_ALL_ORIGINS=True with credentials, so we never ship that.
+# ---------------------------------------------------------------------------
+# Licensing / control plane
+# ---------------------------------------------------------------------------
+# The licensing app phones home to a control center the vendor operates,
+# enforces a kill switch when the license is suspended / expired / offline-
+# grace-exceeded, and exposes a perpetual-unlock escape hatch verified by
+# an Ed25519 signature against a vendor-held keypair. See
+# /home/cosmic/.claude/plans/kind-gliding-kay.md.
+
+# Base URL of the pos_control_center deployment (e.g. https://control.example.com).
+# Required for the setup wizard and heartbeat daemon — without it the install
+# stays UNREGISTERED and every endpoint returns 503.
+LICENSE_CONTROL_CENTER_URL = os.environ.get('LICENSE_CONTROL_CENTER_URL', '')
+
+# Fernet key used to encrypt the bearer license key at rest. Generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Pin once per deployment; rotating this value invalidates the stored key.
+LICENSE_FERNET_KEY = os.environ.get('LICENSE_FERNET_KEY', '')
+
+# How often the heartbeat daemon pings the control center, in seconds.
+# Bumped down to 10 in the test suite to keep verification fast.
+LICENSE_HEARTBEAT_INTERVAL = int(os.environ.get('LICENSE_HEARTBEAT_INTERVAL', 300))
+
+# Offline grace window before the kill switch fires when the control center
+# is unreachable. Computed from `last_heartbeat_at`; if the gap exceeds
+# this many days the install is treated as expired even with a previously-
+# active status.
+LICENSE_GRACE_DAYS = int(os.environ.get('LICENSE_GRACE_DAYS', 7))
+
+# Ed25519 public key (hex, 32 bytes) of the vendor signing keypair. The
+# private half lives in the vendor's hardware vault; if the vendor ever
+# shuts down they publish a signed unlock file that any POS will accept
+# at /api/licensing/unlock, flipping it to PERPETUAL_UNLOCK. This pubkey
+# is embedded at build time so operators cannot forge their own unlocks.
+# Empty by default — unlock endpoint refuses every signature until set.
+LICENSE_VENDOR_PUBLIC_KEY = os.environ.get('LICENSE_VENDOR_PUBLIC_KEY', '')
+
+# When True, /admin/ is exempt from the license kill switch so the vendor
+# can SSH-tunnel in and fix a stuck install. Off by default — production
+# operators who don't want a back door can leave it off.
+LICENSE_ADMIN_BYPASS = os.environ.get('LICENSE_ADMIN_BYPASS', '').lower() in (
+    'true', '1', 'yes',
+)
+
 CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()
 ]

@@ -21,6 +21,29 @@ def _clear_caches():
     cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _active_license(db, _clear_caches):
+    """Every test should run against an ACTIVE license — the kill switch
+    middleware otherwise refuses every business endpoint with 503 (since
+    a freshly-migrated test DB has no License row, .load() creates one
+    with status=UNREGISTERED).
+
+    Tests that need to exercise the kill switch explicitly reset the
+    License row to the state they want before the request (see
+    licensing/tests.py TestKillSwitch / TestStateTransitions)."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from licensing.models import License
+    lic = License.load()
+    lic.status = License.Status.ACTIVE
+    lic.org_name = 'Test Org'
+    lic.email = 'test@local'
+    lic.last_heartbeat_at = timezone.now()
+    lic.last_server_now = timezone.now()
+    lic.expires_at = timezone.now() + timedelta(days=365)
+    lic.save()
+
+
 @pytest.fixture
 def admin_user(db):
     from base.models import User

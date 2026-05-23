@@ -36,6 +36,10 @@ urlpatterns = [
     path('api/admins/notifications/', include('notifications.urls')),
     path('api/waiters/', include('waiters.urls')),
     path('api/sync/', include(get_sync_urls())),
+    # Licensing endpoints are allowlisted in the kill-switch middleware so
+    # the operator can complete setup and the renderer can read status even
+    # when the install is UNREGISTERED / SUSPENDED / EXPIRED.
+    path('api/licensing/', include('licensing.urls')),
     # Telegram webhook lives at the root (not under /api/admins) because
     # Telegram delivers it directly with a secret-token header instead of
     # a session. Keep it short and stable so reconfiguring setWebhook is
