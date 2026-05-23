@@ -186,6 +186,15 @@ if os.environ.get('USE_REDIS', '').lower() in ('true', '1', 'yes'):
             'TIMEOUT': 300,
         }
     }
+elif os.environ.get('USE_DUMMY_CACHE', '').lower() in ('true', '1', 'yes'):
+    # Process-shared (no caching at all). Used by the end-to-end
+    # verification script so a License.save() in one process is visible
+    # to the runserver immediately, without standing up Redis.
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        }
+    }
 else:
     CACHES = {
         'default': {
