@@ -10,6 +10,17 @@ os.environ.setdefault('SECRET_KEY', 'pytest-secret-key')
 django.setup()
 
 
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    """LocMemCache is process-wide and survives across tests; explicitly
+    purge it so cached settings singletons (NotificationSettings,
+    LoyaltySettings, AppSettings, session rows) don't leak between cases."""
+    from django.core.cache import cache
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture
 def admin_user(db):
     from base.models import User

@@ -867,13 +867,26 @@ class AppSettings(models.Model):
         verbose_name = 'app settings'
         verbose_name_plural = 'app settings'
 
+    _CACHE_KEY = 'app_settings:v1'
+    _CACHE_TTL = 60
+
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
+        # Bust the per-process cache so the next reader sees the new state.
+        from django.core.cache import cache
+        cache.delete(self._CACHE_KEY)
 
     @classmethod
     def load(cls):
+        # Wrap the get_or_create with a short cache so every request that
+        # reads the toggle (every HR/waiter view, etc.) doesn't pay a SELECT.
+        from django.core.cache import cache
+        cached = cache.get(cls._CACHE_KEY)
+        if cached is not None:
+            return cached
         obj, _ = cls.objects.get_or_create(pk=1)
+        cache.set(cls._CACHE_KEY, obj, cls._CACHE_TTL)
         return obj
 
     def __str__(self):

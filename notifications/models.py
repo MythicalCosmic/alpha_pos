@@ -14,13 +14,27 @@ class NotificationSettings(models.Model):
         verbose_name = 'notification settings'
         verbose_name_plural = 'notification settings'
 
+    _CACHE_KEY = 'notification_settings:v1'
+    _CACHE_TTL = 60
+
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
+        from django.core.cache import cache
+        cache.delete(self._CACHE_KEY)
 
     @classmethod
     def load(cls):
+        # Cached singleton: every legacy TelegramAPI call (send_to_chat,
+        # answer_callback_query, edit_message_text) and every modern
+        # TelegramService send_message hits this row. Without the cache,
+        # one Telegram /menu tap = 3+ SELECTs on a row that rarely changes.
+        from django.core.cache import cache
+        cached = cache.get(cls._CACHE_KEY)
+        if cached is not None:
+            return cached
         obj, _ = cls.objects.get_or_create(pk=1)
+        cache.set(cls._CACHE_KEY, obj, cls._CACHE_TTL)
         return obj
 
     def __str__(self):
@@ -114,13 +128,25 @@ class LoyaltySettings(models.Model):
         verbose_name = 'loyalty settings'
         verbose_name_plural = 'loyalty settings'
 
+    _CACHE_KEY = 'loyalty_settings:v1'
+    _CACHE_TTL = 60
+
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
+        from django.core.cache import cache
+        cache.delete(self._CACHE_KEY)
 
     @classmethod
     def load(cls):
+        # Hit on every order paid + completed transition (accrual hook) and
+        # every /loyalty bot command — cache the singleton.
+        from django.core.cache import cache
+        cached = cache.get(cls._CACHE_KEY)
+        if cached is not None:
+            return cached
         obj, _ = cls.objects.get_or_create(pk=1)
+        cache.set(cls._CACHE_KEY, obj, cls._CACHE_TTL)
         return obj
 
     def __str__(self):
