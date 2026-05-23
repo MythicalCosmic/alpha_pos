@@ -57,6 +57,12 @@ def _clean_field_value(field, value):
 # arbitrary password / role / permissions, because _create_or_update does
 # setattr() on every cleaned field. Push-side (to_sync_dict on User) strips
 # `password`, but the receive side needs its own filter.
+#
+# Models can opt into per-model rules by setting a SYNC_WRITE_DENYLIST class
+# attribute (preferred — keeps the policy next to the model). The dict below
+# is the fallback list for models that don't declare one, so an attacker who
+# slips a new SyncMixin subclass through review without setting the attribute
+# still has User locked down.
 WRITE_DENYLIST = {
     # User sync should propagate profile + email but never credentials or
     # privilege metadata — those are per-deployment policy, not sync state.
@@ -67,6 +73,9 @@ WRITE_DENYLIST = {
 
 
 def _denylist_for(model_class):
+    declared = getattr(model_class, 'SYNC_WRITE_DENYLIST', None)
+    if declared is not None:
+        return set(declared)
     label = f'{model_class._meta.app_label}.{model_class.__name__}'
     return WRITE_DENYLIST.get(label, set())
 
@@ -155,7 +164,18 @@ class CloudReceiver:
 
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
-        incoming_branch = data.pop('branch_id', branch_id)
+        # Ignore any branch_id in the payload — the receive endpoint binds
+        # the auth token to one branch (BRANCH_TOKEN_MAP), so honoring a
+        # per-record branch_id would let a branch-token holder write records
+        # claiming any other branch's ID. Pull-from-cloud is the only path
+        # where the payload branch_id is trusted (cloud is multi-tenant).
+        payload_branch = data.pop('branch_id', None)
+        if payload_branch and payload_branch != branch_id:
+            logger.warning(
+                'sync receive: dropping spoofed branch_id=%s (auth=%s) on %s',
+                payload_branch, branch_id, model_class.__name__,
+            )
+        incoming_branch = branch_id
 
         resolved_fks = _resolve_foreign_keys(data)
 

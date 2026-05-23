@@ -135,6 +135,30 @@ class SyncMixin(models.Model):
                     data[field.name] = value
         return data
 
+    # Class-level deny-list for fields that must never be written by the sync
+    # ingestion paths (push or pull). Per-model overrides go on the subclass;
+    # see User.SYNC_WRITE_DENYLIST. Empty by default — only safety-critical
+    # fields belong here.
+    SYNC_WRITE_DENYLIST = frozenset()
+
+    @classmethod
+    def _strip_sync_denied(cls, data):
+        denied = getattr(cls, 'SYNC_WRITE_DENYLIST', frozenset())
+        if not denied:
+            return data
+        import logging
+        logger = logging.getLogger(__name__)
+        cleaned = {}
+        for key, value in data.items():
+            if key in denied:
+                logger.warning(
+                    'sync ingest: dropping denylisted field %s on %s',
+                    key, cls.__name__,
+                )
+                continue
+            cleaned[key] = value
+        return cleaned
+
     @classmethod
     def from_sync_dict(cls, data, branch_id=None):
         from django.utils import timezone
@@ -145,6 +169,7 @@ class SyncMixin(models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
+        data = cls._strip_sync_denied(data)
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
@@ -237,6 +262,14 @@ class User(SyncMixin, models.Model):
     # wins. Without this field, equal-version syncs fell through to a
     # branch_id comparison that wasn't deterministic for User updates.
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
+
+    # Credentials and privilege metadata must never be overwritten by sync.
+    # `to_sync_dict` already strips `password` on the push side, but a
+    # compromised cloud or a malicious branch could otherwise still set
+    # `role`/`permissions`/`status` via either receive or pull. Pull bypasses
+    # the receiver's denylist, so this attribute is the single source of
+    # truth honored by both ingest paths.
+    SYNC_WRITE_DENYLIST = frozenset({'password', 'role', 'permissions', 'status'})
 
     objects = SyncManager()
 
@@ -339,6 +372,7 @@ class Product(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
+        data = cls._strip_sync_denied(data)
 
         category = None
         if category_uuid:
@@ -567,6 +601,7 @@ class Order(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
+        data = cls._strip_sync_denied(data)
 
         user = None
         cashier = None
@@ -664,6 +699,7 @@ class OrderItem(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
+        data = cls._strip_sync_denied(data)
 
         order = None
         product = None
@@ -777,6 +813,7 @@ class Inkassa(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
+        data = cls._strip_sync_denied(data)
 
         cashier = None
         if cashier_uuid:

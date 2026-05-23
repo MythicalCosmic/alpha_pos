@@ -101,6 +101,59 @@ class TestSyncConflictTiebreaker:
         assert local.first_name == 'Local'
 
 
+class TestSyncWriteDenylist:
+    """Pre-fix: User.password/role/permissions/status were guarded only on the
+    receive path; the pull path (from_sync_dict) silently set them. A
+    compromised cloud could promote any user to ADMIN. Now: SYNC_WRITE_DENYLIST
+    is honored by both ingest paths."""
+
+    def test_pull_cannot_promote_role(self):
+        from base.models import User
+
+        local = User.objects.create(
+            first_name='Local', last_name='Name', email='u@test.local',
+            password='hashed', role='USER', sync_version=2,
+        )
+        User.from_sync_dict({
+            'uuid': str(local.uuid),
+            'sync_version': 3,
+            'is_deleted': False,
+            'first_name': 'Local',
+            'last_name': 'Name',
+            'email': 'u@test.local',
+            'password': 'attacker-hash',
+            'role': 'ADMIN',
+            'status': 'SUSPENDED',
+            'permissions': ['*'],
+        })
+        local.refresh_from_db()
+        assert local.role == 'USER'
+        assert local.status == 'ACTIVE'
+        assert local.password == 'hashed'
+        assert local.permissions == []
+
+    def test_receive_ignores_spoofed_branch_id(self):
+        from base.models import User
+        from base.services.sync.receiver import CloudReceiver
+
+        result = CloudReceiver.receive_batch(
+            'base.User',
+            branch_id='branch-a',
+            records=[{
+                'uuid': '11111111-1111-1111-1111-111111111111',
+                'sync_version': 1,
+                'is_deleted': False,
+                # Attacker-controlled spoof attempt; receiver must ignore it.
+                'branch_id': 'branch-b',
+                'first_name': 'Spoof', 'last_name': 'Try',
+                'email': 'spoof@test.local',
+            }],
+        )
+        assert result['created'] == 1
+        u = User.objects.get(uuid='11111111-1111-1111-1111-111111111111')
+        assert u.branch_id == 'branch-a'
+
+
 class TestDurableSyncQueue:
     """Pre-fix: queue lived only in cache; LocMem default lost it on
     process restart and Redis crashes between flushes lost unsent records.
