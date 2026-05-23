@@ -573,7 +573,11 @@ class Order(SyncMixin, models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Indexed: dashboard/today, forecast/tomorrow, menu-engineering,
+    # shift_performance, 1C export, and the Telegram /status command all
+    # filter by created_at range; without the index every analytics call
+    # is a heap scan on a constantly-growing table.
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     ready_at = models.DateTimeField(null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
