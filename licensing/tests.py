@@ -361,3 +361,199 @@ class TestCryptoRoundtrip:
         from licensing.services import crypto
         blob = crypto.encrypt_key('hello')
         assert crypto.decrypt_key(blob[:-1] + b'X') is None
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat client
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeatClient:
+    """Unit tests for `do_heartbeat` against a mocked control center.
+
+    The real HTTP path is exercised end-to-end in the verification plan
+    (both projects running side by side); here we just confirm each
+    response code drives the License row the right way."""
+
+    def _prep_active_with_key(self, settings):
+        """Set up a License row that's ACTIVE with an encrypted key. The
+        autouse fixture only sets ACTIVE without a real key, so heartbeats
+        would fail decryption."""
+        from licensing.models import License
+        from licensing.services import crypto
+        from django.utils import timezone
+        from datetime import timedelta
+
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        lic = License.load()
+        lic.status = License.Status.ACTIVE
+        lic.key_encrypted = crypto.encrypt_key(
+            'live-license-key-aaaaaaaaaaaaaaaaaaaaa',
+        )
+        lic.email = 'demo@x.local'
+        lic.org_name = 'Demo'
+        lic.last_heartbeat_at = timezone.now() - timedelta(minutes=5)
+        lic.expires_at = timezone.now() + timedelta(days=30)
+        lic.save()
+        return lic
+
+    def test_unregistered_returns_304(self, settings):
+        from licensing.services import heartbeat as hb
+        _unregister_license()
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        body, status = hb.do_heartbeat()
+        assert status == 304
+
+    def test_perpetual_unlock_returns_304(self, settings):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        lic = License.load()
+        lic.status = License.Status.PERPETUAL_UNLOCK
+        lic.save()
+        body, status = hb.do_heartbeat()
+        assert status == 304
+
+    def test_url_missing_returns_503(self, settings):
+        from licensing.services import heartbeat as hb
+        settings.LICENSE_CONTROL_CENTER_URL = ''
+        body, status = hb.do_heartbeat()
+        assert status == 503
+
+    def test_network_failure_returns_502_no_state_change(
+        self, settings, monkeypatch,
+    ):
+        import requests
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+
+        lic_before = self._prep_active_with_key(settings)
+        before_heartbeat = lic_before.last_heartbeat_at
+
+        def _boom(*a, **kw):
+            raise requests.ConnectionError('refused')
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post', _boom,
+        )
+
+        body, status = hb.do_heartbeat()
+        assert status == 502
+        # last_heartbeat_at NOT updated — grace must tick toward expiry.
+        lic_after = License.load()
+        assert lic_after.last_heartbeat_at == before_heartbeat
+        assert lic_after.status == 'ACTIVE'
+
+    def test_401_flips_to_suspended_immediately(self, settings, monkeypatch):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        self._prep_active_with_key(settings)
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(401, {'message': 'unknown'}),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 401
+        lic = License.load()
+        assert lic.status == 'SUSPENDED'
+        # Operator-visible explanation written to the banner field.
+        assert 'rejected' in lic.last_message.lower() or 'revoked' in lic.last_message.lower()
+
+    def test_410_flips_to_suspended_too(self, settings, monkeypatch):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        self._prep_active_with_key(settings)
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(410, {'message': 'revoked'}),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 410
+        assert License.load().status == 'SUSPENDED'
+
+    def test_5xx_transient_does_not_change_state(self, settings, monkeypatch):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        self._prep_active_with_key(settings)
+        before_status = License.load().status
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(502, {}),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 503
+        assert License.load().status == before_status
+
+    def test_200_active_updates_state(self, settings, monkeypatch):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        from django.utils import timezone
+        from datetime import timedelta
+
+        self._prep_active_with_key(settings)
+        future_iso = (timezone.now() + timedelta(days=60)).isoformat()
+        now_iso = timezone.now().isoformat()
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(200, {
+                'status': 'ACTIVE',
+                'expires_at': future_iso,
+                'server_now': now_iso,
+                'next_heartbeat_in_s': 300,
+                'message': 'Welcome',
+                'ack_id': 'abc-123',
+            }),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 200
+        lic = License.load()
+        assert lic.status == 'ACTIVE'
+        assert lic.last_message == 'Welcome'
+        assert lic.last_heartbeat_at  # updated
+        assert lic.expires_at is not None
+
+    def test_200_suspended_flips_state_and_busts_cache(
+        self, settings, monkeypatch,
+    ):
+        """Critical for enforcement: control center says SUSPENDED → the
+        middleware must refuse the very next request, not wait 60s for
+        the cache TTL."""
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        from django.utils import timezone
+
+        self._prep_active_with_key(settings)
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(200, {
+                'status': 'SUSPENDED',
+                'expires_at': None,
+                'server_now': timezone.now().isoformat(),
+                'message': 'Subscription overdue',
+                'ack_id': 'x',
+            }),
+        )
+        # Pre-heartbeat: request would pass.
+        assert _client().get('/api/admins/dashboard/today').status_code != 503
+
+        hb.do_heartbeat()
+
+        # Post-heartbeat: middleware must refuse immediately.
+        resp = _client().get('/api/admins/dashboard/today')
+        assert resp.status_code == 503
+        assert resp.json()['code'] == 'license_suspended'
+
+    def test_undecryptable_key_returns_500(self, settings, monkeypatch):
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+
+        # Stash garbage in the encrypted-key field; decrypt will return
+        # None and do_heartbeat should bail out with a clear status.
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        lic = License.load()
+        lic.status = License.Status.ACTIVE
+        lic.key_encrypted = b'corrupted-blob'
+        lic.save()
+
+        body, status = hb.do_heartbeat()
+        assert status == 500
+        assert body['message'] == 'license_key_undecryptable'

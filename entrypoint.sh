@@ -21,6 +21,17 @@ echo "DB reachable."
 echo "Running migrations..."
 python manage.py migrate --noinput
 
+# License heartbeat runs as a sibling process — NOT inside gunicorn.
+# Spawning it from AppConfig.ready() would create one heartbeat thread
+# per worker (3 by default), tripling control-center load and skewing
+# last_heartbeat_at attribution. Running it separately keeps a single
+# loop, makes it observable in `docker logs`, and lets `docker stop`
+# kill it cleanly via SIGTERM. Skipped when LICENSE_HEARTBEAT_DISABLED
+# is set, for local development against a stub control center.
+if [ -z "${LICENSE_HEARTBEAT_DISABLED:-}" ]; then
+    python manage.py heartbeat_daemon &
+fi
+
 echo "Starting gunicorn..."
 exec gunicorn alpha_pos.wsgi:application \
     --bind 0.0.0.0:8000 \

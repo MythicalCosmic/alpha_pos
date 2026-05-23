@@ -203,11 +203,157 @@ def _sanitized_license(lic: License) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Heartbeat — wired up in the next commit alongside the daemon.
+# Heartbeat — periodic phone-home to confirm the license is still valid.
 # ---------------------------------------------------------------------------
 
 
 def do_heartbeat() -> Tuple[Dict[str, Any], int]:
-    """Stub. The full heartbeat loop is implemented in the next commit
-    when the management command lands."""
-    return ({'success': False, 'message': 'heartbeat not implemented yet'}, 501)
+    """Send one heartbeat to the control center. Returns (body, status)
+    where status mirrors HTTP semantics:
+      200  — success, License row updated, status applied.
+      304  — no-op (UNREGISTERED / PERPETUAL_UNLOCK — nothing to phone
+             home about; the daemon should not count this as failure).
+      401  — control center rejected our key (revoked / unknown). Local
+             License is flipped to SUSPENDED with an explanatory message
+             so the kill switch fires immediately, before grace.
+      410  — same as 401 but explicitly "revoked"; same local effect.
+      502  — network failure; License unchanged (grace ticks).
+      503  — control center 5xx / transient; License unchanged.
+    """
+    if not getattr(settings, 'LICENSE_CONTROL_CENTER_URL', ''):
+        return ({
+            'success': False, 'message': 'control_center_url not configured',
+        }, 503)
+
+    lic = License.load()
+    if lic.status == License.Status.UNREGISTERED:
+        return ({'success': False, 'message': 'license unregistered'}, 304)
+    if lic.status == License.Status.PERPETUAL_UNLOCK:
+        # Vendor disappeared, escape hatch active — there is no control
+        # center to call. Daemon caller should treat 304 as "nothing to
+        # do" and not reschedule failure backoff.
+        return ({'success': False, 'message': 'perpetual_unlock active'}, 304)
+
+    cleartext = crypto.decrypt_key(lic.key_encrypted)
+    if not cleartext:
+        # LICENSE_FERNET_KEY rotated, or the stored blob is corrupt. The
+        # operator must re-run setup. Log loudly; don't crash the daemon.
+        logger.error(
+            'heartbeat: cannot decrypt stored license key — operator must '
+            're-run setup wizard',
+        )
+        return ({
+            'success': False, 'message': 'license_key_undecryptable',
+        }, 500)
+
+    payload = {
+        'client_version': _client_version(),
+        'branch_id': getattr(settings, 'BRANCH_ID', 'main'),
+        'fingerprint': _fingerprint(),
+        'sent_at': timezone.now().isoformat(),
+        'metrics': _collect_metrics(),
+    }
+    headers = {'Authorization': f'Bearer {cleartext}'}
+
+    try:
+        resp = requests.post(
+            _control_url('/api/v1/heartbeat'),
+            json=payload, headers=headers, timeout=_HTTP_TIMEOUT_S,
+        )
+    except requests.RequestException as exc:
+        # Network failure: do NOT update last_heartbeat_at so grace
+        # continues to count down. Logged at WARNING — common in normal
+        # operations (brief internet outage); INFO would be noisy.
+        logger.warning('heartbeat: network failure: %s', exc)
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.HEARTBEAT_FAILED,
+            detail={'kind': 'network', 'error': str(exc)[:200]},
+        )
+        return ({'success': False, 'message': str(exc)}, 502)
+
+    if resp.status_code in (401, 410):
+        # Control center says our key is bad. Flip local status so the
+        # kill switch fires immediately rather than waiting for the
+        # full offline-grace window. The exact reason (REVOKED vs bad
+        # key) doesn't matter to enforcement — both block.
+        with transaction.atomic():
+            lic = License.objects.select_for_update().get(pk=1)
+            lic.status = License.Status.SUSPENDED
+            lic.last_message = (
+                'Control center rejected this license key. Contact your '
+                'POS vendor — the key may have been revoked.'
+            )
+            lic.last_heartbeat_at = timezone.now()
+            lic.last_server_now = timezone.now()
+            lic.save()
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.STATUS_CHANGED,
+            detail={'from': 'ACTIVE', 'to': 'SUSPENDED',
+                    'reason': f'control_center_status_{resp.status_code}'},
+        )
+        return ({'success': False, 'message': 'rejected by control center',
+                 'status_code': resp.status_code}, resp.status_code)
+
+    if resp.status_code >= 500:
+        # 5xx is transient; don't update last_heartbeat_at, let grace tick.
+        logger.warning('heartbeat: control center 5xx %s', resp.status_code)
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.HEARTBEAT_FAILED,
+            detail={'kind': 'http_5xx', 'status_code': resp.status_code},
+        )
+        return ({'success': False, 'message': 'control center error',
+                 'status_code': resp.status_code}, 503)
+
+    if resp.status_code != 200:
+        # Unexpected status (e.g. 4xx other than 401/410). Surface but
+        # don't change local state. This catches contract drift.
+        logger.warning('heartbeat: unexpected status %s', resp.status_code)
+        return ({'success': False, 'message': 'unexpected status',
+                 'status_code': resp.status_code}, resp.status_code)
+
+    try:
+        body = resp.json()
+    except ValueError:
+        return ({'success': False, 'message': 'invalid response body'}, 502)
+
+    # Success path: apply the response to the License row + bust cache.
+    # The cache bust here is what makes the suspend → enforce gap as
+    # short as one heartbeat (5 min default) rather than the 60s cache
+    # TTL window.
+    with transaction.atomic():
+        lic = License.objects.select_for_update().get(pk=1)
+        prior_status = lic.status
+        _apply_heartbeat_response(lic, body)
+        if lic.status != prior_status:
+            LicenseEvent.objects.create(
+                action=LicenseEvent.Action.STATUS_CHANGED,
+                detail={'from': prior_status, 'to': lic.status,
+                        'ack_id': body.get('ack_id')},
+            )
+
+    LicenseEvent.objects.create(
+        action=LicenseEvent.Action.HEARTBEAT_OK,
+        detail={'status': lic.status, 'ack_id': body.get('ack_id')},
+    )
+    return body, 200
+
+
+def _collect_metrics() -> Dict[str, Any]:
+    """Tiny diagnostic payload for the control-center support view.
+    Bounded on purpose — never include PII or order content."""
+    # We intentionally don't import models at module load to keep startup
+    # cheap. Import inside the function so a stock daemon process doesn't
+    # eagerly initialise base.models.
+    metrics = {}
+    try:
+        from base.models import Order
+        from django.utils import timezone as tz
+        from datetime import timedelta
+        cutoff = tz.now() - timedelta(hours=24)
+        metrics['orders_24h'] = Order.objects.filter(
+            created_at__gte=cutoff, is_deleted=False,
+        ).count()
+    except Exception:
+        # Schema may not exist (fresh install, mid-migration). Skip.
+        pass
+    return metrics
