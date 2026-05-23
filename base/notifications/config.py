@@ -4,9 +4,24 @@ from django.core.cache import cache
 
 CACHE_PREFIX = 'notif'
 
+# Legacy module-level constants kept for one release as fallbacks; the
+# canonical source of truth is now the DB-backed NotificationSettings row
+# admins edit from the admin API. Reading at import time meant a freshly-
+# deployed instance saw `''` forever — the inbound Telegram bot then
+# silently failed every reply because TELEGRAM_BOT_TOKEN was never
+# defined in settings.py. `get_bot_token` / `get_chat_ids` below resolve
+# at call time against NotificationSettings first.
 BOT_TOKEN = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
 CHAT_IDS = getattr(settings, 'TELEGRAM_CHAT_IDS', [])
 NOTIFICATION_TIMEOUT = getattr(settings, 'NOTIFICATION_TIMEOUT', 10)
+
+
+def _load_settings():
+    try:
+        from notifications.models import NotificationSettings
+        return NotificationSettings.load()
+    except Exception:
+        return None
 
 
 class NotificationConfig:
@@ -64,8 +79,16 @@ class NotificationConfig:
 
     @classmethod
     def get_chat_ids(cls):
+        # DB-backed settings take precedence; fall back to the legacy
+        # settings.py value so existing deployments don't regress.
+        ns = _load_settings()
+        if ns and ns.chat_ids:
+            return ns.chat_ids
         return CHAT_IDS
 
     @classmethod
     def get_bot_token(cls):
+        ns = _load_settings()
+        if ns and ns.bot_token:
+            return ns.bot_token
         return BOT_TOKEN
