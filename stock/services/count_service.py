@@ -544,10 +544,10 @@ class StockCountService:
         if count.status == "APPROVED":
             return ServiceResponse.error("Cannot cancel approved count")
 
-        if count.status == "CANCELLED":
-            return ServiceResponse.error("Count already cancelled")
+        if count.status == "CANCELED":
+            return ServiceResponse.error("Count already canceled")
 
-        count.status = StockCount.Status.CANCELLED
+        count.status = StockCount.Status.CANCELED
         if reason:
             count.notes = f"{count.notes}\nCancelled: {reason}".strip()
         count.save(update_fields=["status", "notes", "updated_at"])

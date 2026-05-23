@@ -480,13 +480,13 @@ class ProductionOrderService:
         if not po:
             return ServiceResponse.not_found(f"Production order with id {po_id} not found")
 
-        if po.status in [ProductionOrder.Status.COMPLETED, ProductionOrder.Status.CANCELLED]:
+        if po.status in [ProductionOrder.Status.COMPLETED, ProductionOrder.Status.CANCELED]:
             return ServiceResponse.error(f"Cannot cancel order in {po.status} status")
 
         if po.status in [ProductionOrder.Status.PLANNED, ProductionOrder.Status.IN_PROGRESS]:
             cls._release_ingredients(po_id)
 
-        po.status = ProductionOrder.Status.CANCELLED
+        po.status = ProductionOrder.Status.CANCELED
         if reason:
             po.notes = f"{po.notes}\nCancelled: {reason}".strip()
 

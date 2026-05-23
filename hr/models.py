@@ -442,7 +442,7 @@ class LeaveRequest(SyncMixin, models.Model):
         PENDING = 'PENDING', 'Pending'
         APPROVED = 'APPROVED', 'Approved'
         REJECTED = 'REJECTED', 'Rejected'
-        CANCELLED = 'CANCELLED', 'Cancelled'
+        CANCELED = 'CANCELED', 'Canceled'
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='leave_requests')
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, related_name='requests')
@@ -629,7 +629,7 @@ class PerformanceGoal(SyncMixin, models.Model):
         PENDING = 'PENDING', 'Pending'
         IN_PROGRESS = 'IN_PROGRESS', 'In Progress'
         COMPLETED = 'COMPLETED', 'Completed'
-        CANCELLED = 'CANCELLED', 'Cancelled'
+        CANCELED = 'CANCELED', 'Canceled'
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='performance_goals')
     title = models.CharField(max_length=200)

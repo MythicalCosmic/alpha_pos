@@ -414,13 +414,13 @@ class PurchaseOrderService:
         if not po:
             return ServiceResponse.not_found("Purchase order not found")
 
-        if po.status in [PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.CANCELLED]:
+        if po.status in [PurchaseOrder.Status.RECEIVED, PurchaseOrder.Status.CANCELED]:
             return ServiceResponse.error(f"Cannot cancel order in {po.status} status")
 
         if po.receivings.filter(status=PurchaseReceiving.Status.COMPLETED).exists():
             return ServiceResponse.error("Cannot cancel order with completed receivings")
 
-        po.status = PurchaseOrder.Status.CANCELLED
+        po.status = PurchaseOrder.Status.CANCELED
         if reason:
             po.notes = f"{po.notes}\nCancelled: {reason}".strip()
         po.save(update_fields=["status", "notes", "updated_at"])
@@ -475,7 +475,7 @@ class PurchaseOrderService:
             by_status[status[0]] = queryset.filter(status=status[0]).count()
 
         total_value = queryset.exclude(
-            status=PurchaseOrder.Status.CANCELLED
+            status=PurchaseOrder.Status.CANCELED
         ).aggregate(total=Sum("total"))["total"] or Decimal("0")
 
         pending_value = queryset.filter(

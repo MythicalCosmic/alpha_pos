@@ -445,7 +445,7 @@ class StockTransferService:
         if not transfer:
             return ServiceResponse.not_found(f"Transfer with id {transfer_id} not found")
 
-        if transfer.status in ["RECEIVED", "CANCELLED"]:
+        if transfer.status in ["RECEIVED", "CANCELED"]:
             return ServiceResponse.error(f"Cannot cancel {transfer.status} transfer")
 
         if transfer.status == "IN_TRANSIT":
@@ -467,7 +467,7 @@ class StockTransferService:
                     transaction.set_rollback(True)
                     return result, status
 
-        transfer.status = StockTransfer.Status.CANCELLED
+        transfer.status = StockTransfer.Status.CANCELED
         if reason:
             transfer.notes = f"{transfer.notes}\nCancelled: {reason}".strip()
         transfer.save(update_fields=["status", "notes", "updated_at"])

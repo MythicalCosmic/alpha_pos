@@ -644,7 +644,7 @@ class PurchaseOrder(SyncMixin, models.Model):
         CONFIRMED = "CONFIRMED", "Confirmed"
         PARTIAL = "PARTIAL", "Partially Received"
         RECEIVED = "RECEIVED", "Received"
-        CANCELLED = "CANCELLED", "Cancelled"
+        CANCELED = "CANCELED", "Canceled"
 
     class PaymentStatus(models.TextChoices):
         UNPAID = "UNPAID", "Unpaid"
@@ -1081,7 +1081,7 @@ class ProductionOrder(SyncMixin, models.Model):
         PLANNED = "PLANNED", "Planned"
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
         COMPLETED = "COMPLETED", "Completed"
-        CANCELLED = "CANCELLED", "Cancelled"
+        CANCELED = "CANCELED", "Canceled"
         ON_HOLD = "ON_HOLD", "On Hold"
 
     class Priority(models.TextChoices):
@@ -1319,7 +1319,7 @@ class StockTransfer(SyncMixin, models.Model):
         APPROVED = "APPROVED", "Approved"
         IN_TRANSIT = "IN_TRANSIT", "In Transit"
         RECEIVED = "RECEIVED", "Received"
-        CANCELLED = "CANCELLED", "Cancelled"
+        CANCELED = "CANCELED", "Canceled"
 
     class TransferType(models.TextChoices):
         INTERNAL = "INTERNAL", "Internal"
@@ -1468,7 +1468,7 @@ class StockCount(SyncMixin, models.Model):
         IN_PROGRESS = "IN_PROGRESS", "In Progress"
         PENDING_APPROVAL = "PENDING_APPROVAL", "Pending Approval"
         APPROVED = "APPROVED", "Approved"
-        CANCELLED = "CANCELLED", "Cancelled"
+        CANCELED = "CANCELED", "Canceled"
 
 
     count_number = models.CharField(max_length=50, unique=True)

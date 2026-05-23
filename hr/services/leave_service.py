@@ -414,7 +414,7 @@ class LeaveService:
 
         was_approved = leave_req.status == LeaveRequest.Status.APPROVED
 
-        leave_req.status = LeaveRequest.Status.CANCELLED
+        leave_req.status = LeaveRequest.Status.CANCELED
         leave_req.save(update_fields=["status", "updated_at"])
 
         if was_approved:
