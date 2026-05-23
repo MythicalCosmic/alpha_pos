@@ -54,11 +54,27 @@ def _serialize_order_list(order):
         'status': order.status,
         'is_paid': order.is_paid,
         'total_amount': str(order.total_amount or 0),
-        'items_count': order.items.count(),
-        'items': list(order.items.values(
-            'id', 'product__id', 'product__name', 'product__category__id',
-            'product__category__name', 'quantity', 'detail', 'price', 'ready_at'
-        )),
+        # The list queryset is prefetched with `items__product__category`
+        # (OrderRepository.get_with_relations) — iterate the cached items
+        # instead of `.count()` (extra query) and `.values()` (fresh query
+        # that bypasses the prefetch).
+        'items_count': len(order.items.all()),
+        'items': [
+            {
+                'id': i.id,
+                'product__id': i.product_id,
+                'product__name': i.product.name if i.product else None,
+                'product__category__id': i.product.category_id if i.product else None,
+                'product__category__name': (
+                    i.product.category.name if i.product and i.product.category else None
+                ),
+                'quantity': i.quantity,
+                'detail': i.detail,
+                'price': i.price,
+                'ready_at': i.ready_at,
+            }
+            for i in order.items.all()
+        ],
         'paid_at': order.paid_at.isoformat() if order.paid_at else None,
         'ready_at': order.ready_at.isoformat() if order.ready_at else None,
         'created_at': order.created_at.isoformat(),
@@ -453,7 +469,7 @@ class AdminOrderService:
 
         item.delete(hard_delete=True)
 
-        if order.items.count() == 0:
+        if not order.items.exists():
             order.delete(hard_delete=True)
             return ServiceResponse.success(message='Order deleted (no items remaining)')
 

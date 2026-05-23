@@ -350,7 +350,7 @@ class WaiterOrderService:
 
         item.delete(hard_delete=True)
 
-        if order.items.count() == 0:
+        if not order.items.exists():
             if order.table:
                 TableRepository.update_status(order.table_id, Table.Status.AVAILABLE)
             order.delete(hard_delete=True)
