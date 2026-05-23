@@ -50,11 +50,14 @@ class TestMiddlewareAllowlist:
         assert body['data']['reason'] == 'license_unregistered'
 
     def test_setup_endpoint_reachable_without_license(self):
-        # Wired up in a follow-up commit; for now it just returns 501,
-        # but the kill switch must NOT have refused it first.
+        # Setup is allowlisted in the kill switch — must not 503. A
+        # POST with no JSON body validly returns 400 (bad request) from
+        # the view itself; the point of this test is that the middleware
+        # didn't refuse it first.
         _unregister_license()
         resp = _client().post('/api/licensing/setup')
-        assert resp.status_code == 501
+        assert resp.status_code != 503
+        assert resp.status_code in (400, 422)
 
     def test_unlock_endpoint_reachable_without_license(self):
         _unregister_license()
@@ -197,3 +200,164 @@ class TestMiddlewarePositionAssertion:
         config = LicensingConfig.create('licensing')
         with pytest.raises(ImproperlyConfigured):
             config.ready()
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """Stand-in for requests.Response used by the heartbeat client."""
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+        self.text = ''
+    def json(self):
+        return self._body
+
+
+class TestSetupWizard:
+    """The setup wizard must (a) refuse anything but UNREGISTERED,
+    (b) validate the payload, (c) relay control-center errors with the
+    original status code, (d) on success persist the key encrypted and
+    flip to ACTIVE."""
+
+    def _setup(self, payload):
+        return _client().post(
+            '/api/licensing/setup',
+            data=__import__('json').dumps(payload),
+            content_type='application/json',
+        )
+
+    def test_refuses_when_already_active(self):
+        # Conftest fixture leaves the License in ACTIVE state.
+        resp = self._setup({
+            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'whatever',
+        })
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body['code'] == 'already_registered'
+
+    def test_missing_fields_returns_422(self):
+        _unregister_license()
+        resp = self._setup({'email': 'a@b.local'})
+        assert resp.status_code == 422
+        assert set(resp.json()['errors']) == {'org_name', 'invite_code'}
+
+    def test_invalid_json_returns_400(self):
+        _unregister_license()
+        resp = _client().post(
+            '/api/licensing/setup', data='not json',
+            content_type='application/json',
+        )
+        assert resp.status_code == 400
+
+    def test_control_center_url_missing_returns_503(self, settings):
+        _unregister_license()
+        settings.LICENSE_CONTROL_CENTER_URL = ''
+        resp = self._setup({
+            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'x',
+        })
+        assert resp.status_code == 503
+        assert resp.json()['code'] == 'control_center_url_missing'
+
+    def test_control_center_unreachable_returns_502(self, settings, monkeypatch):
+        import requests
+        _unregister_license()
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://does-not-exist.local'
+
+        def _boom(*args, **kwargs):
+            raise requests.ConnectionError('refused')
+
+        monkeypatch.setattr('licensing.services.heartbeat.requests.post', _boom)
+        resp = self._setup({
+            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'x',
+        })
+        assert resp.status_code == 502
+        assert resp.json()['code'] == 'control_center_unreachable'
+
+    def test_control_center_404_passes_through(self, settings, monkeypatch):
+        _unregister_license()
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(404, {
+                'success': False, 'message': 'Unknown invite code',
+            }),
+        )
+        resp = self._setup({
+            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'fake',
+        })
+        assert resp.status_code == 404
+
+    def test_happy_path_activates_license_and_encrypts_key(
+        self, settings, monkeypatch,
+    ):
+        from licensing.models import License
+        from licensing.services import crypto
+
+        _unregister_license()
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(201, {
+                'success': True,
+                'key': 'fake-license-key-for-tests-' + 'x' * 40,
+                'tenant_id': 7,
+                'expires_at': None,
+                'issued_at': '2026-05-23T10:00:00+00:00',
+            }),
+        )
+
+        resp = self._setup({
+            'email': 'Owner@Plov.uz',  # case folded by the view
+            'org_name': 'Plov Plus',
+            'invite_code': 'invite123',
+        })
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body['success'] is True
+        # CRITICAL: the wizard response NEVER includes the key.
+        assert 'key' not in body
+        assert 'license' in body
+        assert body['license']['status'] == 'ACTIVE'
+
+        # DB row should be ACTIVE, key encrypted (not cleartext), email
+        # lowercased.
+        lic = License.load()
+        assert lic.status == 'ACTIVE'
+        assert lic.email == 'owner@plov.uz'
+        assert lic.org_name == 'Plov Plus'
+        assert lic.key_encrypted  # bytes blob present
+        assert b'fake-license-key' not in bytes(lic.key_encrypted)
+        # Roundtrip through Fernet returns the original cleartext.
+        decrypted = crypto.decrypt_key(lic.key_encrypted)
+        assert decrypted.startswith('fake-license-key')
+        # last_heartbeat_at populated so the grace window starts now.
+        assert lic.last_heartbeat_at is not None
+
+        # And the kill switch should now LET requests through.
+        resp2 = _client().get('/api/admins/dashboard/today')
+        assert resp2.status_code != 503
+
+
+class TestCryptoRoundtrip:
+    def test_encrypt_decrypt_roundtrip(self):
+        from licensing.services import crypto
+        secret = 'super-secret-license-key-abcdef'
+        blob = crypto.encrypt_key(secret)
+        assert secret.encode() not in bytes(blob)
+        assert crypto.decrypt_key(blob) == secret
+
+    def test_empty_input(self):
+        from licensing.services import crypto
+        assert crypto.encrypt_key('') == b''
+        assert crypto.decrypt_key(b'') is None
+
+    def test_tampered_blob_returns_none(self):
+        from licensing.services import crypto
+        blob = crypto.encrypt_key('hello')
+        assert crypto.decrypt_key(blob[:-1] + b'X') is None
