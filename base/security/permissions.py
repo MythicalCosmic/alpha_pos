@@ -13,7 +13,10 @@ def admin_required(view_func):
                 {"success": False, "message": "Authentication required"},
                 status=401,
             )
-        session = SessionRepository.first(payload=session_key)
+        # Use the cached lookup with `select_related('user_id')` instead of
+        # the unscoped `first(payload=…)` — saves 2 DB queries per admin
+        # request (the session row and the lazy FK access to user_id below).
+        session = SessionRepository.get_by_session_key(session_key)
         if not session or not session.user_id or session.user_id.is_deleted:
             return JsonResponse(
                 {"success": False, "message": "Invalid or expired session"},

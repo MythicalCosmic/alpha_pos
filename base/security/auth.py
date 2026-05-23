@@ -13,7 +13,10 @@ def login_required(view_func):
                 {"success": False, "message": "Authentication required"},
                 status=401,
             )
-        session = SessionRepository.first(payload=session_key)
+        # Use the cached lookup with `select_related('user_id')` — `first()`
+        # neither caches nor preloads the user FK, so this saves both a
+        # repeat session lookup and a lazy user query per request.
+        session = SessionRepository.get_by_session_key(session_key)
         if not session or not session.user_id or session.user_id.is_deleted:
             return JsonResponse(
                 {"success": False, "message": "Invalid or expired session"},
