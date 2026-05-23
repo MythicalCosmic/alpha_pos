@@ -316,7 +316,11 @@ LOGGING = {
 CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()
 ]
-CORS_ALLOW_CREDENTIALS = True
+# Only enable credentialed CORS when there's an explicit allowlist — a
+# misconfigured production deploy with an empty list should not advertise
+# credential-bearing cross-origin support, even though browsers also
+# refuse it without specific origins.
+CORS_ALLOW_CREDENTIALS = bool(CORS_ALLOWED_ORIGINS)
 if DEBUG and not CORS_ALLOWED_ORIGINS:
     CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOW_CREDENTIALS = False

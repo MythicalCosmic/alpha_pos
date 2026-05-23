@@ -37,7 +37,22 @@ def ai_query(request):
         user_id=request.user.id,
         location_id=data.get('location_id'),
     )
-    return JsonResponse(result)
+    # Map service-layer error codes to real HTTP status codes so clients can
+    # switch on response.status instead of having to parse the body. Without
+    # this every failure (rate limit, invalid query, quota exhausted) comes
+    # back as a 200 with `success: False` buried in the JSON.
+    error_code = (result or {}).get('error')
+    status_map = {
+        'rate_limited': 429,
+        'quota_exceeded': 429,
+        'invalid_query': 422,
+        'empty_query': 422,
+        'no_api_key': 503,
+        'gemini_error': 502,
+        'ai_unavailable': 503,
+    }
+    status = status_map.get(error_code, 200 if result.get('success') else 400)
+    return JsonResponse(result, status=status)
 
 
 @csrf_exempt

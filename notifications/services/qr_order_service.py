@@ -66,13 +66,16 @@ def resolve_token(token):
 
 def _qr_user():
     """Singleton placeholder user for all QR orders. Generated lazily so a
-    fresh deployment without seed data still works."""
+    fresh deployment without seed data still works. Marked SUSPENDED so the
+    auth-login path refuses it — there is no human owner of these
+    credentials, so any login attempt against them is by definition
+    illegitimate. Order rows still use this user as the FK target."""
     user, created = User.objects.get_or_create(
         email='qr-anonymous@alpha-pos.local',
         defaults={
             'first_name': 'QR', 'last_name': 'Customer',
             'role': User.RoleChoices.USER,
-            'status': User.UserStatus.ACTIVE,
+            'status': User.UserStatus.SUSPENDED,
             'password': secrets.token_hex(32),
         },
     )
