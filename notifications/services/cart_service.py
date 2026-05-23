@@ -129,6 +129,10 @@ def checkout(customer, phone_required=True):
     user = _provision_user_for_customer(customer)
     total = cart_total(cart)
 
+    # `Order.objects.count() + 1` raced under concurrent Telegram checkouts
+    # and re-used display_ids; route through the DisplayIdCounter allocator
+    # so kitchen-handoff numbers stay unique across surfaces.
+    from base.repositories.order import OrderRepository
     order = Order.objects.create(
         user=user,
         phone_number=customer.phone_number or None,
@@ -137,7 +141,7 @@ def checkout(customer, phone_required=True):
         is_paid=False,
         subtotal=total,
         total_amount=total,
-        display_id=Order.objects.count() + 1,
+        display_id=OrderRepository.next_display_id(),
     )
     for item in items:
         OrderItem.objects.create(

@@ -26,6 +26,7 @@ from django.core.signing import BadSignature, Signer
 from django.db import transaction
 
 from base.models import Order, OrderItem, Product, Table, User
+from base.repositories.order import OrderRepository
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,10 @@ def create_qr_order(table, items, customer_note=None):
     for _, qty, price in items:
         total += price * qty
 
+    # `Order.objects.count() + 1` raced under concurrent QR scans and
+    # silently re-used display_ids; route through the DisplayIdCounter
+    # allocator that admins/waiters use so kitchen-handoff numbers stay
+    # unique across surfaces (and wrap at DISPLAY_ID_WRAP_AT).
     order = Order.objects.create(
         user=user,
         place=table.place,
@@ -130,7 +135,7 @@ def create_qr_order(table, items, customer_note=None):
         subtotal=total,
         total_amount=total,
         description=(customer_note or '')[:500] or None,
-        display_id=Order.objects.count() + 1,
+        display_id=OrderRepository.next_display_id(),
     )
     for product, qty, price in items:
         OrderItem.objects.create(
