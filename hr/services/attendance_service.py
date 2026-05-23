@@ -341,24 +341,21 @@ class AttendanceService:
             date=date, is_deleted=False
         ).select_related('employee__user')
 
-        total = records.count()
-        present = records.filter(status=Attendance.Status.PRESENT).count()
-        absent = records.filter(status=Attendance.Status.ABSENT).count()
-        late = records.filter(status=Attendance.Status.LATE).count()
-        half_day = records.filter(status=Attendance.Status.HALF_DAY).count()
-        on_leave = records.filter(status=Attendance.Status.ON_LEAVE).count()
+        # Single aggregate instead of six full scans of the same row set.
+        from django.db.models import Count, Q
+        stats = records.aggregate(
+            total=Count('id'),
+            present=Count('id', filter=Q(status=Attendance.Status.PRESENT)),
+            absent=Count('id', filter=Q(status=Attendance.Status.ABSENT)),
+            late=Count('id', filter=Q(status=Attendance.Status.LATE)),
+            half_day=Count('id', filter=Q(status=Attendance.Status.HALF_DAY)),
+            on_leave=Count('id', filter=Q(status=Attendance.Status.ON_LEAVE)),
+        )
 
         return ServiceResponse.success(data={
             "date": date.isoformat(),
             "attendances": [cls._serialize(a) for a in records],
-            "stats": {
-                "total": total,
-                "present": present,
-                "absent": absent,
-                "late": late,
-                "half_day": half_day,
-                "on_leave": on_leave,
-            },
+            "stats": stats,
         })
 
     @classmethod

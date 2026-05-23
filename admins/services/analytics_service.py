@@ -44,14 +44,18 @@ def shift_performance(shift):
         revenue=Sum('total_amount', filter=Q(is_paid=True)),
     )
 
-    # Avg prep = (ready_at - created_at) over ready/completed orders.
-    prep_qs = qs.filter(ready_at__isnull=False, status__in=['READY', 'COMPLETED'])
-    avg_prep_seconds = None
-    if prep_qs.exists():
-        deltas = [
-            (o.ready_at - o.created_at).total_seconds() for o in prep_qs
-        ]
-        avg_prep_seconds = int(sum(deltas) / len(deltas))
+    # Avg prep = (ready_at - created_at) over ready/completed orders, in SQL
+    # instead of materialising every order row just to compute a mean.
+    from django.db.models import Avg, DurationField, ExpressionWrapper, F
+    prep_avg = qs.filter(
+        ready_at__isnull=False, status__in=['READY', 'COMPLETED'],
+    ).aggregate(
+        avg=Avg(ExpressionWrapper(
+            F('ready_at') - F('created_at'),
+            output_field=DurationField(),
+        )),
+    )['avg']
+    avg_prep_seconds = int(prep_avg.total_seconds()) if prep_avg else None
 
     total = counts['total'] or 0
     cancelled = counts['cancelled'] or 0

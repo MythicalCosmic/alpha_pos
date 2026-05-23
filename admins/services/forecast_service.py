@@ -53,38 +53,48 @@ def gather_history(days=WINDOW_DAYS, top_n=DEFAULT_TOP_N):
         .annotate(total_qty=Sum('quantity'))
         .order_by('-total_qty')[:top_n]
     )
-    products = []
-    for row in top:
-        pid = row['product_id']
-        breakdown = (
-            OrderItem.objects.filter(
-                product_id=pid,
-                order__is_deleted=False,
-                order__created_at__gte=cutoff,
-            )
-            .values(
-                weekday=F('order__created_at__week_day'),
-                hour=F('order__created_at__hour'),
-            )
-            .annotate(qty=Sum('quantity'))
+    top_ids = [row['product_id'] for row in top]
+    name_by_id = {row['product_id']: row['product__name'] for row in top}
+    totals_by_id = {row['product_id']: int(row['total_qty'] or 0) for row in top}
+
+    # One aggregate keyed on (product, weekday, hour) instead of N+1 fan-out.
+    # Previously this fired top_n+1 queries; now it's 2.
+    breakdown_rows = (
+        OrderItem.objects.filter(
+            product_id__in=top_ids,
+            order__is_deleted=False,
+            order__created_at__gte=cutoff,
         )
-        by_weekday = {}
-        by_hour = {}
-        # Django's week_day is 1=Sunday..7=Saturday — map to short names.
-        weekday_map = {1: 'Sun', 2: 'Mon', 3: 'Tue', 4: 'Wed',
-                       5: 'Thu', 6: 'Fri', 7: 'Sat'}
-        for cell in breakdown:
-            wd = weekday_map.get(cell['weekday'], str(cell['weekday']))
-            by_weekday[wd] = by_weekday.get(wd, 0) + int(cell['qty'] or 0)
-            hr = str(cell['hour'])
-            by_hour[hr] = by_hour.get(hr, 0) + int(cell['qty'] or 0)
-        products.append({
+        .values(
+            'product_id',
+            weekday=F('order__created_at__week_day'),
+            hour=F('order__created_at__hour'),
+        )
+        .annotate(qty=Sum('quantity'))
+    ) if top_ids else []
+
+    weekday_map = {1: 'Sun', 2: 'Mon', 3: 'Tue', 4: 'Wed',
+                   5: 'Thu', 6: 'Fri', 7: 'Sat'}
+    per_product_weekday = {pid: {} for pid in top_ids}
+    per_product_hour = {pid: {} for pid in top_ids}
+    for cell in breakdown_rows:
+        pid = cell['product_id']
+        qty = int(cell['qty'] or 0)
+        wd = weekday_map.get(cell['weekday'], str(cell['weekday']))
+        per_product_weekday[pid][wd] = per_product_weekday[pid].get(wd, 0) + qty
+        hr = str(cell['hour'])
+        per_product_hour[pid][hr] = per_product_hour[pid].get(hr, 0) + qty
+
+    products = [
+        {
             'id': pid,
-            'name': row['product__name'],
-            'total_qty': int(row['total_qty'] or 0),
-            'by_weekday': by_weekday,
-            'by_hour': by_hour,
-        })
+            'name': name_by_id[pid],
+            'total_qty': totals_by_id[pid],
+            'by_weekday': per_product_weekday[pid],
+            'by_hour': per_product_hour[pid],
+        }
+        for pid in top_ids
+    ]
 
     return {'window_days': days, 'products': products}
 
