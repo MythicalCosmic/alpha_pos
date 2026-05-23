@@ -145,6 +145,7 @@ def _render(template_type, context):
     template isn't seeded; the caller should handle that gracefully.
     """
     from notifications.services.sender_service import _escape_context
+    from notifications.services.safe_format import safe_format, _UnsafePlaceholder
     from notifications.models import NotificationSettings
 
     template = NotificationTemplate.objects.filter(
@@ -157,7 +158,12 @@ def _render(template_type, context):
     context.setdefault('brand', settings.brand_name)
 
     try:
-        return template.template_text.format(**_escape_context(context))
+        return safe_format(template.template_text, **_escape_context(context))
+    except _UnsafePlaceholder as e:
+        # Stored template reached into an object attribute / index. Drop
+        # the reply and log loudly — admin needs to fix the template.
+        logger.error('unsafe placeholder in template %s: %s', template_type, e)
+        return None
     except (KeyError, IndexError, ValueError) as e:
         logger.error('Template render error for %s: %s', template_type, e)
         return None

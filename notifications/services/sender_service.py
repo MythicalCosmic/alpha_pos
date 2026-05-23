@@ -1,6 +1,7 @@
 import html
 import logging
 from notifications.models import NotificationSettings, NotificationTemplate, NotificationLog
+from notifications.services.safe_format import safe_format, _UnsafePlaceholder
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +38,17 @@ class SenderService:
         context['brand'] = settings.brand_name
 
         try:
-            text = template.template_text.format(**_escape_context(context))
+            text = safe_format(template.template_text, **_escape_context(context))
         except (KeyError, IndexError) as e:
             logger.error(f'Template render error for {notification_type}: {e}')
+            return
+        except _UnsafePlaceholder as e:
+            # Stored template tried to reach inside an object (e.g. via the
+            # str.format `{x.__class__}` trick). Drop the notification and
+            # surface loudly — the template needs to be fixed by an admin.
+            logger.error(
+                'unsafe placeholder in template %s: %s', notification_type, e,
+            )
             return
 
         cls._send_async(text, notification_type)

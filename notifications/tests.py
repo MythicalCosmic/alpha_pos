@@ -169,3 +169,40 @@ class TestNonAdminBlocked:
             content_type='application/json',
         )
         assert resp.status_code == 403
+
+
+class TestTemplateSandbox:
+    """str.format with admin-controlled templates is famously unsafe:
+    `{x.__class__.__init__.__globals__[os].environ}` reads process env.
+    The safe formatter must refuse any placeholder with `.` or `[`."""
+
+    def test_safe_format_blocks_attribute_access(self):
+        from notifications.services.safe_format import safe_format, _UnsafePlaceholder
+
+        with pytest.raises(_UnsafePlaceholder):
+            safe_format('hello {brand.__class__}', brand='Alpha')
+
+    def test_safe_format_blocks_index_access(self):
+        from notifications.services.safe_format import safe_format, _UnsafePlaceholder
+
+        with pytest.raises(_UnsafePlaceholder):
+            safe_format('hello {brand[0]}', brand='Alpha')
+
+    def test_safe_format_allows_named_placeholder(self):
+        from notifications.services.safe_format import safe_format
+
+        assert safe_format('hello {name}', name='world') == 'hello world'
+
+    def test_validator_refuses_attribute_template(self, admin_user):
+        client = _admin_client(admin_user)
+        resp = client.post(
+            '/api/admins/notifications/templates/',
+            data=json.dumps({
+                'notification_type': 'x.attr_attempt',
+                'name': 'X',
+                'template_text': 'pwn {brand.__class__}',
+            }),
+            content_type='application/json',
+        )
+        assert resp.status_code == 422
+        assert 'attribute' in resp.json()['message']

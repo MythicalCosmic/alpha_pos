@@ -1,5 +1,3 @@
-import string
-
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
@@ -9,29 +7,8 @@ from base.security.permissions import admin_required
 from notifications.services.config_service import ConfigService
 from notifications.services.sender_service import SenderService
 from notifications.services.queue_service import QueueService
+from notifications.services.safe_format import validate_template_text as _validate_template_text
 from notifications.models import NotificationTemplate, NotificationLog
-
-
-def _validate_template_text(template_text):
-    # Reject templates whose placeholders aren't valid str.format syntax.
-    # Without this, saving e.g. "Hello {} world" or "{nonexistent_field}" would
-    # silently drop every event of that type at render time. We can't know
-    # the real allowed fields per notification_type without a registry, so we
-    # just verify the format string parses and uses named-field placeholders.
-    if not isinstance(template_text, str):
-        return 'template_text must be a string'
-    try:
-        parsed = list(string.Formatter().parse(template_text))
-    except (ValueError, IndexError) as exc:
-        return f'invalid template syntax: {exc}'
-    for _literal, field_name, _spec, _conv in parsed:
-        if field_name is None:
-            continue
-        if field_name == '':
-            return 'template uses positional {} placeholder; use named {field}'
-        if field_name.isdigit():
-            return 'template uses indexed {0} placeholder; use named {field}'
-    return None
 
 
 @csrf_exempt
@@ -288,17 +265,26 @@ def template_preview(request, template_id):
     settings = NotificationSettings.load()
     context.setdefault('brand', settings.brand_name)
 
-    # Use the same escaping pipeline as the real send path so HTML behavior
-    # is identical between preview and live.
+    # Use the same escaping + sandboxed-format pipeline as the real send
+    # path so preview output matches what an end recipient would see — and
+    # so a malicious template's `{x.__class__}` is caught here too.
     from notifications.services.sender_service import _escape_context
+    from notifications.services.safe_format import safe_format, _UnsafePlaceholder
     try:
-        rendered = template.template_text.format(**_escape_context(context))
+        rendered = safe_format(template.template_text, **_escape_context(context))
     except KeyError as exc:
         missing_key = str(exc).strip("'")
         return JsonResponse(
             {"success": False,
              "message": f"Missing context key: {missing_key}",
              "errors": {"context": f"template references {{{missing_key}}} but context did not provide it"}},
+            status=422,
+        )
+    except _UnsafePlaceholder as exc:
+        return JsonResponse(
+            {"success": False,
+             "message": str(exc),
+             "errors": {"template_text": str(exc)}},
             status=422,
         )
     except (IndexError, ValueError) as exc:
