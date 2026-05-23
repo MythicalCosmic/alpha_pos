@@ -7,6 +7,7 @@ from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from base.security.auth import login_required
 from base.security.audit import audit
+from base.security.idempotency import idempotent
 from base.models import AuditLog
 from admins.services.inkassa_service import AdminInkassaService
 
@@ -47,6 +48,7 @@ def inkassa_detail(request, inkassa_id):
 @csrf_exempt
 @require_POST
 @admin_required
+@idempotent('inkassa.perform')
 def inkassa_perform(request):
     data, error = parse_json_body(request)
     if error:

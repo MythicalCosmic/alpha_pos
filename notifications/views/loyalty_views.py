@@ -16,6 +16,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from base.helpers.request import parse_json_body
 from base.security.auth import login_required, role_required
+from base.security.idempotency import idempotent
 from base.security.permissions import admin_required
 from notifications.models import LoyaltyAccount, LoyaltySettings
 from notifications.services import loyalty_service
@@ -89,6 +90,7 @@ def account_view(request, phone):
 @require_POST
 @login_required
 @role_required('ADMIN', 'CASHIER')
+@idempotent('loyalty.redeem')
 def redeem_view(request, phone):
     settings = LoyaltySettings.load()
     if not settings.is_enabled:
