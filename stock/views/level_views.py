@@ -3,7 +3,7 @@ from datetime import datetime
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services.level_service import StockLevelService, StockTransactionService
@@ -14,8 +14,8 @@ from stock.services.level_service import StockLevelService, StockTransactionServ
 @admin_required
 def stock_levels(request):
     result, status = StockLevelService.get_all(
-        page=int(request.GET.get("page", 1)),
-        per_page=int(request.GET.get("per_page", 50)),
+        page=safe_page(request),
+        per_page=safe_per_page(request, 50),
         location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
         category_id=int(request.GET.get("category_id")) if request.GET.get("category_id") else None,
         item_type=request.GET.get("item_type"),
@@ -95,8 +95,8 @@ def transactions(request):
         date_to = datetime.fromisoformat(request.GET["date_to"]).date()
 
     result, status = StockTransactionService.list(
-        page=int(request.GET.get("page", 1)),
-        per_page=int(request.GET.get("per_page", 50)),
+        page=safe_page(request),
+        per_page=safe_per_page(request, 50),
         stock_item_id=int(request.GET.get("stock_item_id")) if request.GET.get("stock_item_id") else None,
         location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
         movement_type=request.GET.get("type"),

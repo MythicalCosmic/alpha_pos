@@ -3,7 +3,7 @@ from datetime import datetime
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from base.security.audit import audit
@@ -66,7 +66,7 @@ def shift_template_detail(request, template_id):
 @require_GET
 @admin_required
 def shifts(request):
-    page = int(request.GET.get('page', 1))
+    page = safe_page(request)
     per_page = safe_per_page(request, 20)
     user_id = request.GET.get('user_id')
     status = request.GET.get('status')

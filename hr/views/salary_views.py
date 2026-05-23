@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from hr.services import SalaryService
@@ -12,8 +12,8 @@ from hr.services import SalaryService
 @admin_required
 def salaries(request):
     if request.method == "GET":
-        page = int(request.GET.get("page", 1))
-        per_page = int(request.GET.get("per_page", 20))
+        page = safe_page(request)
+        per_page = safe_per_page(request, 20)
         result, status = SalaryService.list(page=page, per_page=per_page)
         return JsonResponse(result, status=status)
 

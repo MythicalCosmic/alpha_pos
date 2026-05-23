@@ -2,7 +2,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from django.conf import settings
-from base.helpers.request import parse_json_body
+from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 
 
@@ -240,7 +240,7 @@ def changes(request):
     since_param = request.GET.get('since')
     since_dt = parse_datetime(since_param) if since_param else None
     try:
-        per_page = min(max(1, int(request.GET.get('per_page', 1000))), 5000)
+        per_page = min(max(1, safe_per_page(request, 1000)), 5000)
     except (TypeError, ValueError):
         per_page = 1000
 

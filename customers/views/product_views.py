@@ -1,4 +1,4 @@
-from base.helpers.request import safe_per_page
+from base.helpers.request import safe_page, safe_per_page
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
@@ -10,7 +10,7 @@ from customers.services.product_service import CustomerProductService
 @login_required
 @require_GET
 def list_products(request):
-    page = int(request.GET.get('page', 1))
+    page = safe_page(request)
     per_page = safe_per_page(request, 20)
     search = request.GET.get('search')
     category_ids = request.GET.get('category_ids')

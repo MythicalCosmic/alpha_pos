@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
@@ -28,7 +28,7 @@ def _check_permission(request, perm):
 @admin_required
 def products(request):
     if request.method == "GET":
-        page = int(request.GET.get('page', 1))
+        page = safe_page(request)
         per_page = safe_per_page(request, 20)
         search = request.GET.get('search')
         category_ids = request.GET.get('category_ids')
@@ -133,7 +133,7 @@ def product_stats(request):
 @require_GET
 @admin_required
 def deleted_products(request):
-    page = int(request.GET.get('page', 1))
+    page = safe_page(request)
     per_page = safe_per_page(request, 20)
     result, status_code = AdminProductService.get_deleted_products(page, per_page)
     return JsonResponse(result, status=status_code)
