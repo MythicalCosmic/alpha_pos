@@ -5,6 +5,8 @@ from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
+from base.security.audit import audit
+from base.models import AuditLog, Product
 from admins.services.product_service import AdminProductService
 from admins.requests.product_requests import create_product_request, bulk_ids_request
 
@@ -84,7 +86,30 @@ def product_detail(request, product_id):
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
+
+    # Capture the pre-update price so an audit row can record the delta
+    # when price actually changes. Price is the highest-fraud field on
+    # this surface — quietly cutting it ahead of a friend's order and
+    # restoring it afterward should not be silent.
+    old_price = None
+    if 'price' in data:
+        old_price = Product.objects.filter(pk=product_id).values_list('price', flat=True).first()
+
     result, status_code = AdminProductService.update_product(product_id, **data)
+
+    if result.get('success') and 'price' in data:
+        new_price = (result.get('data') or {}).get('product', {}).get('price')
+        if old_price is None or str(old_price) != str(new_price):
+            audit(
+                request,
+                AuditLog.Action.PRODUCT_PRICE_CHANGE,
+                target_type='Product',
+                target_id=product_id,
+                metadata={
+                    'old_price': str(old_price) if old_price is not None else None,
+                    'new_price': str(new_price) if new_price is not None else None,
+                },
+            )
     return JsonResponse(result, status=status_code)
 
 

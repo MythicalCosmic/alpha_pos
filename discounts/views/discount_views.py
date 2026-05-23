@@ -4,7 +4,21 @@ from django.views.decorators.http import require_http_methods, require_GET, requ
 from base.helpers.request import parse_json_body, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
+from base.security.audit import audit
+from base.models import AuditLog
 from discounts.services import DiscountTypeService, DiscountService
+
+
+def _discount_meta(payload):
+    """Pull the fraud-relevant subset of a discount payload for the audit
+    trail. Skip prose fields (description, secret_word) — they bloat the row
+    and the secret_word is, well, secret."""
+    if not isinstance(payload, dict):
+        return {}
+    keep = ('code', 'discount_type_id', 'value', 'is_active', 'is_stackable',
+            'usage_limit', 'usage_per_user', 'min_order_amount',
+            'starts_at', 'ends_at')
+    return {k: payload.get(k) for k in keep if k in payload}
 
 
 @csrf_exempt
@@ -84,6 +98,15 @@ def discounts(request):
 
     data['created_by_id'] = request.user.id
     result, status_code = DiscountService.create(**data)
+    if result.get('success'):
+        created = (result.get('data') or {}).get('discount') or {}
+        audit(
+            request,
+            AuditLog.Action.DISCOUNT_CREATE,
+            target_type='Discount',
+            target_id=created.get('id'),
+            metadata=_discount_meta(data),
+        )
     return JsonResponse(result, status=status_code)
 
 
@@ -97,6 +120,13 @@ def discount_detail(request, discount_id):
 
     if request.method == "DELETE":
         result, status_code = DiscountService.delete(discount_id)
+        if result.get('success'):
+            audit(
+                request,
+                AuditLog.Action.DISCOUNT_DELETE,
+                target_type='Discount',
+                target_id=discount_id,
+            )
         return JsonResponse(result, status=status_code)
 
     data, error = parse_json_body(request)
@@ -104,6 +134,14 @@ def discount_detail(request, discount_id):
         return json_response(error)
 
     result, status_code = DiscountService.update(discount_id, **data)
+    if result.get('success'):
+        audit(
+            request,
+            AuditLog.Action.DISCOUNT_UPDATE,
+            target_type='Discount',
+            target_id=discount_id,
+            metadata=_discount_meta(data),
+        )
     return JsonResponse(result, status=status_code)
 
 
@@ -112,6 +150,15 @@ def discount_detail(request, discount_id):
 @admin_required
 def discount_toggle(request, discount_id):
     result, status_code = DiscountService.toggle(discount_id)
+    if result.get('success'):
+        new_state = (result.get('data') or {}).get('discount', {}).get('is_active')
+        audit(
+            request,
+            AuditLog.Action.DISCOUNT_UPDATE,
+            target_type='Discount',
+            target_id=discount_id,
+            metadata={'is_active': new_state, 'via': 'toggle'},
+        )
     return JsonResponse(result, status=status_code)
 
 

@@ -998,9 +998,16 @@ class AuditLog(SyncMixin, models.Model):
 
     class Action(models.TextChoices):
         INKASSA_PERFORM = "INKASSA_PERFORM", "Inkassa performed"
+        USER_CREATE = "USER_CREATE", "User created"
+        USER_UPDATE = "USER_UPDATE", "User updated"
         USER_DELETE = "USER_DELETE", "User deleted"
         SHIFT_RECONCILE = "SHIFT_RECONCILE", "Shift reconciled"
         ORDER_CANCEL = "ORDER_CANCEL", "Order canceled"
+        PRODUCT_PRICE_CHANGE = "PRODUCT_PRICE_CHANGE", "Product price changed"
+        DISCOUNT_CREATE = "DISCOUNT_CREATE", "Discount created"
+        DISCOUNT_UPDATE = "DISCOUNT_UPDATE", "Discount updated"
+        DISCOUNT_DELETE = "DISCOUNT_DELETE", "Discount deleted"
+        LOYALTY_REDEEM = "LOYALTY_REDEEM", "Loyalty stamps redeemed"
 
     actor = models.ForeignKey(
         User,

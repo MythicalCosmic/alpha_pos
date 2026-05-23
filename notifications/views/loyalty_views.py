@@ -16,8 +16,10 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from base.helpers.request import parse_json_body
 from base.security.auth import login_required, role_required
+from base.security.audit import audit
 from base.security.idempotency import idempotent
 from base.security.permissions import admin_required
+from base.models import AuditLog
 from notifications.models import LoyaltyAccount, LoyaltySettings
 from notifications.services import loyalty_service
 
@@ -98,6 +100,11 @@ def redeem_view(request, phone):
             {'success': False, 'message': 'Loyalty is disabled'},
             status=409,
         )
+    # Snapshot the pre-redeem balance for the audit row so a stamp dispute
+    # can be reconstructed against the cashier session that performed it.
+    before = loyalty_service.get_account(phone)
+    stamps_before = before.stamps_balance if before else None
+
     account = loyalty_service.redeem(phone)
     if not account:
         return JsonResponse(
@@ -107,6 +114,18 @@ def redeem_view(request, phone):
             },
             status=409,
         )
+    audit(
+        request,
+        AuditLog.Action.LOYALTY_REDEEM,
+        target_type='LoyaltyAccount',
+        target_id=account.pk,
+        metadata={
+            'phone': phone,
+            'stamps_before': stamps_before,
+            'stamps_after': account.stamps_balance,
+            'stamps_per_reward': settings.stamps_per_reward,
+        },
+    )
     return JsonResponse({'success': True, 'data': _serialize_account(account)})
 
 

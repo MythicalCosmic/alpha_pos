@@ -40,6 +40,17 @@ def users(request):
         password=data.get('password'),
         email=data.get('email'),
     )
+    if result.get('success'):
+        created_user = (result.get('data') or {}).get('user') or {}
+        audit(
+            request,
+            AuditLog.Action.USER_CREATE,
+            target_type='User',
+            target_id=created_user.get('id'),
+            # Skip email/password from the metadata — email is PII and the
+            # audit row is sync-replicated; password is never logged anyway.
+            metadata={'role': data.get('role', 'CASHIER')},
+        )
     return JsonResponse(result, status=status_code)
 
 
@@ -57,6 +68,29 @@ def user_detail(request, user_id):
             return json_response(error)
 
         result, status_code = AdminUserService.update_user(user_id, **data)
+        # Role escalation, account reactivation, and admin-driven password
+        # resets all flow through update_user; without an audit row they leave
+        # no trail and compromised admin credentials become undetectable.
+        if result.get('success'):
+            sensitive_keys = {'role', 'status', 'password', 'permissions', 'email'}
+            changed = sorted(sensitive_keys & set(data.keys()))
+            if changed:
+                metadata = {'fields_changed': changed}
+                # Capture the new role/status so the trail is useful for
+                # privilege-escalation review; never log the password itself.
+                if 'role' in data:
+                    metadata['new_role'] = data['role']
+                if 'status' in data:
+                    metadata['new_status'] = data['status']
+                if 'password' in data:
+                    metadata['password_changed'] = True
+                audit(
+                    request,
+                    AuditLog.Action.USER_UPDATE,
+                    target_type='User',
+                    target_id=user_id,
+                    metadata=metadata,
+                )
         return JsonResponse(result, status=status_code)
 
     if request.method == "DELETE":
