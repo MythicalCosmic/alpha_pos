@@ -3,16 +3,24 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.auth import login_required
+from base.security.auth import login_required, role_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
 from base.models import AuditLog
 from waiters.services.order_service import WaiterOrderService
 
+# Routes under /api/waiters/ are reachable with any valid session token —
+# WaiterAuthService refuses non-WAITER at login, but a USER or CASHIER
+# session minted by a sibling auth endpoint authenticates here just as
+# well. Pin every mutation to WAITER or ADMIN so a stolen USER token can't
+# create / cancel / modify orders or flip table state through this surface.
+WAITER_ROLES = ('WAITER', 'ADMIN')
+
 
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*WAITER_ROLES)
 def my_orders(request):
     page, per_page = validate_pagination(request)
     status = request.GET.get('status')
@@ -29,6 +37,7 @@ def my_orders(request):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 @idempotent('orders.create')
 def create_order(request):
     data, error = parse_json_body(request)
@@ -58,6 +67,7 @@ def create_order(request):
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*WAITER_ROLES)
 def get_order(request, order_id):
     result, status_code = WaiterOrderService.get_order(order_id, request.user.id)
     return JsonResponse(result, status=status_code)
@@ -66,6 +76,7 @@ def get_order(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 def add_item(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -97,6 +108,7 @@ def add_item(request, order_id):
 @csrf_exempt
 @require_http_methods(["PATCH"])
 @login_required
+@role_required(*WAITER_ROLES)
 def update_item(request, order_id, item_id):
     data, error = parse_json_body(request)
     if error:
@@ -119,6 +131,7 @@ def update_item(request, order_id, item_id):
 @csrf_exempt
 @require_http_methods(["DELETE"])
 @login_required
+@role_required(*WAITER_ROLES)
 def remove_item(request, order_id, item_id):
     result, status_code = WaiterOrderService.remove_item(
         order_id, item_id, waiter_user_id=request.user.id,
@@ -129,6 +142,7 @@ def remove_item(request, order_id, item_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 def mark_ready(request, order_id):
     result, status_code = WaiterOrderService.mark_ready(order_id, waiter_user_id=request.user.id)
     return JsonResponse(result, status=status_code)
@@ -137,6 +151,7 @@ def mark_ready(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 @idempotent('orders.cancel')
 def cancel_order(request, order_id):
     result, status_code = WaiterOrderService.cancel_order(order_id, waiter_user_id=request.user.id)
@@ -154,6 +169,7 @@ def cancel_order(request, order_id):
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*WAITER_ROLES)
 def places(request):
     result, status_code = WaiterOrderService.list_places()
     return JsonResponse(result, status=status_code)
@@ -162,6 +178,7 @@ def places(request):
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*WAITER_ROLES)
 def tables(request):
     place_id = request.GET.get('place_id')
     if place_id:
@@ -180,15 +197,8 @@ def tables(request):
 @csrf_exempt
 @require_http_methods(["PATCH"])
 @login_required
+@role_required(*WAITER_ROLES)
 def table_status(request, table_id):
-    # Without a role gate, any logged-in user (including USER role) could
-    # free or occupy any table.
-    if request.user.role not in ('WAITER', 'ADMIN'):
-        return JsonResponse(
-            {"success": False, "message": "Insufficient permissions"},
-            status=403,
-        )
-
     data, error = parse_json_body(request)
     if error:
         return json_response(error)
@@ -208,6 +218,7 @@ def table_status(request, table_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 def apply_discount(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -220,6 +231,7 @@ def apply_discount(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 def remove_discount(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -232,6 +244,7 @@ def remove_discount(request, order_id):
 @csrf_exempt
 @require_POST
 @login_required
+@role_required(*WAITER_ROLES)
 def check_secret_word(request, order_id):
     data, error = parse_json_body(request)
     if error:
