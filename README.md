@@ -20,6 +20,27 @@ local work, PostgreSQL + Redis in production. A Postman collection
 
 ## Running locally
 
+### Easiest: single-PC install (Windows / Mac / Linux)
+
+For deploying onto a single restaurant PC where one cashier app talks
+to one local backend, you don't need Postgres, Redis, Docker, or any
+external service — only Python 3.11+ on the PATH.
+
+**Windows.** Double-click `install.bat` once (creates a virtualenv,
+installs deps, runs migrations, creates the admin). Write down the
+admin email + password printed at the end. After that, every time
+the PC boots, double-click `start.bat` to launch the server on
+http://127.0.0.1:8000.
+
+**Mac / Linux.** Run `bash install.sh` once, then `bash start.sh` to
+launch.
+
+Both paths use SQLite at `db.sqlite3` and an in-process cache — no
+Redis, no Postgres. Move to `DB_ENGINE` + `USE_REDIS` only when you
+need multi-worker or multi-branch.
+
+### Manual / developer install
+
 ```bash
 # Python 3.14 + virtualenv
 pip install -r requirements.txt -r requirements-dev.txt

@@ -1,3 +1,4 @@
+
 # Python
 __pycache__/
 *.py[cod]
@@ -27,6 +28,8 @@ logs/
 !.env.example
 *.pem
 *.key
+# Secret key generated on first run by run.py / install.bat — never commit.
+.secret_key
 
 # IDE / editors
 .idea/
