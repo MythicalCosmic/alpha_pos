@@ -49,10 +49,26 @@ def _serialize_order_list(order):
         'total_amount': str(order.total_amount or 0),
         'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
         'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
-        'items': list(order.items.values(
-            'id', 'product__id', 'product__name', 'product__category__id',
-            'product__category__name', 'quantity', 'detail', 'price', 'ready_at'
-        )),
+        # The list queryset is prefetched with `items__product__category`
+        # (OrderRepository.get_with_relations) — iterate the cached items
+        # instead of `.values()`, which would issue a fresh query per order
+        # and defeat the prefetch (200+ extra hits on the client_display).
+        'items': [
+            {
+                'id': i.id,
+                'product__id': i.product_id,
+                'product__name': i.product.name if i.product else None,
+                'product__category__id': i.product.category_id if i.product else None,
+                'product__category__name': (
+                    i.product.category.name if i.product and i.product.category else None
+                ),
+                'quantity': i.quantity,
+                'detail': i.detail,
+                'price': i.price,
+                'ready_at': i.ready_at,
+            }
+            for i in order.items.all()
+        ],
         'paid_at': order.paid_at.isoformat() if order.paid_at else None,
         'ready_at': order.ready_at.isoformat() if order.ready_at else None,
         'created_at': order.created_at.isoformat(),
@@ -359,7 +375,9 @@ class CustomerOrderService:
     @staticmethod
     @transaction.atomic
     def add_item_to_order(order_id, product_id, quantity, cashier_id=None, user_id=None, user_role=None):
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so concurrent add-item calls serialize across
+        # both the quantity increment and the subtotal recalculate.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -376,8 +394,11 @@ class CustomerOrderService:
 
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
         if existing:
-            existing.quantity += quantity
-            existing.save(update_fields=['quantity'])
+            # Increment in SQL so concurrent add-item calls cannot lose updates.
+            from django.db.models import F
+            OrderItemRepository.model.objects.filter(pk=existing.pk).update(
+                quantity=F('quantity') + quantity,
+            )
         else:
             OrderItemRepository.create(
                 order=order, product=product, quantity=quantity, price=product.price
@@ -394,7 +415,7 @@ class CustomerOrderService:
     @staticmethod
     @transaction.atomic
     def update_order_item(order_id, item_id, quantity, cashier_id=None, user_id=None, user_role=None):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -424,7 +445,7 @@ class CustomerOrderService:
     @staticmethod
     @transaction.atomic
     def remove_item_from_order(order_id, item_id, cashier_id=None, user_id=None, user_role=None):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -673,8 +694,13 @@ class CustomerOrderService:
         )
 
     @staticmethod
+    @transaction.atomic
     def mark_order_ready(order_id, cashier_id=None, user_id=None, user_role=None):
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so the status flip and the items bulk-update
+        # run in the same transaction. Without atomic, a failure between
+        # order.save() and items.update() would leave order=READY with
+        # items still PREPARING — kitchen display contradicts the queue.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 

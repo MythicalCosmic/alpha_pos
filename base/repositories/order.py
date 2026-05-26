@@ -70,8 +70,9 @@ class OrderRepository(BaseSyncRepository):
         return cls.model.objects.filter(is_deleted=False, delivery_person=delivery_person)
 
     @classmethod
-    def get_with_relations(cls):
-        return cls.model.objects.filter(is_deleted=False).select_related(
+    def get_with_relations(cls, include_deleted=False):
+        qs = cls.model.objects.all() if include_deleted else cls.model.objects.filter(is_deleted=False)
+        return qs.select_related(
             'user', 'cashier', 'delivery_person', 'place', 'table'
         ).prefetch_related('items__product__category')
 
@@ -124,8 +125,8 @@ class OrderRepository(BaseSyncRepository):
     def build_filtered_queryset(cls, statuses=None, payment_status=None,
                                  category_ids=None, user_id=None, cashier_id=None,
                                  order_type=None, date_from=None, date_to=None,
-                                 order_by='-created_at'):
-        qs = cls.get_with_relations()
+                                 order_by='-created_at', include_deleted=False):
+        qs = cls.get_with_relations(include_deleted=include_deleted)
 
         if payment_status:
             payment_status = payment_status.strip().upper()

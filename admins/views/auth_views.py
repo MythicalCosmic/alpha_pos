@@ -1,10 +1,10 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_GET, require_http_methods
-from base.helpers.request import get_client_ip, get_user_agent, get_session_key
-from base.helpers.response import json_response, ServiceResponse
+from base.helpers.request import get_client_ip, get_user_agent
+from base.helpers.response import json_response
 from base.helpers.cookie import set_session_cookie, clear_session_cookie
-from base.security.rate_limit import rate_limit
+from base.security.rate_limit import rate_limit, rate_limit_by
 from base.security.permissions import admin_required
 from admins.services.auth_service import AdminAuthService
 from admins.requests.auth_requests import (
@@ -14,8 +14,20 @@ from admins.requests.auth_requests import (
 )
 
 
+def _login_email(request):
+    # Best-effort: don't 500 the throttle if the body is malformed.
+    try:
+        import json
+        body = json.loads(request.body.decode('utf-8') or '{}')
+    except Exception:
+        return None
+    email = body.get('email') if isinstance(body, dict) else None
+    return (email or '').strip().lower()[:128] or None
+
+
 @csrf_exempt
 @rate_limit('admin_login', 5, 60)
+@rate_limit_by('admin_login_user', 5, 60, _login_email)
 @require_POST
 def login(request):
     data, error = login_request(request)

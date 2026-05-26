@@ -5,7 +5,6 @@ new models. Designed to be lean enough for the manager view of the owner
 mobile app to call frequently.
 """
 import logging
-from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import (

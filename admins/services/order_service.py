@@ -220,13 +220,8 @@ class AdminOrderService:
             date_from=date_from_dt,
             date_to=date_to_dt,
             order_by=order_by,
+            include_deleted=include_deleted,
         )
-
-        if include_deleted:
-            from base.models import Order
-            qs = Order.objects.select_related(
-                'user', 'cashier', 'delivery_person'
-            ).prefetch_related('items__product__category').order_by(order_by)
 
         page_obj, paginator = OrderRepository.paginate(qs, page, per_page)
         orders = [_serialize_order_list(o) for o in page_obj.object_list]
@@ -624,14 +619,31 @@ class AdminOrderService:
         if was_cash:
             InkassaService.add_to_register(-order.total_amount)
 
+        # Reverse the stock deduction that mark_as_paid applied. Without
+        # this, a pay -> unpay -> pay sequence double-deducts inventory
+        # because deduct_for_order has no per-order dedup. The handler is
+        # idempotent for already-reversed orders.
+        try:
+            from stock.services import OrderStockService, StockSettingsService
+            settings = StockSettingsService.load()
+            if settings.stock_enabled and settings.deduct_on_order_status == 'PAID':
+                OrderStockService.reverse_deduction(
+                    order.id, order.user_id, 'Payment reversed',
+                )
+        except Exception:
+            logger.exception('stock reversal failed during unpay (order=%s)', order.id)
+
         return ServiceResponse.success(
             data={'is_paid': False},
             message='Order marked as unpaid',
         )
 
     @staticmethod
+    @transaction.atomic
     def mark_order_ready(order_id):
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so two concurrent ready-flips can't both pass
+        # the status guard and run the side-effects twice.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 

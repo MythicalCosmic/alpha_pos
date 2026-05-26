@@ -13,7 +13,7 @@ import logging
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, F, Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)

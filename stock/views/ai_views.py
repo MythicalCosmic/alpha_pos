@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from django.views.decorators.http import require_GET, require_POST
 from base.helpers.request import parse_json_body
 from base.helpers.response import json_response, ServiceResponse
 from base.security.permissions import admin_required
@@ -125,22 +125,3 @@ def ai_quick_actions(request):
     return JsonResponse({'success': True, 'actions': actions})
 
 
-@csrf_exempt
-@require_http_methods(['GET', 'POST'])
-@admin_required
-def ai_history(request):
-    return JsonResponse({
-        'success': True,
-        'history': [],
-        'message': 'History is managed client-side',
-    })
-
-
-@csrf_exempt
-@require_POST
-@admin_required
-def ai_feedback(request):
-    data, error = parse_json_body(request)
-    if error:
-        return json_response(error)
-    return JsonResponse({'success': True, 'message': 'Thank you for your feedback!'})

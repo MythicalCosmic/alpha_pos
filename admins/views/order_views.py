@@ -3,7 +3,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
-from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required, permission_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
@@ -160,6 +159,7 @@ def remove_item(request, order_id, item_id):
 @require_http_methods(["PATCH"])
 @admin_required
 @permission_required('order.update')
+@idempotent('orders.status')
 def update_status(request, order_id):
     data, error = parse_json_body(request)
     if error:
@@ -196,6 +196,7 @@ def pay_order(request, order_id):
 @require_POST
 @admin_required
 @permission_required('order.update')
+@idempotent('orders.unpay')
 def unpay_order(request, order_id):
     result, status_code = AdminOrderService.mark_as_unpaid(order_id)
     return JsonResponse(result, status=status_code)

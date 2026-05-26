@@ -1,12 +1,10 @@
-import json
-
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.permissions import admin_required, permission_required
+from base.security.permissions import admin_required
 from base.security.audit import audit
 from base.models import AuditLog
 from admins.services.user_service import AdminUserService
