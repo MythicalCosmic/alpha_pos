@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from django.views.decorators.http import require_http_methods
+from base.helpers.request import parse_json_body
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import StockCategoryService
@@ -12,8 +12,9 @@ from stock.services import StockCategoryService
 @admin_required
 def categories(request):
     if request.method == "GET":
-        page = safe_page(request)
-        per_page = safe_per_page(request, 20)
+        # Categories are intentionally unpaginated — the set is small and
+        # the tree mode needs the whole list anyway. `?page` / `?per_page`
+        # are silently ignored, so we don't bother extracting them.
         category_type = request.GET.get("type")
         parent_id = request.GET.get("parent_id")
         tree = request.GET.get("tree", "false").lower() == "true"

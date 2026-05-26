@@ -1,20 +1,19 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Tuple
 from decimal import Decimal
-from datetime import datetime, date, timedelta
+from datetime import date
 from django.db import transaction
-from django.db.models import Q, Sum, F, Count
+from django.db.models import Sum, F, Count
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import (
-    StockLevel, StockTransaction, StockItem, StockLocation,
-    StockUnit, StockBatch, StockSettings
+    StockLevel, StockTransaction, StockSettings
 )
-from stock.services.base_service import to_decimal, round_decimal, generate_number
+from stock.services.base_service import to_decimal, generate_number
 from stock.repositories import (
     StockLevelRepository, StockTransactionRepository,
     StockItemRepository, StockLocationRepository,
-    StockUnitRepository, StockBatchRepository,
+    StockUnitRepository,
 )
 
 
@@ -372,7 +371,9 @@ class StockLevelService:
                            location_id: int,
                            quantity: Decimal,
                            user_id: int,
-                           notes: str = "") -> Tuple[Dict[str, Any], int]:
+                           notes: str = "",
+                           reference_type: str = "",
+                           reference_id: int = None) -> Tuple[Dict[str, Any], int]:
         settings = StockSettings.load()
         if not settings.stock_enabled:
             return ServiceResponse.success(data={"skipped": True})
@@ -380,7 +381,14 @@ class StockLevelService:
         quantity = abs(to_decimal(quantity))
         level = cls.get_level_for_update(stock_item_id, location_id)
 
-        release_qty = min(quantity, level.reserved_quantity)
+        # Refuse to silently swallow a release larger than what is reserved.
+        # The prior min() cap masked double-releases and order-mismatched
+        # releases; now the caller gets a clear error and can investigate.
+        if quantity > level.reserved_quantity:
+            return ServiceResponse.error(
+                f"Cannot release {quantity}: only {level.reserved_quantity} reserved at this level"
+            )
+        release_qty = quantity
 
         level.reserved_quantity -= release_qty
         level.save(update_fields=["reserved_quantity", "updated_at"])
@@ -399,6 +407,8 @@ class StockLevelService:
             quantity_before=level.quantity,
             quantity_after=level.quantity,
             user_id=user_id,
+            reference_type=reference_type or "",
+            reference_id=reference_id,
             notes=notes,
         )
 

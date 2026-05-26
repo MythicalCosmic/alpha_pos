@@ -1,20 +1,16 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 from decimal import Decimal
 from django.db import transaction
-from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from stock.models import StockSettings, ProductStockLink, StockLevel
 from stock.services.base_service import to_decimal
 from stock.repositories import (
     ProductStockLinkRepository, ProductComponentStockRepository,
-    StockLevelRepository, StockTransactionRepository,
-    StockBatchRepository, StockItemRepository,
+    StockTransactionRepository,
     StockSettingsRepository,
 )
 from .level_service import StockLevelService
 from .product_link_service import ProductStockLinkService
-from .settings_service import StockSettingsService
 
 
 class OrderStockService:
@@ -154,6 +150,14 @@ class OrderStockService:
                     continue
 
                 if action == "REMOVE" and comp.is_removable:
+                    # NOT IMPLEMENTED: crediting a removed component back to
+                    # stock requires either a dedicated `MODIFIER_CREDIT`
+                    # movement_type or count-based bookkeeping in
+                    # reverse_deduction (which currently short-circuits the
+                    # moment any RETURN_FROM_CUSTOMER row exists for the
+                    # order). Until that lands, "no onions" does not return
+                    # the onion to stock — the base recipe deducted it and
+                    # we leak the gram. See ROADMAP.
                     pass
                 elif action == "ADD" and comp.is_addable:
                     result, status = StockLevelService.adjust(
@@ -187,7 +191,6 @@ class OrderStockService:
                           user_id: int,
                           reason: str = "Order cancelled") -> Tuple[Dict[str, Any], int]:
 
-        from stock.models import StockTransaction
 
         settings = StockSettingsRepository.load()
 
@@ -364,7 +367,6 @@ class OrderStockService:
                             order_id: int,
                             user_id: int) -> Tuple[Dict[str, Any], int]:
 
-        from stock.models import StockTransaction
 
         settings = StockSettingsRepository.load()
 
@@ -393,11 +395,18 @@ class OrderStockService:
         releases = []
 
         for res in reservations:
+            # Pass reference_type/reference_id through so the RELEASE
+            # transactions carry the order linkage. Without this, the
+            # idempotency check above can never match prior releases and
+            # the second call falls into the for-loop, hitting "Cannot
+            # release X: only Y reserved" instead of a clean skip.
             StockLevelService.release_reservation(
                 stock_item_id=res.stock_item_id,
                 location_id=res.location_id,
                 quantity=res.base_quantity,
-                user_id=user_id
+                user_id=user_id,
+                reference_type="Order",
+                reference_id=order_id,
             )
 
             releases.append({

@@ -213,3 +213,104 @@ matches the request that originally produced it. Not exploitable.
 
 Fixes for H1, H2, H3 and the eight dead imports follow this report in
 the same change. Total surface ~12 small edits.
+
+---
+
+# Deep-pass follow-up (added 2026-05-26)
+
+After the surface scan above shipped, two general-purpose agents did a
+full-file deep read of the sync engine and stock services — the two
+most concurrency-heavy surfaces. The full test suite (267 tests) was
+run and passes; `ruff` was installed and 127 unused imports were
+auto-removed across the codebase. Below is a triage of the deep-pass
+findings.
+
+## Fixed in this same pass
+
+### S15. `release_reservation` idempotency skip was dead code
+
+**Files:** `stock/services/order_service.py:377-387`, `stock/services/level_service.py:367-414`
+
+The `release_reservations` flow checks for prior `RESERVATION_RELEASE`
+transactions with `reference_type="Order", reference_id=order_id` to
+skip duplicate releases. But `StockLevelService.release_reservation`
+never wrote `reference_type`/`reference_id` on the RELEASE
+transactions — only on the original RESERVATION (line 356-358 of
+level_service.py). So the idempotency check could never match a prior
+release, and a double-call would fall through into the for-loop, hit
+the "Cannot release X: only Y reserved" error path at level_service.py
+line 385-388, and return 400 instead of a clean idempotent skip.
+
+**Fix:** added `reference_type` / `reference_id` kwargs to
+`release_reservation`, plumbed them into the transaction row, and the
+caller in `OrderStockService.release_reservations` now passes
+`("Order", order_id)`. Stock tests pass.
+
+### Dead variable: `order_subtotal`
+
+**File:** `discounts/services/discount_service.py:278`
+
+`calculate_discount` computed `order_subtotal` and never used it. The
+function uses `applicable_subtotal` for every code path. Removed.
+
+### Dead variables: `page` / `per_page` in stock category list
+
+**File:** `stock/views/category_views.py:14-19`
+
+Category list view extracted `page = safe_page(request)` and
+`per_page = safe_per_page(request, 20)` but the service doesn't
+accept them and the response is unpaginated. Removed the lines and
+added a comment that the endpoint is intentionally unpaginated.
+
+### 127 unused imports across the project
+
+`ruff check --select F401 --fix` removed unused imports from 50+
+files. `__init__.py` re-exports were preserved (`--exclude
+'**/__init__.py'`). Full test suite re-run: 267 tests pass.
+
+## Open follow-ups (deferred, not blocking ship)
+
+These are real findings worth fixing, but each one is bigger than a
+surgical edit and needs separate review. Listing severity + scope so
+they can be triaged.
+
+### Sync — open
+
+| ID | Severity | Surface | Summary |
+|---|---|---|---|
+| FS1 | HIGH | `base/services/sync/receiver.py:240-266` | `_create_or_update` has no `transaction.atomic` + `select_for_update` per record. Two concurrent receives of the same UUID can both pass `_should_replace` against the old version and the later writer wins blindly, defeating the deterministic tiebreaker. Fix: wrap the per-record body in atomic + `select_for_update`. |
+| FS2 | HIGH | `base/services/sync/service.py:60-95` | `transport.send_batch` returns `success=True` if `created>0 OR updated>0`, even with `errors[]` non-empty. The service then extends `synced_uuids` with **all** batch UUIDs and deletes them from the queue — the failed ones are lost forever. Fix: server must echo per-UUID outcome, client removes only successes from queue. |
+| FS3 | HIGH | `base/models.py:163-237` (default `from_sync_dict`) | The default `from_sync_dict` does `setattr` on data keys with a `hasattr` guard, **without** the `_resolve_foreign_keys` UUID→instance step that the receive-path `_create_or_update` does. Stock / HR / discounts models inherit the default; pull-from-cloud creates rows with every FK as NULL on those models. Only Order / OrderItem / Product / Inkassa / User / AuditLog override correctly. Severity is HIGH only if the pull path is enabled (`get_pull_enabled()` flag); LOW if branches are push-only. Fix: move the FK-UUID resolution into the SyncMixin default, or have every SyncMixin subclass override `from_sync_dict`. |
+| FS4 | MEDIUM | `base/models.py:240-265` + `base/services/sync/receiver.py:49-53` | Naive vs aware datetime comparison in `_should_replace` tiebreaker. `dateutil.parser.parse` returns naive when ISO string has no offset; comparing with TZ-aware crashes the whole record-receive with TypeError. Fix: `make_aware` on parse if naive. |
+| FS5 | MEDIUM | `base/models.py:73-79` | `SyncMixin.delete()` soft-deletes the parent only — `Order.delete()` doesn't cascade to `OrderItem`. After sync, peer has `Order.is_deleted=True` with live items. Fix: add `SYNC_CASCADE_DELETE = ('items', ...)` per model. |
+| FS6 | MEDIUM | `base/models.py:879-923` (`Inkassa.from_sync_dict`) | Inkassa is documented as immutable but `from_sync_dict` does `cls.objects.get(uuid=uuid_val)` and updates in place. A peer that knows an Inkassa UUID can flip `inkass_type` (not denylisted). Fix: skip update on receive (`return instance, 'skipped'` if already exists) — Inkassa is append-only. |
+| FS7 | LOW | `base/models.py:240-265` | Soft-delete is not sticky. Branch-A soft-deletes at v3 → branch-B edits the same row at v3 with newer updated_at → branch-B's payload (with `is_deleted=False`) wins and **resurrects** the soft-delete. Fix: in `_should_replace`, deleted side always wins regardless of timestamp. |
+| FS8 | LOW | `base/models.py:63,109-114` + `base/services/sync/queue.py:42-53` | `transaction.on_commit(self._queue_for_sync)` only logs on failure. If the on_commit callback raises (DB conn lost, queue table locked, etc.) the row is live but never enters the sync queue. No reconciler exists. Fix: periodic job that scans for `synced_at IS NULL` and re-queues. |
+| FS9 | LOW | `base/services/sync/receiver.py:40-64` | `_clean_field_value` accepts arbitrary values for CharField/JSONField with no `field.choices` enforcement. A peer can push `Order.status = "OWNED_BY_ATTACKER"` — denylist blocks money fields but not status. Defense-in-depth: call `field.run_validators(value)`. |
+
+### Stock — open
+
+| ID | Severity | Surface | Summary |
+|---|---|---|---|
+| SS1 | HIGH | `stock/services/count_service.py:324-362, 490-532` | Stock count TOCTOU: `_populate_count_items` snapshots `system_quantity` at count-creation time; concurrent sales/receipts mutate `StockLevel.quantity` between creation and `_apply_adjustments`. The variance is then applied as a delta on top of the *now-newer* level → ghost shrinkage. Concrete: count at 09:00 (sys=100), sell 5 by 11:00 (now 95), physical=100, variance=0 recorded → level stays 95 although physical=100. Fix: either snapshot at apply-time, or take a "freeze" lock on items being counted. |
+| SS2 | MEDIUM | `stock/services/production_service.py:441-445, 615-678, 723-725` | `_consume_ingredients` and `_create_output` use nested `@transaction.atomic` + `set_rollback(True)` on the inner — which only marks the inner savepoint for rollback. The outer `complete()` then continues with `_create_output`, which hits `TransactionManagementError` because the savepoint is in error state. Caller gets opaque error instead of a clean failure response. Fix: drop the inner atomic, let the outer own it; OR raise instead of `set_rollback + return`. |
+| SS3 | LOW | `stock/services/purchase_service.py:862-881` | `_update_po_status` doesn't lock the PO row at receiving completion. Two concurrent receivings can both compute status → one overwrites the other. Race window where one sees PARTIAL and overwrites a concurrent RECEIVED → PO stuck in PARTIAL. Fix: `select_for_update` on the PO row at `_update_po_status` entry. |
+| SS4 | LOW | `stock/repositories/level.py:31-58` | `get_or_create_level` and the `select_for_update` path don't filter `is_deleted=False`. No current writer soft-deletes StockLevel, so this is latent — would bite if/when sync reconciliation does. |
+| SS5 | COSMETIC | `stock/services/{purchase,production}_service.py` | Decimal totals computed without `.quantize(Decimal('0.01'))` — stored to 4 dp, drift sub-soum on big sums. Cosmetic only since UZS rounding is at display. |
+
+## Recommendation
+
+For next ship: nothing in the **open follow-ups** list is a "shipping
+catastrophe" — they're real bugs but each requires its own review and
+test pass. The three things I'd resolve before a high-stakes ship:
+
+1. **FS3** if you actually use the cloud→branch pull path. If branches
+   are push-only, skip it.
+2. **SS1** if any venue will run stock counts during open hours
+   (almost certainly yes for any real restaurant).
+3. **FS6** since Inkassa is the cash ledger and any tampering there
+   has financial consequences.
+
+The remaining ~12 are real but lower priority — fix in subsequent
+passes.
+

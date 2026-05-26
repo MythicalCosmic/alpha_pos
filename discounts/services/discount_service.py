@@ -275,9 +275,6 @@ class DiscountService:
     @staticmethod
     def calculate_discount(discount, order_items):
         method = discount.discount_type.discount_method
-        order_subtotal = sum(
-            item.price * item.quantity for item in order_items
-        )
 
         # Determine which items the discount applies to
         if discount.applies_to == Discount.AppliesTo.SPECIFIC_PRODUCTS:
@@ -366,7 +363,9 @@ class DiscountService:
         if not result.get('success'):
             return result, status
 
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so a concurrent mark_as_paid can't read the
+        # pre-discount total_amount while this transaction rewrites it.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found("Order not found")
 
@@ -476,7 +475,9 @@ class DiscountService:
     @staticmethod
     @transaction.atomic
     def remove_from_order(order_id, order_discount_id, user_id=None):
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so a concurrent mark_as_paid can't read the
+        # discounted total while this transaction is restoring it.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found("Order not found")
 
