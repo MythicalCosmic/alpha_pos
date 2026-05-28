@@ -1,21 +1,19 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 from decimal import Decimal
 from datetime import date
 from django.db import transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Sum
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import (
     StockCount, StockCountItem, VarianceReasonCode,
-    StockLocation, StockCategory, StockItem, StockLevel,
-    StockBatch, StockSettings
+    StockLevel
 )
 from stock.services.base_service import to_decimal, round_decimal, generate_number
 from stock.repositories import (
     StockCountRepository, StockCountItemRepository,
-    VarianceReasonCodeRepository, StockItemRepository,
-    StockLocationRepository, StockCategoryRepository,
+    VarianceReasonCodeRepository, StockLocationRepository, StockCategoryRepository,
     StockLevelRepository, StockBatchRepository,
     StockSettingsRepository,
 )
@@ -525,7 +523,6 @@ class StockCountService:
 
             item.is_adjusted = True
             if "transaction_id" in result.get("data", {}):
-                from stock.models import StockTransaction
                 item.adjustment_transaction_id = result["data"]["transaction_id"]
             item.save(update_fields=["is_adjusted", "adjustment_transaction"])
 

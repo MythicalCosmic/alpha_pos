@@ -121,6 +121,4 @@ urlpatterns = [
     path('ai/query/', ai_views.ai_query, name='ai-query'),
     path('ai/suggestions/', ai_views.ai_suggestions, name='ai-suggestions'),
     path('ai/quick-actions/', ai_views.ai_quick_actions, name='ai-quick-actions'),
-    path('ai/history/', ai_views.ai_history, name='ai-history'),
-    path('ai/feedback/', ai_views.ai_feedback, name='ai-feedback'),
 ]

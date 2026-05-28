@@ -25,7 +25,7 @@ def _admin_client(user):
         payload=token,
         expires_at=timezone.now() + timedelta(days=1),
     )
-    client = Client()
+    client = Client(HTTP_USER_AGENT='pytest')
     client.cookies['session_key'] = token
     return client
 

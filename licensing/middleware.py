@@ -11,6 +11,7 @@ daemon explicitly busts the cache.
 """
 import logging
 
+from django.conf import settings
 from django.http import JsonResponse
 
 from licensing.services.state import get_state
@@ -43,6 +44,20 @@ class LicenseEnforcementMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        # Development bypass: when LICENSE_DEV_BYPASS is on (only possible with
+        # DEBUG=True — see settings), let everything through with no license /
+        # heartbeat / payment. Hard-gated on DEBUG in settings, so a shipped
+        # production build can't honor it. Logged once per process so it's
+        # never silently disabling the kill switch.
+        if getattr(settings, 'LICENSE_DEV_BYPASS', False):
+            if not getattr(self, '_bypass_warned', False):
+                logger.warning(
+                    'LICENSE_DEV_BYPASS is active — license kill switch is '
+                    'DISABLED. Development only; never ship with this on.'
+                )
+                self._bypass_warned = True
+            return self.get_response(request)
+
         # CORS preflight must always pass — otherwise the browser never
         # gets to even send the real request and see our 503 body. CORS
         # headers are added by corsheaders (which runs before us); this

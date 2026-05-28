@@ -4,7 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from hr.models import EmployeeContract, ContractDocument, EmploymentEvent
+from hr.models import EmployeeContract, EmploymentEvent
 from hr.repositories import EmployeeRepository
 from hr.repositories.contract import ContractRepository
 from hr.repositories.contract_document import ContractDocumentRepository

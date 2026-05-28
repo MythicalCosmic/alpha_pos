@@ -366,11 +366,9 @@ req("POST", "/api/admins/stock/orders/check-availability/", {"order_id": co_id},
 req("POST", "/api/admins/stock/orders/reserve/", {"order_id": co_id}, token=A)
 req("POST", "/api/admins/stock/orders/reverse/", {"order_id": co_id}, token=A)
 
-section("STOCK — AI (5)")
+section("STOCK — AI (3)")
 req("GET", "/api/admins/stock/ai/suggestions/", token=A)
 req("GET", "/api/admins/stock/ai/quick-actions/", token=A)
-req("GET", "/api/admins/stock/ai/history/", token=A)
-req("POST", "/api/admins/stock/ai/feedback/", {"rating": 5}, token=A)
 req("POST", "/api/admins/stock/ai/query/", {"query": "stock overview"}, token=A)
 
 # ============================================================

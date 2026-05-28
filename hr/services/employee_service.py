@@ -213,12 +213,18 @@ class EmployeeService:
                 f"Employee with id {employee_id} not found"
             )
 
+        # Set both flags so the row drops out of every default list/get
+        # path (is_deleted=False filters) AND out of "active employees"
+        # queries. Previously only is_active was flipped, so the endpoint
+        # named "delete" left the row visible in detail/list responses
+        # and still mutable via update.
         employee.is_active = False
-        employee.save(update_fields=["is_active", "updated_at"])
+        employee.is_deleted = True
+        employee.save(update_fields=["is_active", "is_deleted", "updated_at"])
 
         return ServiceResponse.success(data={
             "id": employee_id,
-        }, message="Employee deactivated")
+        }, message="Employee deleted")
 
     @classmethod
     def get_stats(cls) -> Tuple[Dict[str, Any], int]:

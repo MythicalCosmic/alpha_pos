@@ -1,13 +1,10 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import (
-    ProductStockLink, ProductComponentStock,
-    StockItem, StockUnit, Recipe, StockSettings
+    ProductStockLink, ProductComponentStock
 )
 from stock.services.base_service import to_decimal
 from stock.repositories import (

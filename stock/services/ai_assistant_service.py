@@ -3,19 +3,18 @@ try:
 except ImportError:
     genai = None
 from typing import Dict, Any, List
-from decimal import Decimal
 from datetime import timedelta
 import math
-from django.db.models import Sum, Count, F, Q, Avg, Max, Min, StdDev, Variance
-from django.db.models.functions import TruncDate, TruncHour, TruncWeek, TruncMonth
+from django.db.models import Sum, Count, F, Q, Avg, Max
+from django.db.models.functions import TruncDate, TruncHour, TruncWeek
 from django.utils import timezone
 from django.conf import settings
 import json
 
 from stock.models import (
-    StockItem, StockLevel, StockTransaction, StockBatch,
+    StockLevel, StockTransaction, StockBatch,
     StockLocation, Supplier, SupplierStockItem,
-    PurchaseOrder, Recipe, ProductionOrder
+    PurchaseOrder, Recipe
 )
 
 from base.models import (
@@ -701,7 +700,6 @@ class AIStockAssistant:
         if not abc or not abc.get("items"):
             return {"matrix": {}, "items": []}
 
-        abc_map = {i["id"]: i["abc_class"] for i in abc["items"]}
         xyz_map = {i["id"]: i for i in xyz.get("items", [])}
 
         strategies = {
@@ -761,7 +759,7 @@ class AIStockAssistant:
         Puzzles: low popularity + high margin
         Dogs: low popularity + low margin
         """
-        from stock.models import ProductStockLink, RecipeIngredient
+        from stock.models import ProductStockLink
         cutoff = timezone.now().date() - timedelta(days=days)
 
         product_sales = OrderItem.objects.filter(
@@ -1178,7 +1176,9 @@ Respond to the user's query based on this data. Follow all language and formatti
             }
 
         except Exception as e:
+            import logging
             error_str = str(e)
+            logging.getLogger(__name__).exception('AI assistant query failed')
 
             if "429" in error_str or "quota" in error_str.lower():
                 return {
@@ -1196,10 +1196,13 @@ Respond to the user's query based on this data. Follow all language and formatti
                     "suggestions": ["Add GEMINI_API_KEY to settings.py"]
                 }
 
+            # Don't echo raw exception text — it leaks ORM model names, file
+            # paths, and SDK-internal details to the client. The full trace
+            # is in the server log via the .exception() call above.
             return {
                 "success": False,
-                "error": error_str,
-                "response": f"Error: {error_str}",
+                "error": "internal_error",
+                "response": "The AI assistant is temporarily unavailable.",
                 "suggestions": ["Try again", "Stock overview"]
             }
 

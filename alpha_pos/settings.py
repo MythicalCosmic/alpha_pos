@@ -1,4 +1,5 @@
 import os
+import warnings
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -126,7 +127,12 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Wall-clock-sensitive features (attendance "today", shift boundaries,
+# stamp accrual) compute against the local operator timezone, not UTC.
+# Stored datetimes remain UTC under USE_TZ; only the display / localdate
+# conversion changes. Override with TZ env var when deploying outside
+# Uzbekistan.
+TIME_ZONE = os.environ.get('TZ', 'Asia/Tashkent')
 
 USE_I18N = True
 
@@ -203,6 +209,25 @@ else:
             'TIMEOUT': 300,
         }
 }
+
+# Auth rate limiting stores its counters in the default cache. The per-process
+# LocMemCache is not shared across gunicorn workers, so a limit of N/window
+# becomes N*workers in aggregate — silently weakening login/setup throttling.
+# Warn loudly so production switches to the shared Redis cache.
+try:
+    _gunicorn_workers = int(os.environ.get('GUNICORN_WORKERS', '1'))
+except ValueError:
+    _gunicorn_workers = 1
+if (not DEBUG
+        and _gunicorn_workers > 1
+        and CACHES['default']['BACKEND'].endswith('locmem.LocMemCache')):
+    warnings.warn(
+        f'Rate limiting uses the per-process LocMemCache with '
+        f'{_gunicorn_workers} gunicorn workers: auth throttles are effectively '
+        f'multiplied by the worker count. Set USE_REDIS=true for shared, '
+        f'correct rate limiting.',
+        RuntimeWarning,
+    )
 
 SESSION_CACHE_TTL = 300
 
@@ -344,6 +369,18 @@ LOGGING = {
 # Required for the setup wizard and heartbeat daemon — without it the install
 # stays UNREGISTERED and every endpoint returns 503.
 LICENSE_CONTROL_CENTER_URL = os.environ.get('LICENSE_CONTROL_CENTER_URL', '')
+if (
+    LICENSE_CONTROL_CENTER_URL
+    and not DEBUG
+    and not LICENSE_CONTROL_CENTER_URL.startswith('https://')
+):
+    # Plaintext control-center traffic is a license-bypass vector: a MITM can
+    # rewrite the heartbeat response to keep returning ACTIVE forever. Refuse
+    # to boot rather than silently relying on a downgraded channel.
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "LICENSE_CONTROL_CENTER_URL must use https:// when DEBUG is False."
+    )
 
 # Fernet key used to encrypt the bearer license key at rest. Generate with:
 #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -368,12 +405,24 @@ LICENSE_GRACE_DAYS = int(os.environ.get('LICENSE_GRACE_DAYS', 7))
 # Empty by default — unlock endpoint refuses every signature until set.
 LICENSE_VENDOR_PUBLIC_KEY = os.environ.get('LICENSE_VENDOR_PUBLIC_KEY', '')
 
-# When True, /admin/ is exempt from the license kill switch so the vendor
-# can SSH-tunnel in and fix a stuck install. Off by default — production
-# operators who don't want a back door can leave it off.
-LICENSE_ADMIN_BYPASS = os.environ.get('LICENSE_ADMIN_BYPASS', '').lower() in (
-    'true', '1', 'yes',
-)
+# Development-only kill-switch bypass. When set, the LicenseEnforcementMiddleware
+# lets every request through without a license / heartbeat / payment — so you
+# can run alpha_pos locally with no control center and nothing to pay.
+#
+# HARD-GATED on DEBUG: the env flag is only honored when DEBUG is True. A shipped
+# production build runs DEBUG=False, so the flag is dead there — a customer
+# cannot flip it to dodge the kill switch. (This is why the gate is `DEBUG and
+# ...` and not just the env var: a settings-toggle fail-open that worked in
+# production would be a license-bypass footgun.)
+LICENSE_DEV_BYPASS = DEBUG and os.environ.get(
+    'LICENSE_DEV_BYPASS', ''
+).lower() in ('true', '1', 'yes')
+
+# Vendor recovery path for a *production* install bricked by the kill switch:
+# (a) ship a signed unlock file consumed at /api/licensing/unlock
+# (PERPETUAL_UNLOCK), or (b) reach the host shell and run `python manage.py`
+# directly. There is intentionally no production /admin/-path bypass — only the
+# DEBUG-gated LICENSE_DEV_BYPASS above, which cannot take effect in production.
 
 CORS_ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()

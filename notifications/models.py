@@ -193,6 +193,27 @@ class OrderLoyaltyCredit(models.Model):
         return f'OrderLoyaltyCredit<order={self.order_id} +{self.stamps_credited}>'
 
 
+class LoyaltyRedemption(models.Model):
+    """Ledger row for each reward redeemed at the till.
+
+    Mirrors OrderLoyaltyCredit on the accrual side: redemption moves the
+    counter, so without a record there is nothing to reconcile or reverse if
+    the physical reward isn't delivered. Optional order_id/cashier_id tie the
+    spend to where it happened.
+    """
+    phone_number = models.CharField(max_length=20, db_index=True)
+    stamps_spent = models.PositiveIntegerField()
+    order_id = models.IntegerField(null=True, blank=True, db_index=True)
+    cashier_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'LoyaltyRedemption<{self.phone_number} -{self.stamps_spent}>'
+
+
 class Cart(models.Model):
     """One-active-cart-per-TelegramCustomer holding items in progress.
 

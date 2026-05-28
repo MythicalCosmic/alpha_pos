@@ -46,7 +46,11 @@ def idempotent(scope):
                 # fall through and execute the view; idempotency is opt-in
                 # for clients and only meaningful with a real actor.
                 return view_func(request, *args, **kwargs)
-            full_scope = f"{actor_id}:{scope}"
+            # Scope is qualified by the view module so the same logical
+            # name (e.g. "orders.pay") in admins/customers/waiters cannot
+            # collide. A client that reuses a UUID across surfaces should
+            # see distinct claims, not a cross-surface replay.
+            full_scope = f"{view_func.__module__}:{actor_id}:{scope}"
 
             # Claim the (scope, key) row. Losing the unique-constraint race
             # means another request already owns it — fall through to the
@@ -87,7 +91,21 @@ def idempotent(scope):
                 )
 
             # We won the claim. Run the view and persist its response.
-            response = view_func(request, *args, **kwargs)
+            # If the view raises, drop the claim so a retry can run fresh —
+            # otherwise the zombie row stays at response_status=0 forever
+            # and every future retry hits the in-progress 409 branch above.
+            try:
+                response = view_func(request, *args, **kwargs)
+            except Exception:
+                try:
+                    IdempotencyKey.objects.filter(pk=record.pk).delete()
+                except Exception:
+                    logger.exception(
+                        'failed to drop idempotency claim after view exception '
+                        '(scope=%s key=%s)',
+                        full_scope, key,
+                    )
+                raise
 
             # Streaming/file responses can't be cached: reading .content on a
             # StreamingHttpResponse exhausts the iterator, and replaying a

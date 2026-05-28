@@ -5,7 +5,7 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from hr.models import SalaryPayment, Employee
+from hr.models import SalaryPayment
 from hr.repositories import SalaryPaymentRepository, EmployeeRepository
 
 
@@ -146,6 +146,18 @@ class SalaryService:
 
         bonus = Decimal(str(bonus))
         deduction = Decimal(str(deduction))
+        # All three components must be non-negative. A negative `deduction`
+        # would inflate `net_amount = base + bonus - deduction` and let an
+        # admin (or anyone with salary.create) drain the cash drawer at
+        # pay-time. Same logic for negative bonus or base.
+        if base_amount < 0 or bonus < 0 or deduction < 0:
+            return ServiceResponse.validation_error(
+                errors={
+                    'base_amount': 'must be non-negative' if base_amount < 0 else None,
+                    'bonus': 'must be non-negative' if bonus < 0 else None,
+                    'deduction': 'must be non-negative' if deduction < 0 else None,
+                },
+            )
         net_amount = base_amount + bonus - deduction
 
         salary = SalaryPaymentRepository.create(
@@ -227,6 +239,13 @@ class SalaryService:
                 value = kwargs[field]
                 if field in ["base_amount", "bonus", "deduction"]:
                     value = Decimal(str(value))
+                    # Same invariant as create(): non-negative. Without this,
+                    # PATCH /salaries/<id> {"deduction":"-100000"} inflates
+                    # net_amount and drains the cash register on pay.
+                    if value < 0:
+                        return ServiceResponse.validation_error(
+                            errors={field: 'must be non-negative'},
+                        )
                 setattr(salary, field, value)
                 update_fields.append(field)
 
@@ -270,7 +289,7 @@ class SalaryService:
     def approve(cls,
                 salary_id: int,
                 approved_by_id: int) -> Tuple[Dict[str, Any], int]:
-        salary = SalaryPaymentRepository.get_with_relations(salary_id)
+        salary = SalaryPaymentRepository.get_for_update(salary_id)
         if not salary:
             return ServiceResponse.not_found(
                 f"Salary payment with id {salary_id} not found"
@@ -285,6 +304,7 @@ class SalaryService:
         salary.approved_by_id = approved_by_id
         salary.save(update_fields=["status", "approved_by_id"])
 
+        salary = SalaryPaymentRepository.get_with_relations(salary.pk)
         return ServiceResponse.success(data={
             "salary": cls.serialize(salary),
         }, message="Salary payment approved")
@@ -328,7 +348,7 @@ class SalaryService:
             salary_id: int,
             paid_by_id: int,
             payment_method: str = "CASH") -> Tuple[Dict[str, Any], int]:
-        salary = SalaryPaymentRepository.get_with_relations(salary_id)
+        salary = SalaryPaymentRepository.get_for_update(salary_id)
         if not salary:
             return ServiceResponse.not_found(
                 f"Salary payment with id {salary_id} not found"

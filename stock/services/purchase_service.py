@@ -1,22 +1,21 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date
 from django.db import transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseReceiving, PurchaseReceivingItem,
-    Supplier, SupplierStockItem, StockItem, StockUnit, StockLocation,
-    StockBatch, StockSettings
+    SupplierStockItem, StockBatch, StockSettings
 )
-from stock.services.base_service import to_decimal, round_decimal, generate_number, get_date_range
+from stock.services.base_service import to_decimal, generate_number
 from stock.repositories import (
     PurchaseOrderRepository, PurchaseOrderItemRepository,
     PurchaseReceivingRepository, PurchaseReceivingItemRepository,
     SupplierRepository, StockItemRepository, StockLocationRepository,
-    StockUnitRepository, SupplierStockItemRepository,
+    StockUnitRepository,
 )
 
 
@@ -435,30 +434,53 @@ class PurchaseOrderService:
                        amount: Decimal,
                        payment_date: date = None,
                        notes: str = "") -> Tuple[Dict[str, Any], int]:
-        po = PurchaseOrderRepository.get_by_id(po_id)
-        if not po:
+        # Lock the PO so concurrent payments accumulate correctly and can't
+        # both over-reduce the supplier balance.
+        try:
+            po = PurchaseOrder.objects.select_for_update().get(pk=po_id)
+        except PurchaseOrder.DoesNotExist:
             return ServiceResponse.not_found("Purchase order not found")
 
         amount = to_decimal(amount)
+        if amount <= 0:
+            return ServiceResponse.validation_error(
+                errors={"amount": "Must be greater than 0"},
+                message="Payment amount must be greater than 0",
+            )
+
+        # Track cumulative payments so partial payments settle to PAID and a
+        # PO can't be paid past its total (which would over-credit the supplier).
+        remaining = po.total - po.amount_paid
+        if remaining <= 0:
+            return ServiceResponse.error("Purchase order is already fully paid")
+        if amount > remaining:
+            return ServiceResponse.error(
+                f"Payment {amount} exceeds the remaining balance {remaining}"
+            )
 
         from .supplier_service import SupplierService
         result, status = SupplierService.update_balance(po.supplier_id, amount, "subtract")
         if status >= 400:
             return result, status
 
-        if amount >= po.total:
+        po.amount_paid = po.amount_paid + amount
+        if po.amount_paid >= po.total:
             po.payment_status = PurchaseOrder.PaymentStatus.PAID
-        else:
+        elif po.amount_paid > 0:
             po.payment_status = PurchaseOrder.PaymentStatus.PARTIAL
+        else:
+            po.payment_status = PurchaseOrder.PaymentStatus.UNPAID
 
         if notes:
             po.notes = f"{po.notes}\nPayment recorded: {amount} on {payment_date or timezone.now().date()}".strip()
 
-        po.save(update_fields=["payment_status", "notes", "updated_at"])
+        po.save(update_fields=["amount_paid", "payment_status", "notes", "updated_at"])
 
         return ServiceResponse.success(data={
             "payment_status": po.payment_status,
-            "payment_status_display": po.get_payment_status_display()
+            "payment_status_display": po.get_payment_status_display(),
+            "amount_paid": str(po.amount_paid),
+            "remaining": str(po.total - po.amount_paid),
         }, message="Payment recorded")
 
     @classmethod
@@ -792,8 +814,15 @@ class PurchaseReceivingService:
             if level_status >= 400:
                 return level_result, level_status
 
-            item.po_item.quantity_received += item.quantity_received
-            item.po_item.save(update_fields=["quantity_received"])
+            # Apply the increment in SQL so concurrent receipts against the
+            # same PO line don't lose updates. The previous read-modify-write
+            # on `item.po_item.quantity_received` lost increments when two
+            # receivings completed in parallel.
+            from django.db.models import F
+            PurchaseOrderItem = item.po_item.__class__
+            PurchaseOrderItem.objects.filter(pk=item.po_item_id).update(
+                quantity_received=F('quantity_received') + item.quantity_received,
+            )
 
             from .item_service import StockItemService
             cost_result, cost_status = StockItemService.update_cost(
@@ -926,6 +955,14 @@ class PurchaseReceivingItemService:
         po_item = PurchaseOrderItem.objects.select_related("stock_item", "unit").get(id=po_item.id)
 
         quantity_received = to_decimal(quantity_received)
+
+        # Reject non-positive quantities. Without this, a negative value
+        # corrupts PO totals (quantity_received goes negative) and feeds
+        # negative unit_cost * quantity into the moving-average cost.
+        if quantity_received <= 0:
+            return ServiceResponse.validation_error(
+                errors={"quantity_received": "Must be greater than 0"},
+            )
 
         already_received = po_item.quantity_received
         pending = po_item.quantity_ordered - already_received

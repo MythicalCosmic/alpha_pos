@@ -1,6 +1,6 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods, require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
@@ -33,6 +33,11 @@ def cash_deposit(request):
     if error:
         return json_response(error)
 
+    # Strip caller-supplied performed_by_id so the **data splat below
+    # doesn't collide with our server-side override. Without this, a
+    # client posting {"performed_by_id": ...} raised TypeError ("multiple
+    # values for argument") and bubbled a 500 with stack trace.
+    data.pop("performed_by_id", None)
     result, status = CashTransactionService.deposit(**data, performed_by_id=request.user.id)
     return JsonResponse(result, status=status)
 
@@ -45,6 +50,7 @@ def cash_withdraw(request):
     if error:
         return json_response(error)
 
+    data.pop("performed_by_id", None)
     result, status = CashTransactionService.withdraw(**data, performed_by_id=request.user.id)
     return JsonResponse(result, status=status)
 

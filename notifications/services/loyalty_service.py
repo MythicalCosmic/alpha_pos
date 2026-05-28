@@ -19,7 +19,7 @@ import logging
 from django.db import IntegrityError, transaction
 
 from notifications.models import (
-    LoyaltyAccount, LoyaltySettings, OrderLoyaltyCredit,
+    LoyaltyAccount, LoyaltyRedemption, LoyaltySettings, OrderLoyaltyCredit,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,13 +67,17 @@ def maybe_accrue(order):
             OrderLoyaltyCredit.objects.create(
                 order_id=order.id, phone_number=phone, stamps_credited=stamps,
             )
-            account, _ = LoyaltyAccount.objects.get_or_create(phone_number=phone)
-            account.stamps_balance += stamps
-            account.stamps_earned_total += stamps
-            account.save(update_fields=[
-                'stamps_balance', 'stamps_earned_total', 'updated_at',
-            ])
-            return account
+            LoyaltyAccount.objects.get_or_create(phone_number=phone)
+            # Apply the increment in SQL — read-modify-write in Python would
+            # lose stamps when two different orders for the same phone
+            # complete concurrently (both pass the unique-on-order_id guard
+            # above, then race on `stamps_balance`).
+            from django.db.models import F
+            LoyaltyAccount.objects.filter(phone_number=phone).update(
+                stamps_balance=F('stamps_balance') + stamps,
+                stamps_earned_total=F('stamps_earned_total') + stamps,
+            )
+            return LoyaltyAccount.objects.get(phone_number=phone)
     except IntegrityError:
         logger.info('Loyalty already credited for order %s', order.id)
         return None
@@ -89,13 +93,14 @@ def get_account(phone):
         return None
 
 
-def redeem(phone):
+def redeem(phone, cashier_id=None, order_id=None):
     """Spend one reward's worth of stamps for `phone`.
 
     Returns the updated LoyaltyAccount, or None if the customer doesn't
     have enough stamps / no account exists. The caller is expected to
     actually deliver the reward (free item, discount) at the till — this
-    just moves the counter.
+    just moves the counter and writes a LoyaltyRedemption ledger row so the
+    spend can be reconciled or disputed later.
     """
     settings = LoyaltySettings.load()
     cost = settings.stamps_per_reward
@@ -117,4 +122,10 @@ def redeem(phone):
         account.save(update_fields=[
             'stamps_balance', 'stamps_redeemed_total', 'updated_at',
         ])
+        LoyaltyRedemption.objects.create(
+            phone_number=phone,
+            stamps_spent=cost,
+            cashier_id=cashier_id,
+            order_id=order_id,
+        )
         return account

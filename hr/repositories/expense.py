@@ -1,4 +1,4 @@
-from django.db.models import Sum, Count
+from django.db.models import Sum
 from django.core.paginator import Paginator
 from base.repositories.base import BaseSyncRepository
 from hr.models import Expense

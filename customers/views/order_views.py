@@ -6,6 +6,7 @@ from base.helpers.response import json_response
 from base.security.auth import login_required, role_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
+from base.security.rate_limit import rate_limit, rate_limit_by
 from base.models import AuditLog
 
 # Roles permitted to advance an order beyond the customer's own scope: take
@@ -256,6 +257,7 @@ def cancel_order(request, order_id):
 @csrf_exempt
 @require_GET
 @login_required
+@role_required(*STAFF_ROLES)
 def client_display(request):
     result, status_code = CustomerOrderService.get_client_display_orders()
     return JsonResponse(result, status=status_code)
@@ -300,6 +302,14 @@ def remove_discount(request, order_id):
 @require_POST
 @login_required
 @role_required(*STAFF_ROLES)
+# Throttle so a compromised cashier session can't brute-force the secret word
+# at request-loop speed. Per-order key adds a second axis so a single attacker
+# can't burn the per-IP budget against multiple targets.
+@rate_limit('discount_secret_word', 5, 60)
+@rate_limit_by(
+    'discount_secret_word_order', 5, 300,
+    lambda r: r.resolver_match.kwargs.get('order_id') if r.resolver_match else None,
+)
 def check_secret_word(request, order_id):
     data, error = parse_json_body(request)
     if error:

@@ -99,6 +99,19 @@ class TestKillSwitch:
         resp = _client().options('/api/admins/dashboard/today')
         assert resp.status_code != 503
 
+    def test_dev_bypass_lets_everything_through(self, settings):
+        """LICENSE_DEV_BYPASS disables the kill switch entirely (dev only)."""
+        _unregister_license()  # would normally 503
+        settings.LICENSE_DEV_BYPASS = True
+        resp = _client().get('/api/admins/dashboard/today')
+        assert resp.status_code != 503
+
+    def test_dev_bypass_off_still_blocks(self, settings):
+        _unregister_license()
+        settings.LICENSE_DEV_BYPASS = False
+        resp = _client().get('/api/admins/dashboard/today')
+        assert resp.status_code == 503
+
 
 class TestStateTransitions:
     """The middleware reads state from cache; when the License row

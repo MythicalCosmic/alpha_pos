@@ -28,6 +28,11 @@ class LicenseState:
     message: str
     org_name: str
     email: str
+    # Prepaid-billing snapshot for the renderer (display-only). balance is a
+    # string so it round-trips through the cache + JSON cleanly.
+    balance: Optional[str] = None
+    days_remaining: Optional[int] = None
+    warn: bool = False
 
     def is_blocked(self) -> bool:
         """True if the middleware must refuse the request."""
@@ -44,6 +49,12 @@ class LicenseState:
         if self.status in ('SUSPENDED', 'EXPIRED'):
             return True
 
+        # Self-enforce the signed expiry date. Previously expiry relied 100% on
+        # the control center actively pushing status=EXPIRED; if that push never
+        # arrived (control center blocked/MITM'd) an ACTIVE install ran forever.
+        if self.expires_at and self._past_expiry():
+            return True
+
         # Active but offline grace exhausted (no heartbeat for N days).
         # `grace_until` is computed by the heartbeat daemon as
         # last_heartbeat_at + LICENSE_GRACE_DAYS. If we've blown past it,
@@ -53,13 +64,41 @@ class LicenseState:
             try:
                 until = datetime.fromisoformat(self.grace_until)
             except ValueError:
-                return False
+                # Fail CLOSED on a malformed grace marker. A corrupted cache
+                # entry or unexpected serializer change must not silently
+                # disable the kill switch.
+                return True
             if until.tzinfo is None:
                 until = until.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > until:
                 return True
 
         return False
+
+    def _past_expiry(self) -> bool:
+        """True if the license expiry has passed. Compares against the most
+        conservative clock available: the later of the last trusted server time
+        and the host wall clock. A clock rollback to dodge this would equally
+        dodge the offline-grace window, so it adds no new weakness. Returns True
+        (fail closed) on a malformed expiry marker."""
+        if not self.expires_at:
+            return False
+        try:
+            exp = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            return True
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        now_ref = datetime.now(timezone.utc)
+        if self.last_server_now:
+            try:
+                server_clock = datetime.fromisoformat(self.last_server_now)
+                if server_clock.tzinfo is None:
+                    server_clock = server_clock.replace(tzinfo=timezone.utc)
+                now_ref = max(now_ref, server_clock)
+            except ValueError:
+                pass
+        return now_ref > exp
 
     def reason_code(self) -> str:
         """Short stable code for the 503 body — clients switch on this."""
@@ -68,6 +107,8 @@ class LicenseState:
         if self.status == 'SUSPENDED':
             return 'license_suspended'
         if self.status == 'EXPIRED':
+            return 'license_expired'
+        if self.expires_at and self._past_expiry():
             return 'license_expired'
         if self.grace_until and self.is_blocked():
             return 'license_offline_grace_exceeded'
@@ -97,6 +138,9 @@ def build_from_license(license_obj) -> LicenseState:
         message=license_obj.last_message or '',
         org_name=license_obj.org_name or '',
         email=license_obj.email or '',
+        balance=str(license_obj.balance) if license_obj.balance is not None else None,
+        days_remaining=license_obj.days_remaining,
+        warn=bool(license_obj.warn),
     )
 
 
@@ -112,13 +156,3 @@ def get_state() -> LicenseState:
     state = build_from_license(License.load())
     cache.set(CACHE_KEY, asdict(state), CACHE_TTL)
     return state
-
-
-def put_state(state: LicenseState) -> None:
-    """Heartbeat daemon writes here directly after each response so the
-    middleware sees the new status within milliseconds, not on cache TTL."""
-    cache.set(CACHE_KEY, asdict(state), CACHE_TTL)
-
-
-def invalidate() -> None:
-    cache.delete(CACHE_KEY)

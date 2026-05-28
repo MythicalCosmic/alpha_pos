@@ -1,7 +1,6 @@
 import calendar
 
 from django.core.paginator import Paginator
-from django.utils import timezone
 
 from base.repositories.base import BaseSyncRepository
 from hr.models import LeaveRequest

@@ -12,6 +12,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from base.security.rate_limit import rate_limit, rate_limit_by
 from licensing.models import License
 from licensing.services import heartbeat as heartbeat_svc
 from licensing.services.state import get_state
@@ -21,7 +22,14 @@ from licensing.services.state import get_state
 def status_view(request):
     """Read-only license state. Always returns 200, even when blocked,
     so the Electron renderer can display a banner / route to a setup
-    screen without first running into the kill switch."""
+    screen without first running into the kill switch.
+
+    This endpoint is intentionally unauthenticated (the renderer hits it
+    before login). Tenant identity (org_name / email) is therefore *not*
+    returned here — that's available to authenticated callers via the
+    existing admin endpoints. Returning it here would leak operator
+    identity to any LAN attacker who can TCP to the host.
+    """
     state = get_state()
     return JsonResponse({
         'success': True,
@@ -31,18 +39,40 @@ def status_view(request):
             'last_heartbeat_at': state.last_heartbeat_at,
             'grace_until': state.grace_until,
             'message': state.message or None,
-            'tenant': {
-                'org_name': state.org_name or None,
-                'email': state.email or None,
-            },
             'is_blocked': state.is_blocked(),
             'reason': state.reason_code() if state.is_blocked() else None,
+            # Prepaid-billing snapshot for the renderer: show remaining
+            # balance / days and raise a "top up soon" banner when `warn`
+            # is set, before the kill switch ever fires.
+            'balance': state.balance,
+            'days_remaining': state.days_remaining,
+            'warn': state.warn,
         },
     })
 
 
+def _setup_invite_prefix(request):
+    """Per-invite-code throttle key. We hash the first 16 chars rather than
+    the full code so the cache key isn't itself a secret leak."""
+    try:
+        import hashlib
+        body = json.loads(request.body) if request.body else {}
+        code = ((body.get('invite_code') if isinstance(body, dict) else '') or '').strip()
+        if not code:
+            return None
+        return hashlib.sha256(code.encode('utf-8')).hexdigest()[:16]
+    except Exception:
+        return None
+
+
 @csrf_exempt
 @require_POST
+# Throttle so a LAN-side attacker can't spray invite codes against the
+# control center via this proxy. IP + invite-prefix gives two axes: one
+# attacker IP can try 5 / 5min total, and any single invite gets 3 / 5min
+# across all sources.
+@rate_limit('license_setup', 5, 300)
+@rate_limit_by('license_setup_invite', 3, 300, _setup_invite_prefix)
 def setup_view(request):
     """First-run setup wizard.
 

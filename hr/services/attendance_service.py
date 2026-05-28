@@ -1,12 +1,12 @@
 from typing import Dict, Any, Tuple
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum
 from django.core.paginator import Paginator
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from hr.models import Attendance, Employee
+from hr.models import Attendance
 from hr.repositories import EmployeeRepository
 
 
@@ -63,7 +63,7 @@ class AttendanceService:
         if not employee:
             return ServiceResponse.not_found("Employee profile not found for this user")
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         existing = Attendance.objects.filter(
             employee_id=employee.id, date=today, is_deleted=False
         ).first()
@@ -126,7 +126,7 @@ class AttendanceService:
         if not employee:
             return ServiceResponse.not_found("Employee profile not found for this user")
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         attendance = Attendance.objects.filter(
             employee_id=employee.id, date=today, is_deleted=False
         ).first()
@@ -168,8 +168,13 @@ class AttendanceService:
         if not employee:
             return ServiceResponse.not_found("Employee not found")
 
-        today = timezone.now().date()
-        existing = Attendance.objects.filter(
+        today = timezone.localdate()
+        # Lock the (employee, date) row if it exists so two concurrent
+        # check-in POSTs serialize. Without the lock the second request
+        # raced past the duplicate guard and hit unique_together at the
+        # DB layer, returning an uncaught IntegrityError → 500.
+        from django.db import IntegrityError
+        existing = Attendance.objects.select_for_update().filter(
             employee_id=employee_id, date=today, is_deleted=False
         ).first()
 
@@ -184,14 +189,17 @@ class AttendanceService:
             existing.save(update_fields=["check_in", "source", "status", "notes", "updated_at"])
             attendance = existing
         else:
-            attendance = Attendance.objects.create(
-                employee_id=employee_id,
-                date=today,
-                check_in=timezone.now(),
-                source=Attendance.Source.MANUAL,
-                status=Attendance.Status.PRESENT,
-                notes=notes,
-            )
+            try:
+                attendance = Attendance.objects.create(
+                    employee_id=employee_id,
+                    date=today,
+                    check_in=timezone.now(),
+                    source=Attendance.Source.MANUAL,
+                    status=Attendance.Status.PRESENT,
+                    notes=notes,
+                )
+            except IntegrityError:
+                return ServiceResponse.error("Employee already checked in for today")
 
         attendance = Attendance.objects.select_related(
             'employee__user'
@@ -210,7 +218,7 @@ class AttendanceService:
         if not employee:
             return ServiceResponse.not_found("Employee not found")
 
-        today = timezone.now().date()
+        today = timezone.localdate()
         attendance = Attendance.objects.filter(
             employee_id=employee_id, date=today, is_deleted=False
         ).first()
@@ -256,7 +264,7 @@ class AttendanceService:
             return ServiceResponse.not_found("Employee not found")
 
         if date is None:
-            date = timezone.now().date()
+            date = timezone.localdate()
 
         existing = Attendance.objects.filter(
             employee_id=employee_id, date=date, is_deleted=False
@@ -335,7 +343,7 @@ class AttendanceService:
     @classmethod
     def get_daily_report(cls, date=None) -> Tuple[Dict[str, Any], int]:
         if date is None:
-            date = timezone.now().date()
+            date = timezone.localdate()
 
         records = Attendance.objects.filter(
             date=date, is_deleted=False

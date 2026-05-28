@@ -65,7 +65,8 @@ def receive(request):
         return JsonResponse({'error': 'Invalid authorization'}, status=401)
 
     bound_branch = None
-    if auth.startswith('Cloud '):
+    is_cloud = auth.startswith('Cloud ')
+    if is_cloud:
         from django.utils.crypto import constant_time_compare
         token = auth[6:]
         expected = getattr(settings, 'CLOUD_SYNC_TOKEN', '')
@@ -89,6 +90,26 @@ def receive(request):
         )
     if bound_branch is not None:
         branch_id = bound_branch
+    elif not is_cloud:
+        # Legacy unbound ALLOWED_BRANCH_TOKENS path: the X-Branch-ID is fully
+        # caller-controlled, so without binding any token holder could write as
+        # any branch. Require an explicit ALLOWED_BRANCH_IDS allowlist; in
+        # production, refuse entirely if neither BRANCH_TOKEN_MAP nor the
+        # allowlist is configured (fail closed). The Cloud token is exempt — it
+        # is the trusted hub and legitimately pushes records for any branch.
+        allowed_ids = getattr(settings, 'ALLOWED_BRANCH_IDS', None)
+        if allowed_ids:
+            if branch_id not in allowed_ids:
+                return JsonResponse(
+                    {'error': 'X-Branch-ID is not in ALLOWED_BRANCH_IDS'},
+                    status=403,
+                )
+        elif not settings.DEBUG:
+            return JsonResponse(
+                {'error': 'Unbound branch tokens are not permitted in production; '
+                          'configure BRANCH_TOKEN_MAP or ALLOWED_BRANCH_IDS'},
+                status=403,
+            )
 
     data, error = parse_json_body(request)
     if error:
@@ -255,7 +276,16 @@ def changes(request):
             continue
 
         if since_dt:
-            records = SyncService.get_changes_after(model_class, since_dt)
+            # Cap per-model to per_page+1 so a long-disconnected branch
+            # cannot OOM the server in a single response. has_more flips
+            # the moment any model overflows; client should re-poll with
+            # the latest `synced_at` from the previous batch.
+            records = SyncService.get_changes_after(
+                model_class, since_dt, limit=per_page + 1,
+            )
+            if len(records) > per_page:
+                records = records[:per_page]
+                has_more = True
         else:
             all_objs = model_class.objects.all()[:per_page + 1]
             records = [obj.to_sync_dict() for obj in all_objs]

@@ -275,7 +275,33 @@ class LeaveService:
         if not leave_type:
             return ServiceResponse.not_found("Leave type not found")
 
+        # Reject reverse-dated ranges. Without this, end < start produces a
+        # negative `days_count`; approval then credits `balance.used_days +=
+        # negative` and inflates the employee's remaining quota arbitrarily.
+        if end_date < start_date:
+            return ServiceResponse.validation_error(
+                errors={'end_date': 'must be on or after start_date'},
+            )
+
         days_count = Decimal(str((end_date - start_date).days + 1))
+
+        # Reject overlapping pending / approved requests for the same
+        # employee. Without this the same employee can submit multiple
+        # overlapping requests; each one passes the balance check
+        # independently (no aggregation) and each approval debits the
+        # balance, allowing over-allocation.
+        overlapping = LeaveRequest.objects.filter(
+            employee_id=employee_id,
+            is_deleted=False,
+            status__in=(LeaveRequest.Status.PENDING, LeaveRequest.Status.APPROVED),
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        ).exists()
+        if overlapping:
+            return ServiceResponse.error(
+                "This employee already has a pending or approved leave request "
+                "that overlaps with the requested date range.",
+            )
 
         year = start_date.year
         balance = LeaveBalance.objects.filter(

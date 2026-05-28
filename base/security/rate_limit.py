@@ -16,27 +16,65 @@ def _get_ip(request):
     return request.META.get('REMOTE_ADDR', '0.0.0.0')
 
 
+def _check_and_incr(key, max_attempts, window):
+    """Returns retry_after seconds if the limit is exceeded, else None."""
+    count = cache.get(key)
+    if count is not None and count >= max_attempts:
+        return cache.ttl(key) if hasattr(cache, 'ttl') else window
+    if count is None:
+        cache.set(key, 1, window)
+    else:
+        try:
+            cache.incr(key)
+        except ValueError:
+            cache.set(key, 1, window)
+    return None
+
+
 def rate_limit(key_prefix, max_attempts, window):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request, *args, **kwargs):
             ip = _get_ip(request)
-            key = f"rl:{key_prefix}:{ip}"
-            count = cache.get(key)
-            if count is not None and count >= max_attempts:
-                retry_after = cache.ttl(key) if hasattr(cache, 'ttl') else window
+            retry_after = _check_and_incr(
+                f"rl:{key_prefix}:{ip}", max_attempts, window,
+            )
+            if retry_after is not None:
                 return JsonResponse(
                     {"success": False, "message": "Too many requests"},
                     status=429,
                     headers={"Retry-After": str(retry_after)},
                 )
-            if count is None:
-                cache.set(key, 1, window)
-            else:
-                try:
-                    cache.incr(key)
-                except ValueError:
-                    cache.set(key, 1, window)
+            return view_func(request, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def rate_limit_by(key_prefix, max_attempts, window, extractor):
+    """Rate-limit by a request-derived key (e.g. username, phone, target id)
+    in addition to IP. Use on auth endpoints to defeat distributed
+    credential-stuffing where the attacker rotates source IPs.
+
+    `extractor(request)` returns the key string, or None to skip the check.
+    Combine with IP-based @rate_limit on the same view for layered defense.
+    """
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            try:
+                ident = extractor(request)
+            except Exception:
+                ident = None
+            if ident:
+                retry_after = _check_and_incr(
+                    f"rl:{key_prefix}:by:{ident}", max_attempts, window,
+                )
+                if retry_after is not None:
+                    return JsonResponse(
+                        {"success": False, "message": "Too many requests"},
+                        status=429,
+                        headers={"Retry-After": str(retry_after)},
+                    )
             return view_func(request, *args, **kwargs)
         return wrapper
     return decorator

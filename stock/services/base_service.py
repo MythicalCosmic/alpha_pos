@@ -1,6 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import timedelta
-from django.db.models import Model
 from django.utils import timezone
 
 
@@ -62,10 +61,13 @@ def get_date_range(period):
     elif period == "this_year":
         return today.replace(month=1, day=1), today
     elif period.startswith("last_") and period.endswith("_days"):
+        # Only catch the narrow ValueError from int(). A bare except hid
+        # every typo (e.g. "last_abc_days") behind a silent fallback to
+        # the today/today range, which is invisible to analytics callers.
         try:
             days = int(period.replace("last_", "").replace("_days", ""))
-            return today - timedelta(days=days), today
-        except Exception:
-            pass
+        except ValueError:
+            return today, today
+        return today - timedelta(days=days), today
 
     return today, today

@@ -99,29 +99,28 @@ def contracts_expiring(request):
     return JsonResponse(result, status=status)
 
 
+# Contract-document attachments are not yet implemented. The view stubs
+# below previously called ContractService.list_documents / get_document /
+# create_document / delete_document, but the service has never defined
+# any of those — every call 500'd with AttributeError. Returning 501 makes
+# the unimplemented state honest to API consumers; the routes still exist
+# so the absence is discoverable rather than a NoReverseMatch.
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 @admin_required
 def contract_documents(request, contract_id):
-    if request.method == "GET":
-        result, status = ContractService.list_documents(contract_id)
-        return JsonResponse(result, status=status)
-
-    data, error = parse_json_body(request)
-    if error:
-        return json_response(error)
-
-    result, status = ContractService.create_document(contract_id, **data, created_by_id=request.user.id)
-    return JsonResponse(result, status=status)
+    return JsonResponse({
+        'success': False,
+        'message': 'Contract document attachments are not implemented.',
+    }, status=501)
 
 
 @csrf_exempt
 @require_http_methods(["GET", "DELETE"])
 @admin_required
 def contract_document_detail(request, contract_id, doc_id):
-    if request.method == "GET":
-        result, status = ContractService.get_document(contract_id, doc_id)
-        return JsonResponse(result, status=status)
-
-    result, status = ContractService.delete_document(contract_id, doc_id)
-    return JsonResponse(result, status=status)
+    return JsonResponse({
+        'success': False,
+        'message': 'Contract document attachments are not implemented.',
+    }, status=501)

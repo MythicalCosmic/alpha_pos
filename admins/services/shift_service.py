@@ -6,7 +6,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from base.repositories.shift import ShiftTemplateRepository, ShiftRepository, CashReconciliationRepository
 from base.helpers.response import ServiceResponse
-from base.models import Order
+from base.models import Order, Shift
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,12 @@ class ShiftService:
     @staticmethod
     @transaction.atomic
     def end_shift(shift_id, user_id, notes):
+        # Row-lock the shift first so two concurrent end_shift calls can't
+        # both pass the ACTIVE guard and double-write the final stats.
+        try:
+            Shift.objects.select_for_update().get(pk=shift_id, is_deleted=False)
+        except Shift.DoesNotExist:
+            return ServiceResponse.not_found("Shift not found")
         shift = ShiftRepository.get_with_relations(shift_id)
         if not shift:
             return ServiceResponse.not_found("Shift not found")

@@ -2,6 +2,8 @@ import secrets
 from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from base.repositories import UserRepository, SessionRepository
 from base.security.hashing import verify_password, verify_password_dummy, hash_password
 from base.helpers.response import ServiceResponse
@@ -116,10 +118,12 @@ class AdminAuthService:
             return ServiceResponse.unauthorized("Invalid session")
         if not verify_password(current_password, user.password):
             return ServiceResponse.error("Current password is incorrect")
-        if len(new_password) < 6:
+        try:
+            validate_password(new_password, user=user)
+        except ValidationError as exc:
             return ServiceResponse.validation_error(
-                errors={"new_password": "Password must be at least 6 characters"},
-                message="Validation failed",
+                errors={"new_password": list(exc.messages)},
+                message="Password does not meet requirements",
             )
         user.password = hash_password(new_password)
         user.save(update_fields=['password'])

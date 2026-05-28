@@ -2,6 +2,7 @@ from functools import wraps
 from django.http import JsonResponse
 from base.helpers.request import get_session_key
 from base.repositories import SessionRepository
+from base.security.auth import _ua_matches
 
 
 def admin_required(view_func):
@@ -39,6 +40,11 @@ def admin_required(view_func):
                 {"success": False, "message": "Account is suspended"},
                 status=403,
             )
+        if not _ua_matches(session, request):
+            return JsonResponse(
+                {"success": False, "message": "Session client mismatch"},
+                status=401,
+            )
         request.user = session.user_id
         request.session_key = session_key
         return view_func(request, *args, **kwargs)
@@ -55,6 +61,11 @@ def permission_required(*permissions):
                     status=401,
                 )
             user_perms = request.user.permissions or []
+            # Coerce non-list values to an empty list. JSONField will accept
+            # whatever a writer hands it; a stray string like "***" would
+            # otherwise grant wildcard via substring membership.
+            if not isinstance(user_perms, list):
+                user_perms = []
             if '*' in user_perms or request.user.role == 'ADMIN':
                 return view_func(request, *args, **kwargs)
             missing = [p for p in permissions if p not in user_perms]

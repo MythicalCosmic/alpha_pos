@@ -63,11 +63,20 @@ class JSONOnlyMiddleware(MiddlewareMixin):
             )
 
         except Exception as e:
+            import logging
+            from django.conf import settings as django_settings
+            logging.getLogger(__name__).exception(
+                'JSONOnlyMiddleware: error wrapping response for %s %s',
+                request.method, request.path,
+            )
+            error_detail = str(e) if getattr(django_settings, 'DEBUG', False) else (
+                'An internal server error occurred'
+            )
             return JsonResponse({
                 "status": "Internal server error",
                 "status_code": 500,
                 "success": False,
-                "error": str(e),
+                "error": error_detail,
                 "meta": {
                     "path": request.path,
                     "method": request.method,

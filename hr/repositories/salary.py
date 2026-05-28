@@ -1,4 +1,4 @@
-from django.db.models import Sum, Count
+from django.db.models import Sum
 from django.core.paginator import Paginator
 from base.repositories.base import BaseSyncRepository
 from hr.models import SalaryPayment
@@ -13,6 +13,17 @@ class SalaryPaymentRepository(BaseSyncRepository):
             return cls.model.objects.select_related(
                 'employee__user', 'approved_by', 'created_by'
             ).get(pk=pk, is_deleted=False)
+        except cls.model.DoesNotExist:
+            return None
+
+    @classmethod
+    def get_for_update(cls, pk):
+        # Row-lock the salary so concurrent approve/pay calls serialize on the
+        # status check and cannot double-debit the cash register.
+        try:
+            return cls.model.objects.select_for_update().get(
+                pk=pk, is_deleted=False
+            )
         except cls.model.DoesNotExist:
             return None
 

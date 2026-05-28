@@ -1,4 +1,4 @@
-from django.db.models import Sum, F, Q
+from django.db.models import Sum, F
 from django.core.paginator import Paginator
 from base.repositories.base import BaseSyncRepository
 from stock.models import StockLevel, StockTransaction

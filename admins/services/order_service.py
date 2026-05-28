@@ -181,6 +181,23 @@ def _recalculate_total(order):
     order.save(update_fields=['subtotal', 'total_amount'])
 
 
+def _adjust_order_stock(order, product_id, quantity_delta):
+    # Keep ingredient stock in sync when an already-deducted order's lines
+    # change. adjust_for_item_change self-gates to a no-op unless the order had
+    # prior deductions, so this is safe regardless of stock config.
+    if quantity_delta == 0:
+        return
+    try:
+        from stock.services import OrderStockService, StockSettingsService
+        location_id = StockSettingsService.get_default_location_id()
+        if location_id:
+            OrderStockService.adjust_for_item_change(
+                order.id, product_id, quantity_delta, location_id, order.cashier_id,
+            )
+    except Exception:
+        logger.exception('non-critical stock-adjust error in admin order edit flow')
+
+
 def _check_and_update_ready(order):
     total = order.items.count()
     ready = order.items.filter(ready_at__isnull=False).count()
@@ -420,6 +437,7 @@ class AdminOrderService:
             order.save(update_fields=['ready_at', 'status'])
 
         _recalculate_total(order)
+        _adjust_order_stock(order, product_id, quantity)
         return ServiceResponse.success(message='Item added to order successfully')
 
     @staticmethod
@@ -442,9 +460,12 @@ class AdminOrderService:
         if not item:
             return ServiceResponse.not_found('Order item not found')
 
+        old_quantity = item.quantity
+        product_id = item.product_id
         item.quantity = quantity
         item.save(update_fields=['quantity'])
         _recalculate_total(order)
+        _adjust_order_stock(order, product_id, quantity - old_quantity)
 
         return ServiceResponse.success(message='Order item updated successfully')
 
@@ -462,7 +483,14 @@ class AdminOrderService:
         if not item:
             return ServiceResponse.not_found('Order item not found')
 
+        product_id = item.product_id
+        removed_quantity = item.quantity
         item.delete(hard_delete=True)
+
+        # Return ingredient stock for the removed line *before* any order
+        # deletion: Order FK on StockTransaction is SET_NULL, so hard-deleting
+        # the order first would strand the deductions with no way to reverse.
+        _adjust_order_stock(order, product_id, -removed_quantity)
 
         if not order.items.exists():
             order.delete(hard_delete=True)

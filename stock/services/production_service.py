@@ -1,23 +1,20 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Tuple
 from decimal import Decimal
 from datetime import datetime, timedelta
 from django.db import transaction
-from django.db.models import Q, Sum, F
+from django.db.models import Q
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import (
     ProductionOrder, ProductionOrderIngredient, ProductionOrderOutput, ProductionOrderStep,
-    Recipe, RecipeIngredient, RecipeStep, RecipeByProduct,
-    StockItem, StockUnit, StockLocation, StockBatch, StockSettings
+    Recipe, StockBatch, StockSettings
 )
 from stock.services.base_service import to_decimal, round_decimal, generate_number
 from stock.repositories import (
     ProductionOrderRepository, ProductionOrderIngredientRepository,
     ProductionOrderOutputRepository, ProductionOrderStepRepository,
-    RecipeRepository, RecipeIngredientRepository, RecipeStepRepository,
-    StockItemRepository, StockLocationRepository, StockUnitRepository,
-    StockBatchRepository, StockLevelRepository,
+    RecipeRepository, StockItemRepository, StockLocationRepository,
 )
 
 

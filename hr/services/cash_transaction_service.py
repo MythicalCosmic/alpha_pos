@@ -1,7 +1,6 @@
 from typing import Dict, Any, Tuple
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Q
 
 from base.helpers.response import ServiceResponse
 from base.models import CashRegister

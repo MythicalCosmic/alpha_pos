@@ -2,13 +2,23 @@ import logging
 from decimal import Decimal
 from django.apps import apps
 from django.utils import timezone
-from base.services.sync.config import FK_UUID_MAPPINGS, SYNC_ORDER
+from base.services.sync.config import FK_UUID_MAPPINGS
 
 logger = logging.getLogger(__name__)
 
 
 def _resolve_foreign_keys(data):
+    """Resolve UUID-keyed FK references to local PKs.
+
+    Returns (resolved, missing) where:
+      resolved: {fk_field: instance} for FKs successfully looked up
+      missing:  [(uuid_field, uuid_value)] for FKs that referenced an unknown
+                UUID. The caller decides whether to defer the record (for
+                non-nullable FKs the row is incomplete) or persist with NULL
+                (the legacy behavior — kept for nullable FKs).
+    """
     resolved = {}
+    missing = []
     for uuid_field, (app_label, model_name, fk_field) in FK_UUID_MAPPINGS.items():
         uuid_value = data.get(uuid_field)
         if not uuid_value:
@@ -20,9 +30,11 @@ def _resolve_foreign_keys(data):
                 resolved[fk_field] = instance
             else:
                 logger.warning(f'FK not found: {model_name} uuid={uuid_value}')
+                missing.append((uuid_field, uuid_value))
         except Exception as e:
             logger.error(f'FK resolve error {uuid_field}: {e}')
-    return resolved
+            missing.append((uuid_field, uuid_value))
+    return resolved, missing
 
 
 def _clean_field_value(field, value):
@@ -110,6 +122,15 @@ def _prepare_fields(model_class, data):
     return cleaned
 
 
+def _preserve_updated_at(model_class, instance, incoming_updated):
+    # .update() bypasses auto_now so the source-of-truth updated_at survives
+    # the receive write and the _should_replace tiebreaker stays meaningful.
+    if incoming_updated is None or not hasattr(instance, 'updated_at'):
+        return
+    model_class.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+    instance.updated_at = incoming_updated
+
+
 class CloudReceiver:
 
     @classmethod
@@ -137,6 +158,18 @@ class CloudReceiver:
             model_class = apps.get_model(app_label, model)
         except Exception as e:
             return {'success': False, 'created': 0, 'updated': 0, 'skipped': 0, 'errors': [str(e)]}
+
+        # Per-model opt-out: AuditLog (and any future write-once-from-local
+        # model) sets `_sync_ingest_disabled = True` so a peer can't push
+        # forged rows. Push-side is unaffected — local writes still queue
+        # outbound for the cloud.
+        if getattr(model_class, '_sync_ingest_disabled', False):
+            logger.info(
+                'sync receive: ingest disabled for %s — skipping %d record(s)',
+                model_class.__name__, len(records),
+            )
+            result['skipped'] = len(records)
+            return result
 
         for record_data in records:
             try:
@@ -177,7 +210,36 @@ class CloudReceiver:
             )
         incoming_branch = branch_id
 
-        resolved_fks = _resolve_foreign_keys(data)
+        resolved_fks, missing_fks = _resolve_foreign_keys(data)
+
+        # If any *non-nullable* FK couldn't be resolved (the related model's
+        # UUID hasn't synced yet), refuse to materialize the row. The
+        # previous behavior was to silently persist with the FK as NULL,
+        # permanently losing the association even when the parent later
+        # arrived — or DB-rejecting with a NOT NULL violation. Surface as
+        # an error so the caller's retry path can re-deliver after the
+        # parent batch lands. Nullable FKs fall through to NULL, which is
+        # what the model's `null=True` already permits.
+        for uuid_field, uuid_value in missing_fks:
+            fk_field_name = FK_UUID_MAPPINGS[uuid_field][2]
+            try:
+                fk_field = model_class._meta.get_field(fk_field_name)
+                if not fk_field.null:
+                    raise ValueError(
+                        f'Unresolved required FK on {model_class.__name__}: '
+                        f'{fk_field_name}={uuid_value}. Parent record has not '
+                        'synced yet — retry after the parent batch lands.'
+                    )
+            except Exception as exc:
+                if isinstance(exc, ValueError):
+                    raise
+                # Field lookup failure (mapping points to a field that no
+                # longer exists). Log and move on so a stale FK_UUID_MAPPINGS
+                # entry can't blow up the whole receive loop.
+                logger.warning(
+                    'sync receive: FK field %s missing on %s: %s',
+                    fk_field_name, model_class.__name__, exc,
+                )
 
         for uuid_field in FK_UUID_MAPPINGS:
             data.pop(uuid_field, None)
@@ -199,6 +261,13 @@ class CloudReceiver:
             elif sync_version < instance.sync_version:
                 return instance, 'skipped'
 
+            # Preserve source-of-truth updated_at across save(): every SyncMixin
+            # model declares updated_at with auto_now=True, so save() would stamp
+            # the receiver's local clock and defeat the _should_replace tiebreaker
+            # on every subsequent compare. Pop it and re-apply via .update(),
+            # which bypasses auto_now (same approach as SyncMixin.from_sync_dict).
+            incoming_updated = cleaned.pop('updated_at', None)
+
             for key, value in cleaned.items():
                 setattr(instance, key, value)
 
@@ -210,6 +279,7 @@ class CloudReceiver:
             instance.synced_at = timezone.now()
             instance.branch_id = incoming_branch
             instance.save(_syncing=True)
+            _preserve_updated_at(model_class, instance, incoming_updated)
             return instance, 'updated'
 
         except model_class.DoesNotExist:
@@ -221,6 +291,8 @@ class CloudReceiver:
                 synced_at=timezone.now(),
             )
 
+            incoming_updated = cleaned.pop('updated_at', None)
+
             for key, value in cleaned.items():
                 setattr(instance, key, value)
 
@@ -228,4 +300,5 @@ class CloudReceiver:
                 setattr(instance, fk_field, fk_instance)
 
             instance.save(_syncing=True)
+            _preserve_updated_at(model_class, instance, incoming_updated)
             return instance, 'created'

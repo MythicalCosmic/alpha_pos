@@ -8,7 +8,7 @@ import logging
 from decimal import Decimal
 
 from django.db.models import (
-    Avg, Count, DecimalField, ExpressionWrapper, F, Q, Sum,
+    Count, DecimalField, ExpressionWrapper, F, Q, Sum,
 )
 from django.utils import timezone
 

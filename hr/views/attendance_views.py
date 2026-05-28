@@ -23,18 +23,13 @@ def attendance_list(request):
 
 
 @csrf_exempt
-@require_http_methods(["GET", "PUT"])
+@require_http_methods(["GET"])
 @admin_required
 def attendance_detail(request, attendance_id):
-    if request.method == "GET":
-        result, status = AttendanceService.get(attendance_id)
-        return JsonResponse(result, status=status)
-
-    data, error = parse_json_body(request)
-    if error:
-        return json_response(error)
-
-    result, status = AttendanceService.update(attendance_id, **data)
+    # PUT was removed: AttendanceService.update never existed and the
+    # PUT path 500'd. Editing attendance after the fact requires a real
+    # adjustment workflow with audit trail — to be designed.
+    result, status = AttendanceService.get(attendance_id)
     return JsonResponse(result, status=status)
 
 
@@ -73,7 +68,7 @@ def attendance_check_out(request):
 @admin_required
 def attendance_daily_report(request):
     date = request.GET.get("date")
-    result, status = AttendanceService.daily_report(date=date)
+    result, status = AttendanceService.get_daily_report(date=date)
     return JsonResponse(result, status=status)
 
 
@@ -84,7 +79,7 @@ def attendance_monthly_report(request):
     employee_id = request.GET.get("employee_id")
     year = request.GET.get("year")
     month = request.GET.get("month")
-    result, status = AttendanceService.monthly_report(
+    result, status = AttendanceService.get_monthly_report(
         employee_id=employee_id, year=year, month=month
     )
     return JsonResponse(result, status=status)

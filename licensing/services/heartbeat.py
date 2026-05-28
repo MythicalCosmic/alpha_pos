@@ -11,7 +11,7 @@ should be free to decide whether to surface them or queue a retry.
 import logging
 import platform
 import socket
-from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Tuple
 
 import requests
@@ -21,7 +21,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from licensing.models import License, LicenseEvent
-from licensing.services import crypto, state as state_mod
+from licensing.services import crypto
 
 
 logger = logging.getLogger(__name__)
@@ -89,11 +89,46 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
 
     server_now = _parse_iso(payload.get('server_now')) or timezone.now()
 
+    # Replay protection: refuse responses whose server clock is older than the
+    # newest one already applied. Without this, a captured prior 200 could be
+    # replayed to refresh last_heartbeat_at and extend the offline-grace window
+    # indefinitely. server_now is monotonic for legitimate responses. Comparison
+    # errors (naive/aware mismatch) fail toward applying — no worse than before.
+    try:
+        is_stale = bool(lic.last_server_now) and server_now < lic.last_server_now
+    except TypeError:
+        is_stale = False
+    if is_stale:
+        logger.warning(
+            'heartbeat: ignoring stale/replayed response (server_now %s < last %s)',
+            server_now, lic.last_server_now,
+        )
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.HEARTBEAT_FAILED,
+            detail={'kind': 'stale_server_now'},
+        )
+        return lic
+
     lic.status = status_in
     lic.expires_at = _parse_iso(payload.get('expires_at'))
     lic.last_message = payload.get('message') or ''
     lic.last_heartbeat_at = timezone.now()
     lic.last_server_now = server_now
+
+    # Prepaid-billing snapshot (display-only). The control center sends
+    # `balance` as a string, `days_remaining` as an int (or null), and `warn`
+    # as a bool. Older control centers omit these — leave them None/False.
+    balance_in = payload.get('balance')
+    try:
+        lic.balance = Decimal(str(balance_in)) if balance_in not in (None, '') else None
+    except (InvalidOperation, ValueError):
+        lic.balance = None
+    days_in = payload.get('days_remaining')
+    # bool is a subclass of int in Python — exclude it so a stray True/False
+    # can't be coerced into a day count.
+    lic.days_remaining = days_in if (isinstance(days_in, int) and not isinstance(days_in, bool)) else None
+    lic.warn = bool(payload.get('warn', False))
+
     lic.save()
     # save() busts both license:row and license:state caches.
     return lic

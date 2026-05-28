@@ -168,19 +168,56 @@ class SyncMixin(models.Model):
         uuid_val = data.pop('uuid')
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
-        incoming_branch = data.pop('branch_id', branch_id)
+        # The kwarg `branch_id` comes from the verified bearer-token mapping
+        # (push) or from the trusted cloud connection (pull). If the payload
+        # tries to override it with a different value, that's either misrouting
+        # or a forgery attempt — drop the record rather than silently pinning
+        # it to the wrong branch.
+        payload_branch = data.pop('branch_id', None)
+        if payload_branch and branch_id and payload_branch != branch_id:
+            import logging
+            logging.getLogger(__name__).warning(
+                'sync ingest: payload branch_id=%s mismatched auth branch_id=%s; '
+                'dropping record %s on %s',
+                payload_branch, branch_id, uuid_val, cls.__name__,
+            )
+            return None, 'skipped'
+        incoming_branch = payload_branch or branch_id
         data = cls._strip_sync_denied(data)
+
+        # Source-of-truth `updated_at`. We need to preserve this across the
+        # save(), because every SyncMixin model declares updated_at with
+        # auto_now=True — Django would otherwise overwrite the incoming
+        # timestamp with the receiver's local clock at save-time, silently
+        # breaking the equal-version tiebreaker on the next round.
+        incoming_updated = data.pop('updated_at', None)
+        if isinstance(incoming_updated, str):
+            incoming_updated = parse_datetime(incoming_updated)
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if cls._should_replace(instance, sync_version, data, incoming_branch):
-                for key, value in data.items():
-                    if hasattr(instance, key):
-                        setattr(instance, key, value)
-                instance.sync_version = sync_version
-                instance.is_deleted = is_deleted
-                instance.synced_at = timezone.now()
-                instance.save(_syncing=True)
+            # Refuse to resurrect a hard-deleted row's slot via an older
+            # incoming payload. (Soft-deletes are handled by is_deleted
+            # propagation; this branch only fires for live rows.)
+            should = cls._should_replace(
+                instance, sync_version,
+                {**data, 'updated_at': incoming_updated},
+                incoming_branch,
+            )
+            if not should:
+                return instance, 'skipped'
+            for key, value in data.items():
+                if hasattr(instance, key):
+                    setattr(instance, key, value)
+            instance.sync_version = sync_version
+            instance.is_deleted = is_deleted
+            instance.synced_at = timezone.now()
+            instance.save(_syncing=True)
+            if incoming_updated and hasattr(instance, 'updated_at'):
+                # .update() bypasses auto_now so the source-of-truth
+                # timestamp survives. Reload onto the instance for callers.
+                cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                instance.updated_at = incoming_updated
             return instance, 'updated'
         except cls.DoesNotExist:
             instance = cls(
@@ -194,6 +231,9 @@ class SyncMixin(models.Model):
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
+            if incoming_updated and hasattr(instance, 'updated_at'):
+                cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                instance.updated_at = incoming_updated
             return instance, 'created'
 
     @classmethod
@@ -223,6 +263,11 @@ class SyncMixin(models.Model):
         local_branch = instance.branch_id or ''
         incoming = incoming_branch or ''
         return incoming > local_branch
+
+    @classmethod
+    def _is_sync_denylisted(cls, field_name):
+        denied = getattr(cls, 'SYNC_WRITE_DENYLIST', frozenset())
+        return field_name in denied
 
 
 class User(SyncMixin, models.Model):
@@ -288,10 +333,10 @@ class Session(models.Model):
     user_agent = models.CharField(max_length=256, null=True, blank=True, default='')
     payload = models.CharField(max_length=128, null=True, blank=True, db_index=True)
     last_activity = models.DateTimeField(auto_now_add=True)
-    # Absolute expiry. Set by the auth services on login. Sessions with
-    # NULL expires_at (legacy rows pre-dating the migration) never expire,
-    # so an operator can purge them via a one-off `delete_by_user` call or
-    # they simply roll over the next time the user re-authenticates.
+    # Absolute expiry. Set by the auth services on login. A NULL value
+    # would indicate either a legacy pre-migration row or a buggy code path
+    # that bypassed the auth service; in both cases the session must be
+    # treated as expired so it forces re-authentication on the next request.
     expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
@@ -301,7 +346,7 @@ class Session(models.Model):
 
     def is_expired(self):
         if self.expires_at is None:
-            return False
+            return True
         from django.utils import timezone
         return self.expires_at <= timezone.now()
 
@@ -356,6 +401,12 @@ class Product(SyncMixin, models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     objects = SyncManager()
+
+    # Price changes are administrative — they must originate at the cloud
+    # / admin path with an audit row, not silently arrive via a peer branch
+    # push. Denylisted from sync ingestion as a defense-in-depth measure
+    # in case a branch token is ever compromised.
+    SYNC_WRITE_DENYLIST = frozenset({'price'})
 
     def to_sync_dict(self):
         data = super().to_sync_dict()
@@ -584,6 +635,15 @@ class Order(SyncMixin, models.Model):
 
     objects = SyncManager()
 
+    # Refuse sync ingestion of payment / total fields. The cloud is the
+    # collector of these; a peer cannot dictate "this order is paid for
+    # 99999". Field-level guard, not row-level — the rest of the order
+    # (status transitions, item changes) still syncs normally.
+    SYNC_WRITE_DENYLIST = frozenset({
+        'is_paid', 'payment_method', 'total_amount', 'subtotal',
+        'discount_amount', 'paid_at',
+    })
+
     def to_sync_dict(self):
         data = super().to_sync_dict()
         data['user_uuid'] = str(self.user.uuid) if self.user else None
@@ -801,6 +861,15 @@ class Inkassa(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = SyncManager()
+
+    # Inkassa is a cash-history record. The amounts, balances, and
+    # collected-revenue numbers must never be set from a peer push — they
+    # are only ever computed locally at performance time. Sync should
+    # propagate the *existence* of an Inkassa event, not let a peer dictate
+    # its financial figures.
+    SYNC_WRITE_DENYLIST = frozenset({
+        'amount', 'balance_before', 'balance_after', 'total_revenue',
+    })
 
     def to_sync_dict(self):
         data = super().to_sync_dict()
@@ -1044,6 +1113,20 @@ class AuditLog(SyncMixin, models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+    # AuditLog is push-only to the cloud collector. Branch peers must not
+    # be able to materialize forged entries via /api/sync/receive (e.g.,
+    # claiming the victim's cashier_id performed an inkassa pull). Refuse
+    # inbound writes entirely; the receiver-side handler short-circuits on
+    # `_sync_ingest_disabled`.
+    _sync_ingest_disabled = True
+
+    @classmethod
+    def from_sync_dict(cls, data, branch_id=None):
+        # No-op: refuse to materialize AuditLog rows from peer payloads.
+        # Cloud-side collectors must construct AuditLog directly from the
+        # local request context (actor=request.user, ip from REMOTE_ADDR).
+        return None, 'skipped'
 
     @classmethod
     def record(cls, *, actor, action, target_type='', target_id=None,

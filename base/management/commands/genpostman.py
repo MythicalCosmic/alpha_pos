@@ -172,8 +172,23 @@ class Command(BaseCommand):
                         ]
         return ['GET']
 
+    _AUTH_DECORATORS = frozenset({
+        'login_required', 'admin_required', 'role_required',
+        'permission_required', 'waiter_required', 'cashier_required',
+    })
+
     def _check_auth(self, node):
-        return 'get_session_key' in ast.dump(node)
+        # The old heuristic looked for `get_session_key` in the AST body —
+        # views don't call it directly any more (the decorators do), so
+        # every view ended up flagged as unauthenticated. Match against
+        # the decorator names instead, which is what the auth model
+        # actually uses.
+        for deco in node.decorator_list:
+            target = deco.func if isinstance(deco, ast.Call) else deco
+            name = getattr(target, 'id', None) or getattr(target, 'attr', None)
+            if name in self._AUTH_DECORATORS:
+                return True
+        return False
 
     def _extract_rate_limit(self, node):
         for deco in node.decorator_list:

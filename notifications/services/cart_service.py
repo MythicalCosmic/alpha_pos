@@ -21,7 +21,7 @@ import logging
 import secrets
 from decimal import Decimal
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 
 from base.models import Order, OrderItem, Product, User
 from notifications.models import Cart, CartItem

@@ -97,7 +97,14 @@ def salary_pay(request, salary_id):
     if error:
         return json_response(error)
 
-    result, status = SalaryService.pay(salary_id, paid_by_id=request.user.id)
+    # Honor the client-supplied payment_method (CASH/BANK/CARD/etc.).
+    # The previous default of CASH caused bank-paid salaries to wrongly
+    # debit the cash drawer, leaving the register short by the salary
+    # amount even though no cash had been disbursed.
+    kwargs = {"paid_by_id": request.user.id}
+    if data and "payment_method" in data:
+        kwargs["payment_method"] = data["payment_method"]
+    result, status = SalaryService.pay(salary_id, **kwargs)
     return JsonResponse(result, status=status)
 
 

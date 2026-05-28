@@ -1,6 +1,6 @@
 import html
 import logging
-from notifications.models import NotificationSettings, NotificationTemplate, NotificationLog
+from notifications.models import NotificationSettings, NotificationTemplate
 from notifications.services.safe_format import safe_format, _UnsafePlaceholder
 
 logger = logging.getLogger(__name__)

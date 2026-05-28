@@ -1,11 +1,10 @@
 from typing import Dict, Any, Tuple
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Q, Sum
-from django.utils import timezone
+from django.db.models import Sum
 
 from base.helpers.response import ServiceResponse
-from hr.models import Expense, ExpenseCategory
+from hr.models import Expense
 from hr.repositories import ExpenseRepository, ExpenseCategoryRepository
 
 

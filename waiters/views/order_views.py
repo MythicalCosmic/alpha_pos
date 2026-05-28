@@ -211,7 +211,10 @@ def table_status(request, table_id):
             "errors": {"status": "status is required"}
         }, 422))
 
-    result, status_code = WaiterOrderService.update_table_status(table_id, status)
+    result, status_code = WaiterOrderService.update_table_status(
+        table_id, status,
+        actor_user_id=request.user.id, actor_role=request.user.role,
+    )
     return JsonResponse(result, status=status_code)
 
 

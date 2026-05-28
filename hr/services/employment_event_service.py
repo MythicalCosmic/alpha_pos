@@ -106,6 +106,16 @@ class EmploymentEventService:
         })
 
     @classmethod
+    def get_event(cls, event_id: int) -> Tuple[Dict[str, Any], int]:
+        try:
+            event = EmploymentEvent.objects.select_related(
+                'employee__user', 'created_by'
+            ).get(pk=event_id, is_deleted=False)
+        except EmploymentEvent.DoesNotExist:
+            return ServiceResponse.not_found("Employment event not found")
+        return ServiceResponse.success(data={"event": cls._serialize(event)})
+
+    @classmethod
     def list(cls,
              page: int = 1,
              per_page: int = 20,

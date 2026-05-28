@@ -19,6 +19,7 @@ from base.security.auth import login_required, role_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
 from base.security.permissions import admin_required
+from base.security.rate_limit import rate_limit, rate_limit_by
 from base.models import AuditLog
 from notifications.models import LoyaltyAccount, LoyaltySettings
 from notifications.services import loyalty_service
@@ -92,6 +93,10 @@ def account_view(request, phone):
 @require_POST
 @login_required
 @role_required('ADMIN', 'CASHIER')
+# Cap redemptions per cashier IP and per phone to make balance-draining
+# from a stolen cashier session loud (lots of 429s) and slow.
+@rate_limit('loyalty_redeem', 20, 60)
+@rate_limit_by('loyalty_redeem_phone', 3, 300, lambda r: r.resolver_match.kwargs.get('phone') if r.resolver_match else None)
 @idempotent('loyalty.redeem')
 def redeem_view(request, phone):
     settings = LoyaltySettings.load()
@@ -105,7 +110,9 @@ def redeem_view(request, phone):
     before = loyalty_service.get_account(phone)
     stamps_before = before.stamps_balance if before else None
 
-    account = loyalty_service.redeem(phone)
+    account = loyalty_service.redeem(
+        phone, cashier_id=getattr(getattr(request, 'user', None), 'id', None),
+    )
     if not account:
         return JsonResponse(
             {

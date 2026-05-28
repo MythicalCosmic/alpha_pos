@@ -246,10 +246,20 @@ class SyncService:
         return [obj.to_sync_dict() for obj in qs]
 
     @classmethod
-    def get_changes_after(cls, model_class, after_timestamp, branch_id=None):
-        qs = model_class.objects.filter(synced_at__gt=after_timestamp)
+    def get_changes_after(cls, model_class, after_timestamp, branch_id=None, limit=None):
+        """Return records updated after `after_timestamp`.
+
+        `limit` caps the result set — without it the changes view can
+        materialize the entire queue for a long-disconnected branch in a
+        single response (OOM on 1M+ row tables). Callers should pass a
+        sane page size; pagination is then driven by the most-recent
+        `synced_at` the client received.
+        """
+        qs = model_class.objects.filter(synced_at__gt=after_timestamp).order_by('synced_at')
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
+        if limit is not None:
+            qs = qs[:limit]
         return [obj.to_sync_dict() for obj in qs]
 
     @classmethod

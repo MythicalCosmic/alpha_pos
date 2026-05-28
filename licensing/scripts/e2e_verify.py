@@ -17,9 +17,14 @@ import time
 import urllib.error
 import urllib.request
 
-PYTHON = '/home/cosmic/Projects/alpha_pos/.venv/bin/python'
 ALPHA_DIR = '/home/cosmic/Projects/alpha_pos'
 CC_DIR = '/home/cosmic/Projects/pos_control_center'
+
+# Each project has its OWN venv with its OWN dependencies — the control
+# center needs whitenoise, alpha_pos needs requests/cryptography. Run every
+# subprocess with the matching interpreter so neither is missing a dep.
+ALPHA_PYTHON = f'{ALPHA_DIR}/.venv/bin/python'
+CC_PYTHON = f'{CC_DIR}/.venv/bin/python'
 
 CC_PORT = 9101
 POS_PORT = 9102
@@ -68,7 +73,7 @@ def wait_for_port(port, deadline_s=15):
 
 def generate_vendor_keypair():
     out = subprocess.run(
-        [PYTHON, 'manage.py', 'generate_vendor_keypair'],
+        [CC_PYTHON, 'manage.py', 'generate_vendor_keypair'],
         cwd=CC_DIR,
         env={**os.environ, 'DEBUG': 'True', 'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings'},
         capture_output=True, text=True, check=True,
@@ -80,7 +85,7 @@ def generate_vendor_keypair():
 
 def create_invite():
     res = subprocess.run(
-        [PYTHON, 'manage.py', 'shell', '-c',
+        [CC_PYTHON, 'manage.py', 'shell', '-c',
          'from tenants.models import InviteCode; '
          'print(InviteCode.objects.create().code)'],
         cwd=CC_DIR,
@@ -93,7 +98,7 @@ def create_invite():
 def cc_shell(cmd):
     """Run a one-liner in the control center's Django shell."""
     return subprocess.run(
-        [PYTHON, 'manage.py', 'shell', '-c', cmd],
+        [CC_PYTHON, 'manage.py', 'shell', '-c', cmd],
         cwd=CC_DIR,
         env={**os.environ, 'DEBUG': 'True', 'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings'},
         capture_output=True, text=True, check=True,
@@ -114,14 +119,14 @@ def alpha_shell(cmd, extra_env=None):
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [PYTHON, 'manage.py', 'shell', '-c', cmd],
+        [ALPHA_PYTHON, 'manage.py', 'shell', '-c', cmd],
         cwd=ALPHA_DIR, env=env, capture_output=True, text=True, check=True,
     ).stdout
 
 
 def generate_unlock_via_cc(priv_hex):
     res = subprocess.run(
-        [PYTHON, 'manage.py', 'generate_unlock'],
+        [CC_PYTHON, 'manage.py', 'generate_unlock'],
         cwd=CC_DIR,
         env={**os.environ,
              'DEBUG': 'True',
@@ -180,7 +185,7 @@ def main():
         'LICENSE_VENDOR_PUBLIC_KEY': VENDOR_PUB,
     }
     cc = subprocess.Popen(
-        [PYTHON, 'manage.py', 'runserver', f'127.0.0.1:{CC_PORT}', '--noreload'],
+        [CC_PYTHON, 'manage.py', 'runserver', f'127.0.0.1:{CC_PORT}', '--noreload'],
         cwd=CC_DIR, env=cc_env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -201,7 +206,7 @@ def main():
         'USE_DUMMY_CACHE': 'true',
     }
     pos = subprocess.Popen(
-        [PYTHON, 'manage.py', 'runserver', f'127.0.0.1:{POS_PORT}', '--noreload'],
+        [ALPHA_PYTHON, 'manage.py', 'runserver', f'127.0.0.1:{POS_PORT}', '--noreload'],
         cwd=ALPHA_DIR, env=pos_env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
@@ -275,6 +280,77 @@ def main():
             ok('business endpoint unblocked after setup')
         else:
             fail('business endpoint still blocked after setup', f'{s} {b!r}')
+
+        # 3b. Prepaid billing: priced plan + empty wallet → EXPIRED → kill
+        # switch. Top up → next heartbeat ACTIVE again. Then short period →
+        # warn flag. Exercises the balance/subscription path end to end.
+        print()
+        print('=== Step 3b: billing — empty wallet expires, top-up revives ===')
+        cc_shell(
+            'from licenses.models import LicenseKey; '
+            'from billing.models import Subscription; '
+            'lk = LicenseKey.objects.first(); t = lk.tenant; '
+            'Subscription.objects.update_or_create(tenant=t, defaults={'
+            '"price": 10, "period_days": 30, "warn_days": 5, '
+            '"status": "ACTIVE", "paid_through": None, "last_charged_at": None}); '
+            't.balance = 0; t.save(update_fields=["balance"])',
+        )
+        alpha_shell(
+            'from licensing.services import heartbeat as h; h.do_heartbeat()',
+            extra_env={'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
+                       'USE_DUMMY_CACHE': 'true'},
+        )
+        s, b = http('GET', pos_url('/api/admins/dashboard/today'))
+        body = json.loads(b)
+        if s == 503 and body.get('code') == 'license_expired':
+            ok('empty wallet → EXPIRED → business endpoint 503')
+        else:
+            fail('billing expiry', f'{s} {b!r}')
+
+        cc_shell(
+            'from licenses.models import LicenseKey; '
+            'from billing.services.billing import credit_balance; '
+            'from billing.models import Payment; '
+            'lk = LicenseKey.objects.first(); '
+            'credit_balance(lk.tenant, 100, source=Payment.Source.MANUAL)',
+        )
+        alpha_shell(
+            'from licensing.services import heartbeat as h; h.do_heartbeat()',
+            extra_env={'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
+                       'USE_DUMMY_CACHE': 'true'},
+        )
+        s, b = http('GET', pos_url('/api/admins/dashboard/today'))
+        if s != 503:
+            ok('top-up → next heartbeat ACTIVE → access restored')
+        else:
+            fail('billing top-up revive', f'{s} {b!r}')
+
+        s, b = http('GET', pos_url('/api/licensing/status'))
+        data = json.loads(b)['data']
+        if data.get('days_remaining') is not None and data.get('balance'):
+            ok(f"status shows balance={data['balance']} days_remaining={data['days_remaining']}")
+        else:
+            fail('billing status fields', f'{b!r}')
+
+        # Short period so the warn window (5 days) covers the whole period.
+        cc_shell(
+            'from licenses.models import LicenseKey; '
+            'from billing.models import Subscription; '
+            'lk = LicenseKey.objects.first(); '
+            'Subscription.objects.filter(tenant=lk.tenant).update('
+            'period_days=2, paid_through=None)',
+        )
+        alpha_shell(
+            'from licensing.services import heartbeat as h; h.do_heartbeat()',
+            extra_env={'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
+                       'USE_DUMMY_CACHE': 'true'},
+        )
+        s, b = http('GET', pos_url('/api/licensing/status'))
+        data = json.loads(b)['data']
+        if data.get('warn') is True and data.get('is_blocked') is False:
+            ok('low-balance warn flag set while still ACTIVE (warn before kill)')
+        else:
+            fail('billing warn flag', f'{b!r}')
 
         # 4. Invite reuse blocked — test against the control center DIRECTLY
         # so we don't have to wipe alpha_pos's License row (and lose its

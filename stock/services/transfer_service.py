@@ -1,13 +1,13 @@
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date
 from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
 from stock.models import StockTransfer, StockTransferItem, StockSettings
-from stock.services.base_service import to_decimal, round_decimal, generate_number
+from stock.services.base_service import to_decimal, generate_number
 from stock.repositories import (
     StockTransferRepository, StockTransferItemRepository,
     StockItemRepository, StockLocationRepository,
@@ -402,10 +402,22 @@ class StockTransferService:
         from .level_service import StockLevelService
 
         for item in transfer.items.select_related("stock_item", "unit"):
+            shipped = item.shipped_qty or item.approved_qty or item.requested_qty
             if received_quantities and item.id in received_quantities:
                 qty = to_decimal(received_quantities[item.id])
             else:
-                qty = item.shipped_qty or item.approved_qty or item.requested_qty
+                qty = shipped
+
+            # Refuse impossible receipts. Without this guard, a caller can
+            # claim to receive more than was shipped — fabricating stock at
+            # the destination location while the source is correctly debited.
+            if qty < 0 or qty > shipped:
+                transaction.set_rollback(True)
+                return ServiceResponse.validation_error(
+                    errors={f"item_{item.id}": (
+                        f"received_qty must be between 0 and the shipped amount ({shipped})"
+                    )},
+                )
 
             result, status = StockLevelService.adjust(
                 stock_item_id=item.stock_item_id,
@@ -423,7 +435,6 @@ class StockTransferService:
 
             item.received_qty = qty
 
-            shipped = item.shipped_qty or item.approved_qty or item.requested_qty
             if qty != shipped:
                 item.variance_reason = f"Shipped: {shipped}, Received: {qty}"
 

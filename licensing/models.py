@@ -59,6 +59,17 @@ class License(models.Model):
     # a per-tenant basis from the dashboard. NULL means "no banner".
     last_message = models.TextField(blank=True, default='')
 
+    # Prepaid-billing snapshot from the last heartbeat. Display-only — the
+    # control center is the source of truth and the kill switch keys off
+    # `status` (EXPIRED), never off these numbers. `warn` is the control
+    # center saying "inside the low-balance window — tell the operator to top
+    # up", driven by the vendor-configured warn_days lead time.
+    balance = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+    )
+    days_remaining = models.IntegerField(null=True, blank=True)
+    warn = models.BooleanField(default=False)
+
     # sha256(hostname + machine-id) — sent on each heartbeat so the control
     # center can flag installs that have been cloned (same key, multiple
     # fingerprints). Surface only; no auto-block.
@@ -71,6 +82,15 @@ class License(models.Model):
     class Meta:
         verbose_name = 'license'
         verbose_name_plural = 'license'
+        constraints = [
+            # Singleton at the DB layer. save() forces pk=1 too, but
+            # bulk_create / raw SQL / objects.create(id=2) would otherwise
+            # bypass it. Belt-and-braces.
+            models.CheckConstraint(
+                condition=models.Q(id=1),
+                name='license_singleton_pk1',
+            ),
+        ]
 
     _CACHE_KEY = 'license:row:v1'
     _CACHE_TTL = 60

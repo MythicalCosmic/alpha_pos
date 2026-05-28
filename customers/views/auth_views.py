@@ -4,7 +4,7 @@ from django.views.decorators.http import require_POST, require_GET, require_http
 from base.helpers.request import get_client_ip, get_user_agent, get_session_key
 from base.helpers.response import json_response, ServiceResponse
 from base.helpers.cookie import set_session_cookie, clear_session_cookie
-from base.security.rate_limit import rate_limit
+from base.security.rate_limit import rate_limit, rate_limit_by
 from customers.services.auth_service import AuthService
 from customers.requests.auth_requests import (
     login_request,
@@ -13,8 +13,19 @@ from customers.requests.auth_requests import (
 )
 
 
+def _login_email(request):
+    try:
+        import json
+        body = json.loads(request.body.decode('utf-8') or '{}')
+    except Exception:
+        return None
+    email = body.get('email') if isinstance(body, dict) else None
+    return (email or '').strip().lower()[:128] or None
+
+
 @csrf_exempt
 @rate_limit('login', 5, 60)
+@rate_limit_by('login_user', 5, 60, _login_email)
 @require_POST
 def login(request):
     data, error = login_request(request)

@@ -4,7 +4,7 @@ from django.core.paginator import Paginator
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from hr.models import PerformanceReview, PerformanceGoal, Employee
+from hr.models import PerformanceReview, PerformanceGoal
 from hr.repositories import EmployeeRepository
 
 

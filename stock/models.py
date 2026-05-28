@@ -676,6 +676,7 @@ class PurchaseOrder(SyncMixin, models.Model):
     payment_status = models.CharField(
         max_length=20, choices=PaymentStatus.choices, default=PaymentStatus.UNPAID
     )
+    amount_paid = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     payment_due_date = models.DateTimeField(null=True, blank=True)
 
     created_by = models.ForeignKey(

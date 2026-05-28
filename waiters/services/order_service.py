@@ -262,7 +262,9 @@ class WaiterOrderService:
     @staticmethod
     @transaction.atomic
     def add_item(order_id, product_id, quantity, waiter_user_id):
-        order = OrderRepository.get_by_id(order_id)
+        # Row-lock the order so concurrent add-item calls serialize across
+        # both the quantity increment and the subtotal recalculate.
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -285,8 +287,11 @@ class WaiterOrderService:
 
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
         if existing:
-            existing.quantity += quantity
-            existing.save(update_fields=['quantity'])
+            # Increment in SQL so concurrent add-item calls cannot lose updates.
+            from django.db.models import F
+            OrderItemRepository.model.objects.filter(pk=existing.pk).update(
+                quantity=F('quantity') + quantity,
+            )
         else:
             OrderItemRepository.create(
                 order=order, product=product, quantity=quantity, price=product.price
@@ -303,7 +308,7 @@ class WaiterOrderService:
     @staticmethod
     @transaction.atomic
     def update_item(order_id, item_id, quantity, waiter_user_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -333,7 +338,7 @@ class WaiterOrderService:
     @staticmethod
     @transaction.atomic
     def remove_item(order_id, item_id, waiter_user_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -479,13 +484,29 @@ class WaiterOrderService:
         return ServiceResponse.success(data={'tables': data})
 
     @staticmethod
-    def update_table_status(table_id, status):
+    def update_table_status(table_id, status, actor_user_id=None, actor_role=None):
         valid_statuses = [c[0] for c in Table.Status.choices]
         if status not in valid_statuses:
             return ServiceResponse.validation_error(
                 errors={'status': f'Must be one of: {", ".join(valid_statuses)}'},
                 message='Invalid table status',
             )
+
+        # Non-admin waiters can only flip a table they're actively serving.
+        # Without this check WAITER A could re-flag any table in any branch.
+        # An admin can transition any table (cleanup / closeout flows).
+        if actor_role and actor_role != 'ADMIN':
+            from base.repositories import OrderRepository
+            has_active_order = OrderRepository.model.objects.filter(
+                is_deleted=False,
+                table_id=table_id,
+                cashier_id=actor_user_id,
+                status__in=('PREPARING', 'READY'),
+            ).exists()
+            if not has_active_order:
+                return ServiceResponse.forbidden(
+                    'You can only update the status of a table you are serving',
+                )
 
         table = TableRepository.update_status(table_id, status)
         if not table:
