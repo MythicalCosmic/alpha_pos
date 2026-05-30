@@ -29,10 +29,6 @@ CC_PYTHON = f'{CC_DIR}/.venv/bin/python'
 CC_PORT = 9101
 POS_PORT = 9102
 
-# Use freshly-generated keys for this run so nothing leaks into git.
-VENDOR_PRIV = ''
-VENDOR_PUB = ''
-
 PASSED = []
 FAILED = []
 
@@ -69,18 +65,6 @@ def wait_for_port(port, deadline_s=15):
                 return True
         time.sleep(0.2)
     return False
-
-
-def generate_vendor_keypair():
-    out = subprocess.run(
-        [CC_PYTHON, 'manage.py', 'generate_vendor_keypair'],
-        cwd=CC_DIR,
-        env={**os.environ, 'DEBUG': 'True', 'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings'},
-        capture_output=True, text=True, check=True,
-    )
-    import re
-    hexes = re.findall(r'\b[0-9a-f]{64}\b', out.stdout)
-    return hexes[0], hexes[1]
 
 
 def create_invite(intended_email='plov@example.com'):
@@ -124,36 +108,8 @@ def alpha_shell(cmd, extra_env=None):
     ).stdout
 
 
-def generate_unlock_via_cc(priv_hex):
-    res = subprocess.run(
-        [CC_PYTHON, 'manage.py', 'generate_unlock'],
-        cwd=CC_DIR,
-        env={**os.environ,
-             'DEBUG': 'True',
-             'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings',
-             'LICENSE_VENDOR_PRIVATE_KEY': priv_hex},
-        capture_output=True, text=True, check=True,
-    )
-    # Pull the base64 blob — last long non-empty line that decodes.
-    import base64
-    for line in res.stdout.strip().splitlines():
-        line = line.strip()
-        if len(line) < 100:
-            continue
-        try:
-            base64.b64decode(line, validate=False)
-            return line
-        except Exception:
-            continue
-    raise RuntimeError(f'could not find unlock blob in:\n{res.stdout}')
-
-
 def main():
-    global VENDOR_PRIV, VENDOR_PUB
-
     print('=== Setup ===')
-    VENDOR_PRIV, VENDOR_PUB = generate_vendor_keypair()
-    print(f'  vendor pubkey: {VENDOR_PUB[:16]}…')
 
     # Wipe any existing License row from the dev sqlite — we want a
     # known UNREGISTERED starting point.
@@ -182,7 +138,6 @@ def main():
         'DEBUG': 'True',
         'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings',
         'SECRET_KEY': 'e2e-cc',
-        'LICENSE_VENDOR_PUBLIC_KEY': VENDOR_PUB,
     }
     cc = subprocess.Popen(
         [CC_PYTHON, 'manage.py', 'runserver', f'127.0.0.1:{CC_PORT}', '--noreload'],
@@ -196,7 +151,6 @@ def main():
         'DJANGO_SETTINGS_MODULE': 'alpha_pos.settings',
         'SECRET_KEY': 'e2e-alpha',
         'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
-        'LICENSE_VENDOR_PUBLIC_KEY': VENDOR_PUB,
         # daemon would interfere with manual heartbeat ticks below
         'LICENSE_HEARTBEAT_DISABLED': '1',
         # The runserver + the alpha_shell subprocesses we use to trigger
@@ -457,65 +411,7 @@ def main():
         else:
             fail('grace clock', f'before={before} after={after}')
 
-        # 9. Perpetual unlock — bad signature rejected
-        print()
-        print('=== Step 8: bad unlock signature rejected ===')
-        # Build a file signed by a DIFFERENT key
-        alt_priv, alt_pub = generate_vendor_keypair()
-        bad_unlock = generate_unlock_via_cc(alt_priv)
-        s, b = http('POST', pos_url('/api/licensing/unlock'),
-                    body={'unlock_file': bad_unlock})
-        body = json.loads(b)
-        if s == 422 and body.get('code') == 'signature_invalid':
-            ok('unlock from wrong keypair rejected')
-        else:
-            fail('bad unlock not rejected', f'{s} {b!r}')
-
-        # 10. Perpetual unlock — good signature accepted, even when SUSPENDED
-        print()
-        print('=== Step 9: valid unlock disables kill switch ===')
-        cc_shell(
-            'from licenses.models import LicenseKey; '
-            "lk = LicenseKey.objects.first(); "
-            "lk.status = LicenseKey.Status.SUSPENDED; lk.save()",
-        )
-        alpha_shell(
-            'from licensing.services import heartbeat as h; h.do_heartbeat()',
-            extra_env={
-                'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
-            },
-        )
-        s_pre, _ = http('GET', pos_url('/api/admins/dashboard/today'))
-        good_unlock = generate_unlock_via_cc(VENDOR_PRIV)
-        s, b = http('POST', pos_url('/api/licensing/unlock'),
-                    body={'unlock_file': good_unlock})
-        body = json.loads(b)
-        if s == 200 and body['license']['status'] == 'PERPETUAL_UNLOCK':
-            ok('valid unlock flips to PERPETUAL_UNLOCK')
-        else:
-            fail('unlock accept', f'{s} {b!r}')
-        s_post, _ = http('GET', pos_url('/api/admins/dashboard/today'))
-        if s_pre == 503 and s_post != 503:
-            ok('unlock overrides SUSPENDED status')
-        else:
-            fail('unlock override', f'pre={s_pre} post={s_post}')
-
-        # 11. Heartbeat in PERPETUAL_UNLOCK state returns 304 (no-op)
-        print()
-        print('=== Step 10: heartbeat is a no-op after unlock ===')
-        out = alpha_shell(
-            'from licensing.services import heartbeat as h; '
-            'body, status = h.do_heartbeat(); print(status)',
-            extra_env={
-                'LICENSE_CONTROL_CENTER_URL': f'http://127.0.0.1:{CC_PORT}',
-            },
-        ).strip().splitlines()
-        if '304' in out[-1]:
-            ok('heartbeat is no-op after perpetual unlock')
-        else:
-            fail('heartbeat after unlock', f'expected 304, got {out!r}')
-
-        # 12. Audit trail check on control center
+        # 8. Audit trail check on control center
         print()
         print('=== Step 11: ControlEvent audit trail populated ===')
         events_out = cc_shell(

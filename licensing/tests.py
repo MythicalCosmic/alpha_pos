@@ -64,16 +64,6 @@ class TestMiddlewareAllowlist:
         assert resp.status_code != 503
         assert resp.status_code in (400, 422)
 
-    def test_unlock_endpoint_reachable_without_license(self):
-        _unregister_license()
-        resp = _client().post('/api/licensing/unlock')
-        # Allowlisted: must not 503. View itself returns 400 (no JSON
-        # body) — that's expected; we're proving the middleware let it
-        # through, not that the view succeeded.
-        assert resp.status_code != 503
-        assert resp.status_code in (400, 422)
-
-
 class TestKillSwitch:
     """Non-allowlisted endpoints must 503 while UNREGISTERED, with a
     payload the client can switch on."""
@@ -218,19 +208,6 @@ class TestStateTransitions:
         assert snapshot.is_blocked() is True
         assert snapshot.reason_code() == 'license_offline_grace_exceeded'
 
-    def test_perpetual_unlock_overrides_everything(self):
-        from licensing.models import License
-
-        lic = License.load()
-        lic.status = License.Status.PERPETUAL_UNLOCK
-        lic.save()
-
-        # PERPETUAL_UNLOCK means "vendor disappeared, escape hatch active"
-        # — no expiry, no grace, never blocked.
-        resp = _client().get('/api/admins/dashboard/today')
-        assert resp.status_code != 503
-
-
 class TestMiddlewarePositionAssertion:
     """If a future refactor moves the middleware out of its slot, boot
     must fail loudly. We exercise AppConfig.ready() by re-importing it
@@ -271,12 +248,35 @@ class TestMiddlewarePositionAssertion:
 
 class _FakeResponse:
     """Stand-in for requests.Response used by the heartbeat client."""
-    def __init__(self, status_code, body):
+    def __init__(self, status_code, body, headers=None):
         self.status_code = status_code
         self._body = body
         self.text = ''
+        self.headers = headers or {}
     def json(self):
         return self._body
+
+
+# Bearer key the TestHeartbeatClient class encrypts into the License row in
+# its _prep_active_with_key fixture. Centralised so the signature helper
+# below stays in sync with what the test license actually carries.
+_TEST_BEARER_KEY = 'live-license-key-aaaaaaaaaaaaaaaaaaaaa'
+
+
+def _signed_response(status_code, body, *, key=_TEST_BEARER_KEY):
+    """Build a _FakeResponse whose X-Response-Signature header is a valid
+    HMAC-SHA256 of the canonical JSON body — what the real control center
+    sends. Heartbeat tests use this on 200-paths; 401/410/5xx don't need a
+    signature because do_heartbeat doesn't verify on those."""
+    import json as _json
+    import hmac
+    import hashlib
+    raw = _json.dumps(body, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    sig = hmac.new(key.encode('utf-8'), raw, hashlib.sha256).hexdigest()
+    return _FakeResponse(
+        status_code, body,
+        headers={'X-Response-Signature': f'sha256={sig}'},
+    )
 
 
 class TestSetupWizard:
@@ -323,7 +323,7 @@ class TestSetupWizard:
     def test_control_center_unreachable_returns_502(self, settings, monkeypatch):
         import requests
         _unregister_license()
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://does-not-exist.local'
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://does-not-exist.local'
 
         def _boom(*args, **kwargs):
             raise requests.ConnectionError('refused')
@@ -335,7 +335,7 @@ class TestSetupWizard:
 
     def test_control_center_404_passes_through(self, settings, monkeypatch):
         _unregister_license()
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
 
         monkeypatch.setattr(
             'licensing.services.heartbeat.requests.post',
@@ -353,7 +353,7 @@ class TestSetupWizard:
         from licensing.services import crypto
 
         _unregister_license()
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
 
         captured = {}
 
@@ -443,7 +443,7 @@ class TestHeartbeatClient:
         from django.utils import timezone
         from datetime import timedelta
 
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
         lic = License.load()
         lic.status = License.Status.ACTIVE
         lic.key_encrypted = crypto.encrypt_key(
@@ -459,17 +459,7 @@ class TestHeartbeatClient:
     def test_unregistered_returns_304(self, settings):
         from licensing.services import heartbeat as hb
         _unregister_license()
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
-        body, status = hb.do_heartbeat()
-        assert status == 304
-
-    def test_perpetual_unlock_returns_304(self, settings):
-        from licensing.models import License
-        from licensing.services import heartbeat as hb
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
-        lic = License.load()
-        lic.status = License.Status.PERPETUAL_UNLOCK
-        lic.save()
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
         body, status = hb.do_heartbeat()
         assert status == 304
 
@@ -553,7 +543,7 @@ class TestHeartbeatClient:
         now_iso = timezone.now().isoformat()
         monkeypatch.setattr(
             'licensing.services.heartbeat.requests.post',
-            lambda *a, **kw: _FakeResponse(200, {
+            lambda *a, **kw: _signed_response(200, {
                 'status': 'ACTIVE',
                 'expires_at': future_iso,
                 'server_now': now_iso,
@@ -583,7 +573,7 @@ class TestHeartbeatClient:
         self._prep_active_with_key(settings)
         monkeypatch.setattr(
             'licensing.services.heartbeat.requests.post',
-            lambda *a, **kw: _FakeResponse(200, {
+            lambda *a, **kw: _signed_response(200, {
                 'status': 'SUSPENDED',
                 'expires_at': None,
                 'server_now': timezone.now().isoformat(),
@@ -621,7 +611,7 @@ class TestHeartbeatClient:
 
         monkeypatch.setattr(
             'licensing.services.heartbeat.requests.post',
-            lambda *a, **kw: _FakeResponse(200, {
+            lambda *a, **kw: _signed_response(200, {
                 'status': 'TOTALLY_BOGUS',  # not a valid choice
                 'expires_at': None,
                 'server_now': timezone.now().isoformat(),
@@ -649,13 +639,15 @@ class TestHeartbeatClient:
         hb.do_heartbeat()
         assert License.load().last_heartbeat_at == before
 
-    def test_undecryptable_key_returns_500(self, settings, monkeypatch):
-        from licensing.models import License
+    def test_undecryptable_key_fails_closed_to_suspended(self, settings, monkeypatch):
+        """If the Fernet key rotated or the encrypted blob is corrupt, the
+        daemon can't call /heartbeat at all. The install would otherwise
+        drift ACTIVE until grace_until lapsed (days). Fail CLOSED: flip
+        SUSPENDED so the middleware blocks on the next request."""
+        from licensing.models import License, LicenseEvent
         from licensing.services import heartbeat as hb
 
-        # Stash garbage in the encrypted-key field; decrypt will return
-        # None and do_heartbeat should bail out with a clear status.
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
+        settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
         lic = License.load()
         lic.status = License.Status.ACTIVE
         lic.key_encrypted = b'corrupted-blob'
@@ -665,169 +657,110 @@ class TestHeartbeatClient:
         assert status == 500
         assert body['message'] == 'license_key_undecryptable'
 
+        lic_after = License.load()
+        assert lic_after.status == 'SUSPENDED'
+        assert 'decrypted' in lic_after.last_message.lower()
 
-# ---------------------------------------------------------------------------
-# Perpetual unlock
-# ---------------------------------------------------------------------------
+        # Audit row written.
+        assert LicenseEvent.objects.filter(
+            action=LicenseEvent.Action.STATUS_CHANGED,
+            detail__reason='key_undecryptable',
+        ).exists()
 
-
-def _generate_vendor_keypair():
-    """Return (private_key, pubkey_hex) — used by tests to play the
-    vendor's role. In production this keypair lives in a hardware
-    vault and never touches the control center server."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PrivateKey,
-    )
-    priv = Ed25519PrivateKey.generate()
-    pub_hex = priv.public_key().public_bytes_raw().hex()
-    return priv, pub_hex
-
-
-def _sign_unlock_file(private_key, *, signed_at='2030-01-01T00:00:00Z',
-                      payload='PERPETUAL_UNLOCK_v1'):
-    """Build a valid (or tweakably-invalid) unlock file the way the
-    vendor's offline signing tool will."""
-    import base64
-    import binascii
-    import json
-
-    msg = f'{payload}|{signed_at}'.encode('utf-8')
-    sig = private_key.sign(msg)
-    blob = {
-        'payload': payload,
-        'signed_at': signed_at,
-        'signature': binascii.hexlify(sig).decode('ascii'),
-    }
-    return base64.b64encode(json.dumps(blob).encode('utf-8')).decode('ascii')
-
-
-class TestUnlockVerification:
-    """The unlock view is the only path that can permanently disable
-    the kill switch. Every rejection mode must return 422 (or 503 if
-    the operator forgot to embed a pubkey) — never silently flip."""
-
-    def _post(self, body=None):
-        import json as _json
-        payload = _json.dumps(body or {})
-        return _client().post(
-            '/api/licensing/unlock', data=payload,
-            content_type='application/json',
-        )
-
-    def test_no_vendor_pubkey_returns_503(self, settings):
-        settings.LICENSE_VENDOR_PUBLIC_KEY = ''
-        resp = self._post({'unlock_file': 'anything'})
-        assert resp.status_code == 503
-        assert resp.json()['code'] == 'vendor_pubkey_not_configured'
-
-    def test_missing_unlock_file_returns_422(self, settings):
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        resp = self._post({})
-        assert resp.status_code == 422
-
-    def test_garbled_base64_returns_422(self, settings):
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        resp = self._post({'unlock_file': '!!!not-base64!!!'})
-        assert resp.status_code == 422
-        assert resp.json()['code'] in (
-            'unlock_file_not_base64', 'unlock_file_not_json',
-        )
-
-    def test_valid_signature_flips_to_perpetual_unlock(self, settings):
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        # Start SUSPENDED to prove the unlock overrides even an active
-        # block — exactly the vendor-disappear scenario.
+    def test_bad_response_signature_returns_502_no_state_change(
+        self, settings, monkeypatch,
+    ):
+        """A 200 OK without a valid X-Response-Signature must be ignored.
+        Defeats a MITM that has bypassed TLS and is trying to forge an
+        ACTIVE response."""
         from licensing.models import License
+        from licensing.services import heartbeat as hb
+        from django.utils import timezone
+
+        self._prep_active_with_key(settings)
+        # Pretend the License got SUSPENDED — a forged response that
+        # successfully revived it would be the attack we're blocking.
         lic = License.load()
         lic.status = License.Status.SUSPENDED
         lic.save()
-        # Pre-unlock: business endpoints are blocked.
-        assert _client().get('/api/admins/dashboard/today').status_code == 503
 
-        signed = _sign_unlock_file(priv, signed_at='2030-01-01T00:00:00Z')
-        resp = self._post({'unlock_file': signed})
-        assert resp.status_code == 200
-        assert resp.json()['license']['status'] == 'PERPETUAL_UNLOCK'
-        assert resp.json()['license']['unlock_signed_at'] == '2030-01-01T00:00:00Z'
-
-        # Post-unlock: kill switch is silent forever — even the previously
-        # SUSPENDED status no longer blocks.
-        assert _client().get('/api/admins/dashboard/today').status_code != 503
-
-    def test_signature_from_different_keypair_rejected(self, settings):
-        # Vendor pubkey is from keypair A; attacker tries to sign with
-        # their own keypair B. Must reject.
-        priv_a, pub_a_hex = _generate_vendor_keypair()
-        priv_b, _ = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_a_hex
-        forged = _sign_unlock_file(priv_b)
-        resp = self._post({'unlock_file': forged})
-        assert resp.status_code == 422
-        assert resp.json()['code'] == 'signature_invalid'
-
-    def test_signature_tampered_rejected(self, settings):
-        import base64
-        import json as _json
-
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-
-        # Build a valid file then flip a hex digit in the signature.
-        signed_b64 = _sign_unlock_file(priv)
-        blob = _json.loads(base64.b64decode(signed_b64))
-        blob['signature'] = blob['signature'][:-1] + (
-            '0' if blob['signature'][-1] != '0' else 'f'
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            # No headers → no signature → must be rejected.
+            lambda *a, **kw: _FakeResponse(200, {
+                'status': 'ACTIVE',  # the lie we'd love to defeat
+                'expires_at': None,
+                'server_now': timezone.now().isoformat(),
+                'ack_id': 'forged',
+            }),
         )
-        tampered = base64.b64encode(
-            _json.dumps(blob).encode('utf-8'),
-        ).decode('ascii')
-        resp = self._post({'unlock_file': tampered})
-        assert resp.status_code == 422
-        assert resp.json()['code'] == 'signature_invalid'
+        body, status = hb.do_heartbeat()
+        assert status == 502
+        assert body['message'] == 'response_signature_invalid'
+        # The forged "ACTIVE" must NOT have stuck.
+        assert License.load().status == 'SUSPENDED'
 
-    def test_payload_string_mismatch_rejected(self, settings):
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        # Future protocol bump: vendor signs a v2 payload but this
-        # alpha_pos build only honors v1.
-        signed = _sign_unlock_file(priv, payload='PERPETUAL_UNLOCK_v2')
-        resp = self._post({'unlock_file': signed})
-        assert resp.status_code == 422
-        assert resp.json()['code'] == 'payload_string_mismatch'
-
-    def test_signed_at_tampered_invalidates_signature(self, settings):
-        import base64
-        import json as _json
-
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        signed_b64 = _sign_unlock_file(priv, signed_at='2030-01-01T00:00:00Z')
-        # Try to extend the signed_at — should invalidate the signature
-        # since signed_at is part of the signed message.
-        blob = _json.loads(base64.b64decode(signed_b64))
-        blob['signed_at'] = '2099-01-01T00:00:00Z'
-        tampered = base64.b64encode(
-            _json.dumps(blob).encode('utf-8'),
-        ).decode('ascii')
-        resp = self._post({'unlock_file': tampered})
-        assert resp.status_code == 422
-        assert resp.json()['code'] == 'signature_invalid'
-
-    def test_heartbeat_after_unlock_returns_304(self, settings):
-        """Once perpetually unlocked, the heartbeat daemon should no
-        longer phone home — there's nothing to ask the control center."""
+    def test_wrong_signature_returns_502(self, settings, monkeypatch):
         from licensing.models import License
         from licensing.services import heartbeat as hb
+        from django.utils import timezone
 
-        priv, pub_hex = _generate_vendor_keypair()
-        settings.LICENSE_VENDOR_PUBLIC_KEY = pub_hex
-        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
-        signed = _sign_unlock_file(priv)
-        self._post({'unlock_file': signed})
-        assert License.load().status == 'PERPETUAL_UNLOCK'
+        self._prep_active_with_key(settings)
+        # Signature computed with the wrong key — should fail verification.
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _signed_response(200, {
+                'status': 'ACTIVE',
+                'expires_at': None,
+                'server_now': timezone.now().isoformat(),
+                'ack_id': 'tampered',
+            }, key='wrong-key-not-the-bearer'),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 502
+
+    def test_last_heartbeat_at_anchored_to_server_now(self, settings, monkeypatch):
+        """last_heartbeat_at must be the server's clock, not the local wall
+        clock — otherwise winding the host clock forward, heartbeating, and
+        winding back would silently extend grace_until."""
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        from django.utils.dateparse import parse_datetime
+
+        self._prep_active_with_key(settings)
+        server_now_iso = '2030-01-15T12:00:00+00:00'  # arbitrary future-looking
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _signed_response(200, {
+                'status': 'ACTIVE',
+                'expires_at': '2031-01-15T12:00:00+00:00',
+                'server_now': server_now_iso,
+                'ack_id': 'anchor',
+            }),
+        )
+        hb.do_heartbeat()
+        lic = License.load()
+        # The DB value is timezone-aware; compare via parse_datetime.
+        assert lic.last_heartbeat_at == parse_datetime(server_now_iso)
+        assert lic.last_server_now == parse_datetime(server_now_iso)
+
+    def test_https_required_in_production(self, settings, monkeypatch):
+        """Non-HTTPS control center URL must be refused when DEBUG=False
+        — silently downgrading would let an on-path attacker forge ACTIVE
+        responses."""
+        from licensing.services import heartbeat as hb
+
+        self._prep_active_with_key(settings)
+        settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'  # plaintext
+        settings.DEBUG = False  # production mode
+
+        # requests.post must NOT be called — refusal happens earlier.
+        def _should_not_be_called(*a, **kw):
+            raise AssertionError('requests.post called despite plaintext URL')
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post', _should_not_be_called,
+        )
 
         body, status = hb.do_heartbeat()
-        assert status == 304
+        assert status == 503
+        assert body['message'] == 'control_center_url_must_be_https'

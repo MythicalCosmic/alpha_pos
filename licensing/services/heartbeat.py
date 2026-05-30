@@ -7,12 +7,22 @@ tuples (data, http_status) so views and the daemon stay thin.
 
 Network failures are returned as errors, never raised — the caller
 should be free to decide whether to surface them or queue a retry.
-"""
+
+Tamper-proofing: every heartbeat response carries an HMAC signature
+(``X-Response-Signature: sha256=<hex>``) keyed on the bearer license key.
+A MITM with TLS interception can rewrite the JSON but can't forge the
+signature without the key — see ``_verify_response_signature``. The
+response is also anchored to the control center's ``server_now`` field
+rather than the local wall clock, so a forward-skewed host clock can't
+extend the offline grace window."""
+import hashlib
+import hmac
+import json
 import logging
 import platform
 import socket
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 from django.conf import settings
@@ -25,6 +35,50 @@ from licensing.services import crypto
 
 
 logger = logging.getLogger(__name__)
+
+
+def _verify_response_signature(body: Dict[str, Any], sig_header: str,
+                                bearer_key: str) -> bool:
+    """Return True iff the X-Response-Signature header matches an HMAC of the
+    canonical-JSON body keyed on the bearer license key.
+
+    Canonical form = ``json.dumps(body, separators=(',', ':'), sort_keys=True)``
+    on both sides, so any pretty-printing the server framework adds (or
+    proxies strip) does not break the signature."""
+    if not sig_header or not sig_header.startswith('sha256='):
+        return False
+    expected_hex = sig_header[len('sha256='):].strip()
+    raw = json.dumps(body, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    computed = hmac.new(
+        bearer_key.encode('utf-8'), raw, hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(computed, expected_hex)
+
+
+def _tls_verify_arg():
+    """Return the value to pass as `verify=` to requests. A custom CA bundle
+    is supported via LICENSE_TLS_CA_BUNDLE for private/internal CAs; otherwise
+    we use the system trust store. NEVER disable verification — even in DEBUG
+    the alpha_pos heartbeat goes over plain HTTP to localhost and `verify=True`
+    is harmless there."""
+    bundle = getattr(settings, 'LICENSE_TLS_CA_BUNDLE', '')
+    return bundle if bundle else True
+
+
+def _require_https(url: str) -> Optional[Tuple[Dict[str, Any], int]]:
+    """Refuse to talk to a non-HTTPS control center URL in production. The
+    settings.py boot check already guards against this for the static URL
+    value, but this is a belt-and-braces check in case the env var is mutated
+    at runtime — silently downgrading to plaintext would let any on-path
+    attacker forge ACTIVE responses."""
+    if getattr(settings, 'DEBUG', False):
+        return None
+    if not url.startswith('https://'):
+        logger.error('heartbeat: refusing plaintext URL %s in production', url)
+        return ({
+            'success': False, 'message': 'control_center_url_must_be_https',
+        }, 503)
+    return None
 
 
 def _http_timeout_s() -> int:
@@ -108,6 +162,12 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
         )
         status_in = lic.status
 
+    # Anchor on the control center's clock, falling back to the local wall
+    # clock only if the server didn't send one. This is critical for
+    # `last_heartbeat_at` below: using `timezone.now()` lets an operator wind
+    # the host clock to 2099, take a single heartbeat, wind it back, and
+    # silently extend `grace_until` by decades. Sourcing from server_now kills
+    # that trick.
     server_now = _parse_iso(payload.get('server_now')) or timezone.now()
 
     # Replay protection: refuse responses whose server clock is older than the
@@ -133,7 +193,11 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
     lic.status = status_in
     lic.expires_at = _parse_iso(payload.get('expires_at'))
     lic.last_message = payload.get('message') or ''
-    lic.last_heartbeat_at = timezone.now()
+    # last_heartbeat_at is the anchor for the offline-grace clock; pin it to
+    # the server's own `now` rather than the local wall clock so a tampered
+    # host clock can't extend the grace window. Falls back to local time only
+    # if the server omitted server_now (legacy / pre-signing).
+    lic.last_heartbeat_at = server_now
     lic.last_server_now = server_now
 
     # Prepaid-billing snapshot (display-only). The control center sends
@@ -180,6 +244,9 @@ def register(email: str) -> Tuple[Dict[str, Any], int]:
             'message': 'LICENSE_CONTROL_CENTER_URL is not configured on this install.',
             'code': 'control_center_url_missing',
         }, 503)
+    https_err = _require_https(url)
+    if https_err is not None:
+        return https_err
 
     payload = {'email': email}
     LicenseEvent.objects.create(
@@ -188,7 +255,10 @@ def register(email: str) -> Tuple[Dict[str, Any], int]:
     )
 
     try:
-        resp = requests.post(url, json=payload, timeout=_http_timeout_s())
+        resp = requests.post(
+            url, json=payload, timeout=_http_timeout_s(),
+            verify=_tls_verify_arg(),
+        )
     except requests.RequestException as exc:
         logger.exception('register: HTTP to control center failed')
         return ({
@@ -284,8 +354,8 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
     """Send one heartbeat to the control center. Returns (body, status)
     where status mirrors HTTP semantics:
       200  — success, License row updated, status applied.
-      304  — no-op (UNREGISTERED / PERPETUAL_UNLOCK — nothing to phone
-             home about; the daemon should not count this as failure).
+      304  — no-op (UNREGISTERED — nothing to phone home about; the
+             daemon should not count this as failure).
       401  — control center rejected our key (revoked / unknown). Local
              License is flipped to SUSPENDED with an explanatory message
              so the kill switch fires immediately, before grace.
@@ -301,23 +371,42 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
     lic = License.load()
     if lic.status == License.Status.UNREGISTERED:
         return ({'success': False, 'message': 'license unregistered'}, 304)
-    if lic.status == License.Status.PERPETUAL_UNLOCK:
-        # Vendor disappeared, escape hatch active — there is no control
-        # center to call. Daemon caller should treat 304 as "nothing to
-        # do" and not reschedule failure backoff.
-        return ({'success': False, 'message': 'perpetual_unlock active'}, 304)
 
     cleartext = crypto.decrypt_key(lic.key_encrypted)
     if not cleartext:
         # LICENSE_FERNET_KEY rotated, or the stored blob is corrupt. The
-        # operator must re-run setup. Log loudly; don't crash the daemon.
+        # daemon CANNOT call /heartbeat without the cleartext key, so the
+        # install would otherwise drift along as ACTIVE indefinitely until
+        # `grace_until` lapsed. Fail closed: flip status to SUSPENDED right
+        # now so the middleware blocks on the next request. The operator
+        # must re-run setup to recover.
         logger.error(
-            'heartbeat: cannot decrypt stored license key — operator must '
-            're-run setup wizard',
+            'heartbeat: cannot decrypt stored license key — flipping to '
+            'SUSPENDED. Operator must re-run setup wizard.',
         )
+        with transaction.atomic():
+            lic = License.objects.select_for_update().get(pk=1)
+            if lic.status != License.Status.SUSPENDED:
+                prior = lic.status
+                lic.status = License.Status.SUSPENDED
+                lic.last_message = (
+                    'License key cannot be decrypted on this install. '
+                    'Re-run the setup wizard to restore service.'
+                )
+                lic.save()
+                LicenseEvent.objects.create(
+                    action=LicenseEvent.Action.STATUS_CHANGED,
+                    detail={'from': prior, 'to': 'SUSPENDED',
+                            'reason': 'key_undecryptable'},
+                )
         return ({
             'success': False, 'message': 'license_key_undecryptable',
         }, 500)
+
+    url = _control_url('/api/v1/heartbeat')
+    https_err = _require_https(url)
+    if https_err is not None:
+        return https_err
 
     payload = {
         'client_version': _client_version(),
@@ -330,8 +419,8 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
 
     try:
         resp = requests.post(
-            _control_url('/api/v1/heartbeat'),
-            json=payload, headers=headers, timeout=_http_timeout_s(),
+            url, json=payload, headers=headers,
+            timeout=_http_timeout_s(), verify=_tls_verify_arg(),
         )
     except requests.RequestException as exc:
         # Network failure: do NOT update last_heartbeat_at so grace
@@ -391,6 +480,22 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
         body = resp.json()
     except ValueError:
         return ({'success': False, 'message': 'invalid response body'}, 502)
+
+    # Verify the HMAC signature BEFORE applying anything. A 200 without a
+    # valid X-Response-Signature is treated the same as a 5xx — we leave the
+    # License row alone so the grace clock keeps ticking. A MITM that has
+    # stripped TLS would be able to forge any JSON body but not this header.
+    sig_header = resp.headers.get('X-Response-Signature', '')
+    if not _verify_response_signature(body, sig_header, cleartext):
+        logger.error('heartbeat: response signature failed verification')
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.HEARTBEAT_FAILED,
+            detail={'kind': 'bad_signature',
+                    'sig_present': bool(sig_header)},
+        )
+        return ({
+            'success': False, 'message': 'response_signature_invalid',
+        }, 502)
 
     # Success path: apply the response to the License row + bust cache.
     # The cache bust here is what makes the suspend → enforce gap as
