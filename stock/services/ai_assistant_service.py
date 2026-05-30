@@ -1,7 +1,9 @@
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types as genai_types
 except ImportError:
     genai = None
+    genai_types = None
 from typing import Dict, Any, List
 from datetime import timedelta
 import math
@@ -119,25 +121,30 @@ You will receive real-time database data in JSON format including pre-computed a
 
 class AIStockAssistant:
 
-    _model = None
+    # Modern `google-genai` SDK keeps the model name + config per-call rather
+    # than per-object — we cache the Client and the GenerateContentConfig and
+    # spread them across calls. Model name kept in one constant so a future
+    # bump (gemini-3-flash, etc.) is one line.
+    _client = None
+    _config = None
+    _MODEL_NAME = "gemini-2.5-flash"
 
     @classmethod
-    def _get_model(cls):
-        if cls._model is None:
+    def _get_client(cls):
+        if cls._client is None:
             if genai is None:
                 raise ImportError(
-                    "google-generativeai is not installed. "
-                    "Run: pip install google-generativeai"
+                    "google-genai is not installed. "
+                    "Run: pip install google-genai"
                 )
             api_key = getattr(settings, 'GEMINI_API_KEY', '')
             if not api_key:
                 raise ValueError("GEMINI_API_KEY not set in settings or environment")
-            genai.configure(api_key=api_key)
-            cls._model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
-                generation_config={"temperature": 0.1, "max_output_tokens": 2048}
+            cls._client = genai.Client(api_key=api_key)
+            cls._config = genai_types.GenerateContentConfig(
+                temperature=0.1, max_output_tokens=2048,
             )
-        return cls._model
+        return cls._client
 
     @classmethod
     def _get_sales_data(cls) -> Dict:
@@ -1166,8 +1173,12 @@ CURRENT DATABASE STATE:
 
 Respond to the user's query based on this data. Follow all language and formatting rules from your instructions."""
 
-            model = cls._get_model()
-            response = model.generate_content(SYSTEM_PROMPT + "\n\n" + prompt)
+            client = cls._get_client()
+            response = client.models.generate_content(
+                model=cls._MODEL_NAME,
+                contents=SYSTEM_PROMPT + "\n\n" + prompt,
+                config=cls._config,
+            )
 
             return {
                 "success": True,

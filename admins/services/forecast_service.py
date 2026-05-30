@@ -122,21 +122,29 @@ DATA:
 
 
 def _call_gemini(prompt_text):
-    """Isolated so tests can monkeypatch without configuring an API key."""
+    """Isolated so tests can monkeypatch without configuring an API key.
+
+    Uses the modern `google-genai` SDK (the `google-generativeai` package is
+    end-of-life as of late 2025). The wire-level model name / generation
+    config stays identical, so any prompt previously tuned against the old
+    SDK behaves the same here."""
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
     except ImportError:
         return None, 'gemini_sdk_missing'
     api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
     if not api_key:
         return None, 'gemini_key_missing'
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name='gemini-2.5-flash',
-        generation_config={'temperature': 0.2, 'max_output_tokens': 2048},
-    )
+    client = genai.Client(api_key=api_key)
     try:
-        resp = model.generate_content(prompt_text)
+        resp = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt_text,
+            config=types.GenerateContentConfig(
+                temperature=0.2, max_output_tokens=2048,
+            ),
+        )
         return resp.text, None
     except Exception as e:
         logger.exception('gemini forecast call failed')
