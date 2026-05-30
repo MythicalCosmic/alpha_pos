@@ -224,15 +224,15 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
 # ---------------------------------------------------------------------------
 
 
-def register(email: str) -> Tuple[Dict[str, Any], int]:
+def register(email: str, plan_id=None) -> Tuple[Dict[str, Any], int]:
     """POST /api/v1/register on the control center. On success, encrypt
     and persist the returned key + flip status to ACTIVE.
 
-    Email is the only thing the operator types. The control center self-serves
-    a tenant for that address (no invite code, no org name — the renderer can
-    let the operator edit org_name later via an admin endpoint). The bearer
-    key returned by the server is encrypted at rest and never echoed back to
-    the caller.
+    Email is what the operator types; ``plan_id`` is the subscription plan
+    they picked in the wizard's plan-picker step (if any). The control
+    center looks up an invite the vendor pre-bound to that email, binds
+    the chosen plan, and returns the bearer key. The key is encrypted at
+    rest and never echoed back to the caller.
 
     Returns (body, http_status). The caller (the setup wizard view) just
     re-emits these.
@@ -249,9 +249,11 @@ def register(email: str) -> Tuple[Dict[str, Any], int]:
         return https_err
 
     payload = {'email': email}
+    if plan_id is not None:
+        payload['plan_id'] = plan_id
     LicenseEvent.objects.create(
         action=LicenseEvent.Action.SETUP_ATTEMPTED,
-        detail={'email': email},
+        detail={'email': email, 'plan_id': plan_id},
     )
 
     try:
@@ -541,3 +543,87 @@ def _collect_metrics() -> Dict[str, Any]:
         # would hide real bugs in the metrics path.
         logger.debug('heartbeat: metrics collection skipped', exc_info=True)
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Plan catalog + plan-change request — wizard / settings UI helpers
+# ---------------------------------------------------------------------------
+
+
+def list_plans() -> Tuple[Dict[str, Any], int]:
+    """GET /api/v1/plans on the control center. Used by the setup wizard
+    (before any License key exists) and by the settings screen (to render
+    the plan picker for a plan-change request). Returns the body / status
+    verbatim so the renderer sees the same shape the control center
+    publishes; this stops the alpha_pos side from needing a redeploy when
+    the control center adds a field to plans."""
+    url = _control_url('/api/v1/plans')
+    if not getattr(settings, 'LICENSE_CONTROL_CENTER_URL', ''):
+        return ({
+            'success': False,
+            'message': 'control_center_url_missing',
+        }, 503)
+    https_err = _require_https(url)
+    if https_err is not None:
+        return https_err
+    try:
+        resp = requests.get(
+            url, timeout=_http_timeout_s(), verify=_tls_verify_arg(),
+        )
+    except requests.RequestException as exc:
+        logger.warning('list_plans: network failure: %s', exc)
+        return ({'success': False, 'message': 'control_center_unreachable'}, 502)
+    try:
+        body = resp.json()
+    except ValueError:
+        return ({'success': False, 'message': 'invalid_response_body'}, 502)
+    return body, resp.status_code
+
+
+def request_plan_change(plan_id, note: str = '') -> Tuple[Dict[str, Any], int]:
+    """POST /api/v1/plan-change with the bearer key. Used by the settings
+    screen when the operator picks a new plan and submits. The control
+    center queues the request for vendor approval — billing is NOT touched
+    until approval. The next heartbeat surfaces the pending request to the
+    renderer.
+
+    Returns (body, status) verbatim; success has status 201 (fresh) or
+    200 (already-pending), failures bubble through unchanged."""
+    url = _control_url('/api/v1/plan-change')
+    if not getattr(settings, 'LICENSE_CONTROL_CENTER_URL', ''):
+        return ({
+            'success': False, 'message': 'control_center_url_missing',
+        }, 503)
+    https_err = _require_https(url)
+    if https_err is not None:
+        return https_err
+
+    lic = License.load()
+    if lic.status == License.Status.UNREGISTERED:
+        return ({
+            'success': False,
+            'message': 'This install is not registered yet.',
+            'code': 'unregistered',
+        }, 409)
+    cleartext = crypto.decrypt_key(lic.key_encrypted)
+    if not cleartext:
+        return ({
+            'success': False, 'message': 'license_key_undecryptable',
+        }, 500)
+
+    try:
+        resp = requests.post(
+            url,
+            json={'plan_id': plan_id, 'note': note},
+            headers={'Authorization': f'Bearer {cleartext}'},
+            timeout=_http_timeout_s(),
+            verify=_tls_verify_arg(),
+        )
+    except requests.RequestException as exc:
+        logger.warning('plan_change: network failure: %s', exc)
+        return ({'success': False, 'message': str(exc)}, 502)
+    try:
+        body = resp.json()
+    except ValueError:
+        return ({'success': False, 'message': 'invalid_response_body'}, 502)
+    return body, resp.status_code

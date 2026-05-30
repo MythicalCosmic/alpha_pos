@@ -99,6 +99,12 @@ def setup_view(request):
             status=422,
         )
 
+    # plan_id is optional — when the wizard offers a plan picker, the
+    # operator's choice is forwarded to the control center which binds the
+    # new Subscription to it. When omitted, the tenant lands on the free
+    # default plan (price=0) and the vendor sets one later.
+    plan_id = data.get('plan_id')
+
     # Singleton guard: refuse if this install is already past the
     # unregistered state. The operator's reset path is "wipe the row in
     # Django admin first" — intentionally inconvenient so a misplaced
@@ -115,7 +121,47 @@ def setup_view(request):
             status=409,
         )
 
-    body, status = heartbeat_svc.register(email=email)
+    body, status = heartbeat_svc.register(email=email, plan_id=plan_id)
+    return JsonResponse(body, status=status)
+
+
+@require_GET
+def plans_view(request):
+    """Proxy the control center's GET /api/v1/plans for the wizard.
+
+    The renderer hits this BEFORE registration (no license key yet), so
+    we cache the response briefly to flatten any control-center hiccups.
+    Returns whatever shape the control center returns; we don't reshape
+    here on purpose — extra fields on the control center side flow
+    through to the renderer without a redeploy."""
+    body, status = heartbeat_svc.list_plans()
+    return JsonResponse(body, status=status)
+
+
+@csrf_exempt
+@require_POST
+def plan_change_view(request):
+    """Customer-initiated plan change. Forwards the request to the
+    control center which queues it for vendor approval. The next
+    /heartbeat will surface the pending request in
+    `pending_plan_change` so the renderer can show "change pending"."""
+    try:
+        data = json.loads(request.body) if request.body else {}
+    except (ValueError, TypeError):
+        return JsonResponse(
+            {'success': False, 'message': 'Invalid JSON body'}, status=400,
+        )
+    plan_id = data.get('plan_id')
+    note = data.get('note', '')
+    if plan_id is None:
+        return JsonResponse(
+            {'success': False,
+             'message': 'plan_id is required'},
+            status=422,
+        )
+    body, status = heartbeat_svc.request_plan_change(
+        plan_id=plan_id, note=note,
+    )
     return JsonResponse(body, status=status)
 
 

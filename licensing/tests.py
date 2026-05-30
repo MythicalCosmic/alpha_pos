@@ -351,11 +351,18 @@ class TestSetupWizard:
     ):
         from licensing.models import License
         from licensing.services import crypto
+        from django.utils import timezone
 
         _unregister_license()
         settings.LICENSE_CONTROL_CENTER_URL = 'https://cc.local'
 
         captured = {}
+
+        # `issued_at` must be NOW (not a hardcoded date) — the heartbeat
+        # handler now anchors `last_heartbeat_at` on the server-reported
+        # server_now/issued_at, so a stale fixture date trips the offline
+        # grace window and the dashboard assertion below 503s.
+        issued_at = timezone.now().isoformat()
 
         def _fake_post(url, json=None, **kw):
             captured['url'] = url
@@ -365,7 +372,7 @@ class TestSetupWizard:
                 'key': 'fake-license-key-for-tests-' + 'x' * 40,
                 'tenant_id': 7,
                 'expires_at': None,
-                'issued_at': '2026-05-23T10:00:00+00:00',
+                'issued_at': issued_at,
             })
 
         monkeypatch.setattr(
