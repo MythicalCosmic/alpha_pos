@@ -397,6 +397,26 @@ LICENSE_HEARTBEAT_INTERVAL = int(os.environ.get('LICENSE_HEARTBEAT_INTERVAL', 30
 # active status.
 LICENSE_GRACE_DAYS = int(os.environ.get('LICENSE_GRACE_DAYS', 7))
 
+# HTTP timeout (seconds) for one register/heartbeat call to the control
+# center. Short enough that a hung server doesn't tie up the daemon, long
+# enough for a normal round trip on a slow connection.
+LICENSE_HTTP_TIMEOUT_S = int(os.environ.get('LICENSE_HTTP_TIMEOUT_S', 10))
+
+# TTL (seconds) for the LicenseState snapshot the middleware reads on every
+# request. Lower = faster reaction to admin/heartbeat-driven state flips;
+# higher = fewer DB hits on cache miss. The heartbeat daemon explicitly
+# busts this on every tick, so the TTL only governs cold-cache behavior.
+LICENSE_STATE_CACHE_TTL = int(os.environ.get('LICENSE_STATE_CACHE_TTL', 60))
+
+# Backoff schedule (seconds, comma-separated) the heartbeat daemon walks
+# through after consecutive failures. Each value is a MINIMUM wait — the
+# daemon picks the larger of (LICENSE_HEARTBEAT_INTERVAL, schedule[step]).
+LICENSE_BACKOFF_SCHEDULE_S = tuple(
+    int(x) for x in os.environ.get(
+        'LICENSE_BACKOFF_SCHEDULE_S', '300,900,3600',
+    ).split(',') if x.strip()
+) or (300, 900, 3600)
+
 # Ed25519 public key (hex, 32 bytes) of the vendor signing keypair. The
 # private half lives in the vendor's hardware vault; if the vendor ever
 # shuts down they publish a signed unlock file that any POS will accept

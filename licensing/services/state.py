@@ -15,7 +15,13 @@ from django.core.cache import cache
 
 
 CACHE_KEY = 'license:state:v1'
-CACHE_TTL = 60  # short — the heartbeat daemon refreshes every 5 min
+
+
+def _cache_ttl() -> int:
+    """TTL for the cached LicenseState. Dynamic so an operator can tune it
+    without a code change. Defaults to 60s — short enough that an admin-side
+    flip propagates fast even when the heartbeat daemon hasn't fired yet."""
+    return getattr(settings, 'LICENSE_STATE_CACHE_TTL', 60)
 
 
 @dataclass
@@ -70,25 +76,18 @@ class LicenseState:
                 return True
             if until.tzinfo is None:
                 until = until.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > until:
+            # Use the conservative clock — see _now_anchored. Anchoring on
+            # last_server_now defeats the "wind the host clock back" trick
+            # that would otherwise extend grace indefinitely.
+            if self._now_anchored() > until:
                 return True
 
         return False
 
-    def _past_expiry(self) -> bool:
-        """True if the license expiry has passed. Compares against the most
-        conservative clock available: the later of the last trusted server time
-        and the host wall clock. A clock rollback to dodge this would equally
-        dodge the offline-grace window, so it adds no new weakness. Returns True
-        (fail closed) on a malformed expiry marker."""
-        if not self.expires_at:
-            return False
-        try:
-            exp = datetime.fromisoformat(self.expires_at)
-        except ValueError:
-            return True
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+    def _now_anchored(self) -> datetime:
+        """Return the later of (host wall clock, last trusted server time).
+        Lets us survive an operator winding the local clock backward to dodge
+        either the expiry check or the offline-grace check."""
         now_ref = datetime.now(timezone.utc)
         if self.last_server_now:
             try:
@@ -98,7 +97,22 @@ class LicenseState:
                 now_ref = max(now_ref, server_clock)
             except ValueError:
                 pass
-        return now_ref > exp
+        return now_ref
+
+    def _past_expiry(self) -> bool:
+        """True if the license expiry has passed. Compares against the most
+        conservative clock available: the later of the last trusted server time
+        and the host wall clock. Returns True (fail closed) on a malformed
+        expiry marker."""
+        if not self.expires_at:
+            return False
+        try:
+            exp = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            return True
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return self._now_anchored() > exp
 
     def reason_code(self) -> str:
         """Short stable code for the 503 body — clients switch on this."""
@@ -154,5 +168,5 @@ def get_state() -> LicenseState:
     # to keep Django's app registry happy.
     from licensing.models import License
     state = build_from_license(License.load())
-    cache.set(CACHE_KEY, asdict(state), CACHE_TTL)
+    cache.set(CACHE_KEY, asdict(state), _cache_ttl())
     return state

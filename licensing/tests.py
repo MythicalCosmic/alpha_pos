@@ -25,6 +25,11 @@ def _unregister_license():
     lic.last_heartbeat_at = None
     lic.last_server_now = None
     lic.expires_at = None
+    # Mirror a fresh-install row — the registration tests rely on these
+    # fields being empty so they can assert what register() writes.
+    lic.org_name = ''
+    lic.email = ''
+    lic.key_encrypted = b''
     lic.save()
 
 
@@ -173,6 +178,46 @@ class TestStateTransitions:
         assert resp.status_code == 503
         assert resp.json()['code'] == 'license_offline_grace_exceeded'
 
+    def test_grace_anchors_on_last_server_now(self, monkeypatch):
+        """Grace check uses max(wall_clock, last_server_now). When the server
+        has reported a time past grace_until — even if the host wall clock
+        was rolled back — the install is blocked.
+
+        Limit of this defense: in the normal heartbeat lifecycle
+        last_server_now == last_heartbeat_at after every successful tick, so
+        an operator who rolls the wall clock back to BEFORE the last heartbeat
+        cannot be detected by this anchor alone. A proper rollback defense
+        would require a monotonically-bumped wall-clock high-water mark
+        (separate work). This test pins the anchor's CURRENT contract."""
+        from datetime import datetime, timedelta, timezone as tzlib
+        from django.utils import timezone
+
+        from licensing.models import License
+        from licensing.services import state as state_mod
+
+        wall = timezone.now()
+        # Pretend a heartbeat 10 days ago, then somehow last_server_now got
+        # bumped much further ahead (e.g. a control-center admin override).
+        # The wall clock has since been rolled back into the past.
+        lic = License.load()
+        lic.status = License.Status.ACTIVE
+        lic.last_heartbeat_at = wall - timedelta(days=10)
+        lic.last_server_now = wall + timedelta(days=30)  # server > grace_until
+        lic.save()
+
+        rolled_back = wall - timedelta(days=50)
+
+        class _FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return rolled_back if tz is None else rolled_back.astimezone(tz)
+
+        monkeypatch.setattr(state_mod, 'datetime', _FakeDT)
+
+        snapshot = state_mod.build_from_license(License.load())
+        assert snapshot.is_blocked() is True
+        assert snapshot.reason_code() == 'license_offline_grace_exceeded'
+
     def test_perpetual_unlock_overrides_everything(self):
         from licensing.models import License
 
@@ -249,18 +294,16 @@ class TestSetupWizard:
 
     def test_refuses_when_already_active(self):
         # Conftest fixture leaves the License in ACTIVE state.
-        resp = self._setup({
-            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'whatever',
-        })
+        resp = self._setup({'email': 'a@b.local'})
         assert resp.status_code == 409
         body = resp.json()
         assert body['code'] == 'already_registered'
 
-    def test_missing_fields_returns_422(self):
+    def test_missing_email_returns_422(self):
         _unregister_license()
-        resp = self._setup({'email': 'a@b.local'})
+        resp = self._setup({})
         assert resp.status_code == 422
-        assert set(resp.json()['errors']) == {'org_name', 'invite_code'}
+        assert set(resp.json()['errors']) == {'email'}
 
     def test_invalid_json_returns_400(self):
         _unregister_license()
@@ -273,9 +316,7 @@ class TestSetupWizard:
     def test_control_center_url_missing_returns_503(self, settings):
         _unregister_license()
         settings.LICENSE_CONTROL_CENTER_URL = ''
-        resp = self._setup({
-            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'x',
-        })
+        resp = self._setup({'email': 'a@b.local'})
         assert resp.status_code == 503
         assert resp.json()['code'] == 'control_center_url_missing'
 
@@ -288,9 +329,7 @@ class TestSetupWizard:
             raise requests.ConnectionError('refused')
 
         monkeypatch.setattr('licensing.services.heartbeat.requests.post', _boom)
-        resp = self._setup({
-            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'x',
-        })
+        resp = self._setup({'email': 'a@b.local'})
         assert resp.status_code == 502
         assert resp.json()['code'] == 'control_center_unreachable'
 
@@ -301,12 +340,10 @@ class TestSetupWizard:
         monkeypatch.setattr(
             'licensing.services.heartbeat.requests.post',
             lambda *a, **kw: _FakeResponse(404, {
-                'success': False, 'message': 'Unknown invite code',
+                'success': False, 'message': 'Unknown email',
             }),
         )
-        resp = self._setup({
-            'email': 'a@b.local', 'org_name': 'X', 'invite_code': 'fake',
-        })
+        resp = self._setup({'email': 'unknown@x.local'})
         assert resp.status_code == 404
 
     def test_happy_path_activates_license_and_encrypts_key(
@@ -318,22 +355,24 @@ class TestSetupWizard:
         _unregister_license()
         settings.LICENSE_CONTROL_CENTER_URL = 'http://cc.local'
 
-        monkeypatch.setattr(
-            'licensing.services.heartbeat.requests.post',
-            lambda *a, **kw: _FakeResponse(201, {
+        captured = {}
+
+        def _fake_post(url, json=None, **kw):
+            captured['url'] = url
+            captured['json'] = json
+            return _FakeResponse(201, {
                 'success': True,
                 'key': 'fake-license-key-for-tests-' + 'x' * 40,
                 'tenant_id': 7,
                 'expires_at': None,
                 'issued_at': '2026-05-23T10:00:00+00:00',
-            }),
+            })
+
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post', _fake_post,
         )
 
-        resp = self._setup({
-            'email': 'Owner@Plov.uz',  # case folded by the view
-            'org_name': 'Plov Plus',
-            'invite_code': 'invite123',
-        })
+        resp = self._setup({'email': 'Owner@Plov.uz'})  # case folded
         assert resp.status_code == 201
         body = resp.json()
         assert body['success'] is True
@@ -342,12 +381,15 @@ class TestSetupWizard:
         assert 'license' in body
         assert body['license']['status'] == 'ACTIVE'
 
+        # Wire format must contain ONLY email — no invite_code, no org_name.
+        assert captured['json'] == {'email': 'owner@plov.uz'}
+
         # DB row should be ACTIVE, key encrypted (not cleartext), email
-        # lowercased.
+        # lowercased. org_name stays empty — set later via owner profile.
         lic = License.load()
         assert lic.status == 'ACTIVE'
         assert lic.email == 'owner@plov.uz'
-        assert lic.org_name == 'Plov Plus'
+        assert lic.org_name == ''
         assert lic.key_encrypted  # bytes blob present
         assert b'fake-license-key' not in bytes(lic.key_encrypted)
         # Roundtrip through Fernet returns the original cleartext.
@@ -558,6 +600,54 @@ class TestHeartbeatClient:
         resp = _client().get('/api/admins/dashboard/today')
         assert resp.status_code == 503
         assert resp.json()['code'] == 'license_suspended'
+
+    def test_unknown_status_preserves_current_does_not_revive(
+        self, settings, monkeypatch,
+    ):
+        """Fail-CLOSED: an unknown status in the heartbeat response must not
+        flip SUSPENDED back to ACTIVE. Previously the code coerced unknown
+        values to ACTIVE — a malicious MITM or contract drift could have
+        silently revived a killed install."""
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+        from django.utils import timezone
+
+        self._prep_active_with_key(settings)
+        # Manually flip to SUSPENDED so we have something the bad response
+        # would otherwise revive.
+        lic = License.load()
+        lic.status = License.Status.SUSPENDED
+        lic.save()
+
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(200, {
+                'status': 'TOTALLY_BOGUS',  # not a valid choice
+                'expires_at': None,
+                'server_now': timezone.now().isoformat(),
+                'ack_id': 'x',
+            }),
+        )
+        body, status = hb.do_heartbeat()
+        assert status == 200
+        # SUSPENDED must NOT have been coerced to ACTIVE.
+        assert License.load().status == 'SUSPENDED'
+
+    def test_401_does_not_bump_last_heartbeat_at(self, settings, monkeypatch):
+        """A rejected heartbeat must not advance the grace clock — that
+        would silently extend the offline-grace window if status
+        enforcement ever gets softened."""
+        from licensing.models import License
+        from licensing.services import heartbeat as hb
+
+        self._prep_active_with_key(settings)
+        before = License.load().last_heartbeat_at
+        monkeypatch.setattr(
+            'licensing.services.heartbeat.requests.post',
+            lambda *a, **kw: _FakeResponse(401, {'message': 'unknown'}),
+        )
+        hb.do_heartbeat()
+        assert License.load().last_heartbeat_at == before
 
     def test_undecryptable_key_returns_500(self, settings, monkeypatch):
         from licensing.models import License

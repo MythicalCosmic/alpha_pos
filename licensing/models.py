@@ -8,6 +8,7 @@ This model is deliberately host-local — it is NOT a SyncMixin, NOT
 replicated across branches. Each restaurant's install has its own
 license tied to its own DB.
 """
+from django.conf import settings
 from django.core.cache import cache
 from django.db import models
 
@@ -93,7 +94,6 @@ class License(models.Model):
         ]
 
     _CACHE_KEY = 'license:row:v1'
-    _CACHE_TTL = 60
 
     def save(self, *args, **kwargs):
         # Singleton: always pk=1. Mirrors AppSettings.load() conventions in
@@ -111,7 +111,10 @@ class License(models.Model):
         if cached is not None:
             return cached
         obj, _ = cls.objects.get_or_create(pk=1)
-        cache.set(cls._CACHE_KEY, obj, cls._CACHE_TTL)
+        # Same TTL as the LicenseState snapshot so a cache miss reloads both
+        # tiers at roughly the same cadence.
+        ttl = getattr(settings, 'LICENSE_STATE_CACHE_TTL', 60)
+        cache.set(cls._CACHE_KEY, obj, ttl)
         return obj
 
     def __str__(self):

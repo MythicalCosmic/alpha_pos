@@ -51,38 +51,40 @@ def status_view(request):
     })
 
 
-def _setup_invite_prefix(request):
-    """Per-invite-code throttle key. We hash the first 16 chars rather than
-    the full code so the cache key isn't itself a secret leak."""
+def _setup_email_prefix(request):
+    """Per-email throttle key. We hash the address rather than use it raw so
+    the cache key isn't itself a PII leak."""
     try:
         import hashlib
         body = json.loads(request.body) if request.body else {}
-        code = ((body.get('invite_code') if isinstance(body, dict) else '') or '').strip()
-        if not code:
+        email = ((body.get('email') if isinstance(body, dict) else '') or '').strip().lower()
+        if not email:
             return None
-        return hashlib.sha256(code.encode('utf-8')).hexdigest()[:16]
-    except Exception:
+        return hashlib.sha256(email.encode('utf-8')).hexdigest()[:16]
+    except (ValueError, TypeError):
         return None
 
 
 @csrf_exempt
 @require_POST
-# Throttle so a LAN-side attacker can't spray invite codes against the
-# control center via this proxy. IP + invite-prefix gives two axes: one
-# attacker IP can try 5 / 5min total, and any single invite gets 3 / 5min
+# Throttle so a LAN-side attacker can't spray email addresses against the
+# control center via this proxy. IP + email-prefix gives two axes: one
+# attacker IP can try 5 / 5min total, and any single email gets 3 / 5min
 # across all sources.
 @rate_limit('license_setup', 5, 300)
-@rate_limit_by('license_setup_invite', 3, 300, _setup_invite_prefix)
+@rate_limit_by('license_setup_email', 3, 300, _setup_email_prefix)
 def setup_view(request):
     """First-run setup wizard.
 
-    Body: { "email": "...", "org_name": "...", "invite_code": "..." }
+    Body: { "email": "..." }
 
-    Refuses unless the License row is still UNREGISTERED — once an
-    install is active, re-registering is a license-key reset and should
-    flow through a different (admin-only) path. The control center is
-    the source of truth for whether the invite is valid; we just relay
-    the result.
+    Email is the only thing the operator types. The control center self-serves
+    a tenant against that address (no invite code, no org name). The org name
+    can be filled in later via an admin endpoint.
+
+    Refuses unless the License row is still UNREGISTERED — once an install is
+    active, re-registering is a license-key reset and should flow through a
+    different (admin-only) path.
     """
     try:
         data = json.loads(request.body) if request.body else {}
@@ -92,25 +94,18 @@ def setup_view(request):
         )
 
     email = (data.get('email') or '').strip().lower()
-    org_name = (data.get('org_name') or '').strip()
-    invite_code = (data.get('invite_code') or '').strip()
-
-    missing = [
-        name for name, value in (
-            ('email', email), ('org_name', org_name), ('invite_code', invite_code),
-        ) if not value
-    ]
-    if missing:
+    if not email:
         return JsonResponse(
             {'success': False, 'message': 'Missing required fields',
-             'errors': {f: f'{f} is required' for f in missing}},
+             'errors': {'email': 'email is required'}},
             status=422,
         )
 
     # Singleton guard: refuse if this install is already past the
     # unregistered state. The operator's reset path is "wipe the row in
     # Django admin first" — intentionally inconvenient so a misplaced
-    # POST doesn't reset a live POS.
+    # POST doesn't reset a live POS. register() re-checks this under a
+    # row lock to close the TOCTOU on two concurrent setups.
     current = License.load()
     if current.status != License.Status.UNREGISTERED:
         return JsonResponse(
@@ -122,9 +117,7 @@ def setup_view(request):
             status=409,
         )
 
-    body, status = heartbeat_svc.register(
-        email=email, org_name=org_name, invite_code=invite_code,
-    )
+    body, status = heartbeat_svc.register(email=email)
     return JsonResponse(body, status=status)
 
 

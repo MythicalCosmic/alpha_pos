@@ -30,6 +30,8 @@ logs/
 *.key
 # Secret key generated on first run by run.py / install.bat — never commit.
 .secret_key
+# License at-rest encryption key generated on first run by run.py — never commit.
+.license_fernet_key
 
 # IDE / editors
 .idea/

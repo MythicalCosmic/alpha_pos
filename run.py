@@ -25,6 +25,17 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 SECRET_FILE = BASE_DIR / '.secret_key'
+FERNET_FILE = BASE_DIR / '.license_fernet_key'
+
+
+def _write_protected(path: Path, contents: str) -> None:
+    path.write_text(contents + '\n', encoding='utf-8')
+    # POSIX: 0600 so other users on the box can't read it. Windows is a no-op
+    # (chmod is not enforced there), so .gitignore is the primary protection.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _load_or_generate_secret() -> str:
@@ -38,14 +49,26 @@ def _load_or_generate_secret() -> str:
         return SECRET_FILE.read_text(encoding='utf-8').strip()
 
     new_key = secrets.token_urlsafe(64)
-    SECRET_FILE.write_text(new_key + '\n', encoding='utf-8')
-    # POSIX: 0600 so other users on the box can't read it. On Windows
-    # this is a no-op (chmod is not enforced), but the .gitignore entry
-    # is the primary protection.
-    try:
-        os.chmod(SECRET_FILE, 0o600)
-    except OSError:
-        pass
+    _write_protected(SECRET_FILE, new_key)
+    return new_key
+
+
+def _load_or_generate_fernet_key() -> str:
+    """Read .license_fernet_key, or generate + write one on first run.
+
+    Persisted alongside .secret_key so the at-rest-encrypted license bearer
+    key survives reboots/upgrades. Without a stable Fernet key, every restart
+    that lost the value would invalidate the stored license and force a fresh
+    setup wizard. Gitignored.
+    """
+    if FERNET_FILE.exists():
+        return FERNET_FILE.read_text(encoding='utf-8').strip()
+
+    # Lazy import: cryptography is in requirements.txt but importing it before
+    # _ensure_env_defaults() runs would slow down --help / `python run.py`.
+    from cryptography.fernet import Fernet
+    new_key = Fernet.generate_key().decode('ascii')
+    _write_protected(FERNET_FILE, new_key)
     return new_key
 
 
@@ -56,6 +79,7 @@ def _ensure_env_defaults() -> None:
     non-DEBUG mode."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alpha_pos.settings')
     os.environ.setdefault('SECRET_KEY', _load_or_generate_secret())
+    os.environ.setdefault('LICENSE_FERNET_KEY', _load_or_generate_fernet_key())
     # Default to a real production-ish mode (DEBUG=False, ALLOWED_HOSTS
     # explicit) so a fresh install behaves the same on day-1 as it will
     # in production. The operator can flip DEBUG=true in a .env if they

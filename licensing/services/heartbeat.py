@@ -27,10 +27,12 @@ from licensing.services import crypto
 logger = logging.getLogger(__name__)
 
 
-# Heartbeat / register HTTP timeout — short enough that a hung control
-# center doesn't tie up a worker, long enough for a normal round trip on
-# a slow connection.
-_HTTP_TIMEOUT_S = 10
+def _http_timeout_s() -> int:
+    """Heartbeat / register HTTP timeout — short enough that a hung control
+    center doesn't tie up a worker, long enough for a normal round trip on
+    a slow connection. Driven by LICENSE_HTTP_TIMEOUT_S so deployments on
+    flaky links can raise it."""
+    return getattr(settings, 'LICENSE_HTTP_TIMEOUT_S', 10)
 
 
 def _fingerprint() -> str:
@@ -48,21 +50,28 @@ def _fingerprint() -> str:
     return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()
 
 
+# Cached at module load: every heartbeat tick used to fork `git rev-parse`,
+# which is wasted work in a Docker image without .git anyway. Resolved
+# exactly once per process, falling back gracefully when git is absent.
+_CLIENT_VERSION_CACHED: Optional[str] = None
+
+
 def _client_version() -> str:
     """Short version string for the heartbeat payload. The control
     center records it per-event for support diagnostics."""
-    # Lightweight: pull git SHA at runtime, falling back to 'unknown'.
+    global _CLIENT_VERSION_CACHED
+    if _CLIENT_VERSION_CACHED is not None:
+        return _CLIENT_VERSION_CACHED
     import subprocess
     try:
         sha = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip()
-        if sha:
-            return f'alpha_pos@{sha}'
+        _CLIENT_VERSION_CACHED = f'alpha_pos@{sha}' if sha else 'alpha_pos@unknown'
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-    return 'alpha_pos@unknown'
+        _CLIENT_VERSION_CACHED = 'alpha_pos@unknown'
+    return _CLIENT_VERSION_CACHED
 
 
 def _control_url(path: str) -> str:
@@ -82,10 +91,22 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
     """Mutate the License singleton from a /heartbeat (or /register)
     response. Writes through the cache so the middleware sees the new
     state on the next request."""
-    status_in = payload.get('status', License.Status.ACTIVE)
     valid_statuses = {c[0] for c in License.Status.choices}
+    status_in = payload.get('status', License.Status.ACTIVE)
     if status_in not in valid_statuses:
-        status_in = License.Status.ACTIVE
+        # Fail CLOSED on an unknown status: preserve whatever the License row
+        # already held rather than coercing to ACTIVE. A bug or a malicious
+        # MITM that drops in an unknown string must not silently revive a
+        # SUSPENDED / EXPIRED install.
+        logger.warning(
+            'heartbeat: unknown status %r in response; preserving current %r',
+            status_in, lic.status,
+        )
+        LicenseEvent.objects.create(
+            action=LicenseEvent.Action.HEARTBEAT_FAILED,
+            detail={'kind': 'unknown_status', 'received': str(status_in)[:40]},
+        )
+        status_in = lic.status
 
     server_now = _parse_iso(payload.get('server_now')) or timezone.now()
 
@@ -139,13 +160,18 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
 # ---------------------------------------------------------------------------
 
 
-def register(email: str, org_name: str, invite_code: str) -> Tuple[Dict[str, Any], int]:
+def register(email: str) -> Tuple[Dict[str, Any], int]:
     """POST /api/v1/register on the control center. On success, encrypt
     and persist the returned key + flip status to ACTIVE.
 
+    Email is the only thing the operator types. The control center self-serves
+    a tenant for that address (no invite code, no org name — the renderer can
+    let the operator edit org_name later via an admin endpoint). The bearer
+    key returned by the server is encrypted at rest and never echoed back to
+    the caller.
+
     Returns (body, http_status). The caller (the setup wizard view) just
-    re-emits these. The license key is NEVER returned in the body — it
-    is stored encrypted server-side and never shown again.
+    re-emits these.
     """
     url = _control_url('/api/v1/register')
     if not getattr(settings, 'LICENSE_CONTROL_CENTER_URL', ''):
@@ -155,16 +181,14 @@ def register(email: str, org_name: str, invite_code: str) -> Tuple[Dict[str, Any
             'code': 'control_center_url_missing',
         }, 503)
 
-    payload = {
-        'email': email, 'org_name': org_name, 'invite_code': invite_code,
-    }
+    payload = {'email': email}
     LicenseEvent.objects.create(
         action=LicenseEvent.Action.SETUP_ATTEMPTED,
-        detail={'email': email, 'org_name': org_name, 'has_invite': bool(invite_code)},
+        detail={'email': email},
     )
 
     try:
-        resp = requests.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
+        resp = requests.post(url, json=payload, timeout=_http_timeout_s())
     except requests.RequestException as exc:
         logger.exception('register: HTTP to control center failed')
         return ({
@@ -174,7 +198,7 @@ def register(email: str, org_name: str, invite_code: str) -> Tuple[Dict[str, Any
         }, 502)
 
     # Bubble the control center's error responses up unchanged so the
-    # operator sees "invite already used" / "expired" / etc. with the
+    # operator sees "email already used" / "invalid" / etc. with the
     # same status code the control center returned.
     if resp.status_code != 201:
         try:
@@ -195,11 +219,25 @@ def register(email: str, org_name: str, invite_code: str) -> Tuple[Dict[str, Any
             'code': 'control_center_response_invalid',
         }, 502)
 
+    # TOCTOU close: recheck the singleton status INSIDE the row lock. The
+    # view-level check happens outside any transaction, so two parallel setup
+    # POSTs (different IPs, escaping the per-IP rate limit) could both pass
+    # it; without this guard the second would clobber the first's encrypted
+    # key with its own. select_for_update + the recheck makes the second one
+    # error out cleanly.
     with transaction.atomic():
         lic = License.objects.select_for_update().get(pk=1)
+        if lic.status != License.Status.UNREGISTERED:
+            return ({
+                'success': False,
+                'code': 'already_registered',
+                'message': f'This install is already in state {lic.status}.',
+                'status': lic.status,
+            }, 409)
         lic.key_encrypted = crypto.encrypt_key(key)
         lic.email = email
-        lic.org_name = org_name
+        # org_name is set later via the admin/owner-profile endpoint once
+        # signup is done. Keep it empty (model default) at registration.
         lic.fingerprint = _fingerprint()
         lic.registered_at = timezone.now()
         # Treat the /register response shape as a heartbeat response.
@@ -213,7 +251,7 @@ def register(email: str, org_name: str, invite_code: str) -> Tuple[Dict[str, Any
 
     LicenseEvent.objects.create(
         action=LicenseEvent.Action.SETUP_SUCCEEDED,
-        detail={'email': email, 'org_name': org_name, 'tenant_id': body.get('tenant_id')},
+        detail={'email': email, 'tenant_id': body.get('tenant_id')},
     )
 
     return ({
@@ -293,7 +331,7 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
     try:
         resp = requests.post(
             _control_url('/api/v1/heartbeat'),
-            json=payload, headers=headers, timeout=_HTTP_TIMEOUT_S,
+            json=payload, headers=headers, timeout=_http_timeout_s(),
         )
     except requests.RequestException as exc:
         # Network failure: do NOT update last_heartbeat_at so grace
@@ -311,6 +349,11 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
         # kill switch fires immediately rather than waiting for the
         # full offline-grace window. The exact reason (REVOKED vs bad
         # key) doesn't matter to enforcement — both block.
+        #
+        # Do NOT bump last_heartbeat_at / last_server_now here: a rejected
+        # heartbeat is not a successful one. Leaving the timestamps alone
+        # keeps the grace clock honest in case status enforcement ever gets
+        # softened.
         with transaction.atomic():
             lic = License.objects.select_for_update().get(pk=1)
             lic.status = License.Status.SUSPENDED
@@ -318,8 +361,6 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
                 'Control center rejected this license key. Contact your '
                 'POS vendor — the key may have been revoked.'
             )
-            lic.last_heartbeat_at = timezone.now()
-            lic.last_server_now = timezone.now()
             lic.save()
         LicenseEvent.objects.create(
             action=LicenseEvent.Action.STATUS_CHANGED,
@@ -379,6 +420,7 @@ def _collect_metrics() -> Dict[str, Any]:
     # We intentionally don't import models at module load to keep startup
     # cheap. Import inside the function so a stock daemon process doesn't
     # eagerly initialise base.models.
+    from django.db import DatabaseError
     metrics = {}
     try:
         from base.models import Order
@@ -388,7 +430,9 @@ def _collect_metrics() -> Dict[str, Any]:
         metrics['orders_24h'] = Order.objects.filter(
             created_at__gte=cutoff, is_deleted=False,
         ).count()
-    except Exception:
-        # Schema may not exist (fresh install, mid-migration). Skip.
-        pass
+    except (ImportError, DatabaseError):
+        # Schema may not exist (fresh install, mid-migration) or base hasn't
+        # loaded yet — skip rather than crash the heartbeat. Anything wider
+        # would hide real bugs in the metrics path.
+        logger.debug('heartbeat: metrics collection skipped', exc_info=True)
     return metrics

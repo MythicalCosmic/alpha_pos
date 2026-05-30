@@ -83,11 +83,11 @@ def generate_vendor_keypair():
     return hexes[0], hexes[1]
 
 
-def create_invite():
+def create_invite(intended_email='plov@example.com'):
     res = subprocess.run(
         [CC_PYTHON, 'manage.py', 'shell', '-c',
          'from tenants.models import InviteCode; '
-         'print(InviteCode.objects.create().code)'],
+         f'print(InviteCode.objects.create(intended_email="{intended_email}").code)'],
         cwd=CC_DIR,
         env={**os.environ, 'DEBUG': 'True', 'DJANGO_SETTINGS_MODULE': 'pos_control_center.settings'},
         capture_output=True, text=True, check=True,
@@ -255,13 +255,12 @@ def main():
         else:
             fail('status endpoint', f'{s} {b!r}')
 
-        # 2. Wizard happy path
+        # 2. Wizard happy path — email is the only thing the operator types.
+        # The control center self-serves a tenant against that address.
         print()
         print('=== Step 2: setup wizard ===')
         s, b = http('POST', pos_url('/api/licensing/setup'), body={
             'email': 'plov@example.com',
-            'org_name': 'Plov Plus',
-            'invite_code': invite,
         })
         body = json.loads(b)
         if s == 201 and body.get('license', {}).get('status') == 'ACTIVE':

@@ -6,6 +6,17 @@ import pytest
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alpha_pos.settings')
 os.environ.setdefault('DEBUG', 'True')
 os.environ.setdefault('SECRET_KEY', 'pytest-secret-key')
+# Django forces settings.DEBUG=False during the test run regardless of the
+# env var, which trips the production fail-closed path in
+# licensing.services.crypto. Pin a stable Fernet key so the at-rest encryption
+# tests work without depending on the dev SECRET_KEY fallback.
+os.environ.setdefault(
+    'LICENSE_FERNET_KEY',
+    # Deterministic test key (urlsafe-base64 32 bytes). Generated once with
+    # Fernet.generate_key(); committed deliberately — tests never touch real
+    # license keys.
+    '6XzGcRmA0kcl-pX8R8wQbHCJqB7pDhVcMpC_Z8ZcKp4=',
+)
 
 django.setup()
 

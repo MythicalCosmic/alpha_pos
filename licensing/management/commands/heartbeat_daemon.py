@@ -7,7 +7,8 @@ own process keeps it observable: `docker ps` shows it, `docker logs`
 includes its output, and `docker kill` stops it cleanly via SIGTERM.
 
 Cadence: configurable via LICENSE_HEARTBEAT_INTERVAL (seconds).
-Backoff on failure follows 5m → 15m → 60m and resets on recovery.
+Backoff on failure: LICENSE_BACKOFF_SCHEDULE_S (comma-separated seconds,
+default 300,900,3600) and resets on recovery.
 """
 import logging
 import signal
@@ -22,18 +23,20 @@ from licensing.services import heartbeat as heartbeat_svc
 logger = logging.getLogger(__name__)
 
 
-# Backoff schedule when the control center is unreachable / 5xx. The
-# values are *minimum* seconds between attempts; the daemon picks the
-# higher of (LICENSE_HEARTBEAT_INTERVAL, backoff[step]) so a config that
-# specifies an unusually long base interval still dominates.
-_BACKOFF_SCHEDULE_S = (5 * 60, 15 * 60, 60 * 60)
+def _backoff_schedule():
+    """Read the backoff schedule from settings each call so test-time
+    overrides via `settings.LICENSE_BACKOFF_SCHEDULE_S = (...)` take effect
+    without restarting the process. Each value is a MINIMUM wait; the daemon
+    still respects LICENSE_HEARTBEAT_INTERVAL as a floor when not in backoff."""
+    schedule = getattr(settings, 'LICENSE_BACKOFF_SCHEDULE_S', (300, 900, 3600))
+    return tuple(int(x) for x in schedule)
 
 
 class Command(BaseCommand):
     help = (
         'Run the license heartbeat loop. Talks to LICENSE_CONTROL_CENTER_URL '
         'every LICENSE_HEARTBEAT_INTERVAL seconds (default 300). Backs off '
-        'exponentially on failure.'
+        'through LICENSE_BACKOFF_SCHEDULE_S on consecutive failures.'
     )
 
     def add_arguments(self, parser):
@@ -76,11 +79,12 @@ class Command(BaseCommand):
         # to last_heartbeat_at right away).
         success = self._tick()
         if not success:
-            backoff_step = min(backoff_step + 1, len(_BACKOFF_SCHEDULE_S))
+            backoff_step = min(backoff_step + 1, len(_backoff_schedule()))
 
         while not self._stop:
+            schedule = _backoff_schedule()
             sleep_s = (
-                _BACKOFF_SCHEDULE_S[backoff_step - 1]
+                schedule[backoff_step - 1]
                 if backoff_step > 0 else interval
             )
             sleep_s = max(sleep_s, interval if backoff_step == 0 else 60)
@@ -93,7 +97,7 @@ class Command(BaseCommand):
                     logger.info('heartbeat_daemon: recovered')
                 backoff_step = 0
             else:
-                backoff_step = min(backoff_step + 1, len(_BACKOFF_SCHEDULE_S))
+                backoff_step = min(backoff_step + 1, len(_backoff_schedule()))
 
     # -- internals ----------------------------------------------------------
 
