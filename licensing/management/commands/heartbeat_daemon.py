@@ -114,9 +114,8 @@ class Command(BaseCommand):
             logger.info('heartbeat ok: status=%s', body.get('status'))
             return True
         if status == 304:
-            # UNREGISTERED / PERPETUAL_UNLOCK — nothing to phone home about.
-            # Don't burn backoff on these; the operator may register at
-            # any moment.
+            # UNREGISTERED — nothing to phone home about. Don't burn backoff
+            # on these; the operator may register at any moment.
             logger.debug('heartbeat noop: %s', body.get('message'))
             return True
 

@@ -42,11 +42,6 @@ class LicenseState:
 
     def is_blocked(self) -> bool:
         """True if the middleware must refuse the request."""
-        # Perpetual unlock bypasses everything — the vendor's signed file
-        # said this install is permitted forever.
-        if self.status == 'PERPETUAL_UNLOCK':
-            return False
-
         # No setup wizard run yet: refuse everything except the allowlist.
         if self.status == 'UNREGISTERED':
             return True

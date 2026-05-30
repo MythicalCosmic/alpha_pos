@@ -16,7 +16,7 @@ from django.db import models
 class License(models.Model):
     class Status(models.TextChoices):
         # No setup wizard completed yet — middleware blocks everything except
-        # the allowlisted setup / status / unlock endpoints.
+        # the allowlisted setup / status endpoints.
         UNREGISTERED = 'UNREGISTERED', 'Unregistered'
         # Control center says "you are paid up". Heartbeats are fresh.
         ACTIVE = 'ACTIVE', 'Active'
@@ -24,10 +24,6 @@ class License(models.Model):
         SUSPENDED = 'SUSPENDED', 'Suspended'
         # `expires_at` is in the past (per control center's server_now).
         EXPIRED = 'EXPIRED', 'Expired'
-        # Vendor's Ed25519-signed unlock file was accepted. Heartbeat daemon
-        # stops; middleware lets every request through forever. Use only if
-        # the vendor has shut down.
-        PERPETUAL_UNLOCK = 'PERPETUAL_UNLOCK', 'Perpetual unlock'
 
     # Bearer token issued by the control center, stored encrypted at rest
     # (see services/state.py for the Fernet wrapper). Blob, not CharField,
@@ -139,8 +135,6 @@ class LicenseEvent(models.Model):
         HEARTBEAT_FAILED = 'HEARTBEAT_FAILED', 'Heartbeat failed'
         STATUS_CHANGED = 'STATUS_CHANGED', 'Status changed'
         BLOCKED = 'BLOCKED', 'Request blocked by middleware'
-        UNLOCK_ACCEPTED = 'UNLOCK_ACCEPTED', 'Perpetual unlock accepted'
-        UNLOCK_REJECTED = 'UNLOCK_REJECTED', 'Perpetual unlock rejected'
 
     action = models.CharField(max_length=32, choices=Action.choices, db_index=True)
     detail = models.JSONField(default=dict, blank=True)

@@ -21,9 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 # Paths that must work even when the license is dead — otherwise the
-# operator can never run setup, the renderer can't show a banner, and
-# the perpetual-unlock escape hatch is unreachable. /healthz must stay
-# open for container health probes.
+# operator can never run setup and the renderer can't show a banner.
+# /healthz must stay open for container health probes.
 ALLOWLIST_EXACT = frozenset({
     '/healthz',
 })

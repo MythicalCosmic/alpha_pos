@@ -359,11 +359,9 @@ LOGGING = {
 # ---------------------------------------------------------------------------
 # Licensing / control plane
 # ---------------------------------------------------------------------------
-# The licensing app phones home to a control center the vendor operates,
+# The licensing app phones home to a control center the vendor operates and
 # enforces a kill switch when the license is suspended / expired / offline-
-# grace-exceeded, and exposes a perpetual-unlock escape hatch verified by
-# an Ed25519 signature against a vendor-held keypair. See
-# /home/cosmic/.claude/plans/kind-gliding-kay.md.
+# grace-exceeded.
 
 # Base URL of the pos_control_center deployment (e.g. https://control.example.com).
 # Required for the setup wizard and heartbeat daemon — without it the install
@@ -417,14 +415,6 @@ LICENSE_BACKOFF_SCHEDULE_S = tuple(
     ).split(',') if x.strip()
 ) or (300, 900, 3600)
 
-# Ed25519 public key (hex, 32 bytes) of the vendor signing keypair. The
-# private half lives in the vendor's hardware vault; if the vendor ever
-# shuts down they publish a signed unlock file that any POS will accept
-# at /api/licensing/unlock, flipping it to PERPETUAL_UNLOCK. This pubkey
-# is embedded at build time so operators cannot forge their own unlocks.
-# Empty by default — unlock endpoint refuses every signature until set.
-LICENSE_VENDOR_PUBLIC_KEY = os.environ.get('LICENSE_VENDOR_PUBLIC_KEY', '')
-
 # Development-only kill-switch bypass. When set, the LicenseEnforcementMiddleware
 # lets every request through without a license / heartbeat / payment — so you
 # can run alpha_pos locally with no control center and nothing to pay.
@@ -439,9 +429,8 @@ LICENSE_DEV_BYPASS = DEBUG and os.environ.get(
 ).lower() in ('true', '1', 'yes')
 
 # Vendor recovery path for a *production* install bricked by the kill switch:
-# (a) ship a signed unlock file consumed at /api/licensing/unlock
-# (PERPETUAL_UNLOCK), or (b) reach the host shell and run `python manage.py`
-# directly. There is intentionally no production /admin/-path bypass — only the
+# reach the host shell and edit the License row via `python manage.py shell`.
+# There is intentionally no production /admin/-path bypass — only the
 # DEBUG-gated LICENSE_DEV_BYPASS above, which cannot take effect in production.
 
 CORS_ALLOWED_ORIGINS = [
