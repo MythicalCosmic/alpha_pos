@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, Tuple
 from django.db import transaction
 
 from base.helpers.response import ServiceResponse
-from stock.models import StockSettings, StockAlertConfig
+from stock.models import StockSettings, StockAlertConfig, StockLocation
 from stock.repositories import StockSettingsRepository, StockAlertConfigRepository, StockLocationRepository
 
 

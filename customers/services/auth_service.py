@@ -70,7 +70,8 @@ class AuthService:
             user_id=user,
             ip_address=ip_address[:45],
             user_agent=user_agent[:256],
-            payload=session_key,
+            # Store only the hash — raw token goes to the client, never persisted.
+            payload=SessionRepository.hash_token(session_key),
             expires_at=timezone.now() + timedelta(days=SESSION_TTL_DAYS),
         )
 
@@ -186,7 +187,7 @@ class AuthService:
                         'ip_address': s.ip_address,
                         'user_agent': s.user_agent,
                         'last_activity': s.last_activity.isoformat() if s.last_activity else None,
-                        'is_current': s.payload == session_key,
+                        'is_current': s.payload == SessionRepository.hash_token(session_key),
                     }
                     for s in sessions
                 ],
@@ -202,8 +203,9 @@ class AuthService:
         target = SessionRepository.get_by_id(target_session_id)
         if not target or target.user_id_id != session.user_id_id:
             return ServiceResponse.not_found("Session not found")
-        if target.payload == session_key:
+        if target.payload == SessionRepository.hash_token(session_key):
             return ServiceResponse.error("Cannot revoke current session, use logout instead")
-        SessionRepository.invalidate_cache(target.payload)
+        # target.payload is the stored hash; deleting the row fires the
+        # post_delete signal which drops session:{hash} from the cache.
         SessionRepository.delete(target)
         return ServiceResponse.success(message="Session revoked")

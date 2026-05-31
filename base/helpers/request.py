@@ -58,6 +58,48 @@ def safe_page(request, default=1):
         return default
 
 
+def safe_int(request, key, default=None, minimum=None, maximum=None):
+    """Parse an integer query param without letting bad input crash the view.
+
+    A bare `int(request.GET[...])` raises ValueError on non-numeric input,
+    which surfaces as an HTTP 500 (the global JSON middleware masks the
+    traceback but still returns 500). This returns `default` on missing or
+    malformed input and clamps the result to [minimum, maximum] when given —
+    bounding otherwise-unbounded work like `?limit=` / `?days=`.
+    """
+    raw = request.GET.get(key, None)
+    if raw is None or raw == '':
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except (ValueError, TypeError):
+            value = default
+    if value is None:
+        return None
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def safe_date(request, key, default=None):
+    """Parse an ISO date/datetime query param to a date.
+
+    Returns `default` on missing or malformed input instead of raising
+    ValueError (→ HTTP 500) from a bare `datetime.fromisoformat(...)`.
+    """
+    from datetime import datetime
+    raw = request.GET.get(key)
+    if not raw:
+        return default
+    try:
+        return datetime.fromisoformat(raw).date()
+    except (ValueError, TypeError):
+        return default
+
+
 def parse_json_body(request):
     try:
         data = json.loads(request.body)

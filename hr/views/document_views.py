@@ -1,7 +1,7 @@
 from django.http import JsonResponse, FileResponse, Http404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from hr.services import DocumentService
@@ -100,7 +100,7 @@ def document_verify(request, doc_id):
 @require_GET
 @admin_required
 def documents_expiring(request):
-    days = int(request.GET.get("days", 30))
+    days = safe_int(request, "days", 30, minimum=1, maximum=3650)
     result, status = DocumentService.get_expiring(days=days)
     return JsonResponse(result, status=status)
 

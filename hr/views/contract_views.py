@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from hr.services import ContractService
@@ -94,7 +94,7 @@ def contract_renew(request, contract_id):
 @require_GET
 @admin_required
 def contracts_expiring(request):
-    days = int(request.GET.get("days", 30))
+    days = safe_int(request, "days", 30, minimum=1, maximum=3650)
     result, status = ContractService.get_expiring(days=days)
     return JsonResponse(result, status=status)
 

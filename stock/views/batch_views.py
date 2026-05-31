@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import StockBatchService
@@ -14,13 +14,13 @@ def batches(request):
     if request.method == "GET":
         expiring_within_days = None
         if request.GET.get("expiring_within_days"):
-            expiring_within_days = int(request.GET["expiring_within_days"])
+            expiring_within_days = safe_int(request, "expiring_within_days", minimum=0, maximum=3650)
 
         result, status_code = StockBatchService.list(
             page=safe_page(request),
             per_page=safe_per_page(request, 50),
-            stock_item_id=int(request.GET.get("stock_item_id")) if request.GET.get("stock_item_id") else None,
-            location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
+            stock_item_id=safe_int(request, "stock_item_id"),
+            location_id=safe_int(request, "location_id"),
             status=request.GET.get("status"),
             has_stock_only=request.GET.get("has_stock_only", "true").lower() != "false",
             expired_only=request.GET.get("expired_only", "").lower() == "true",
@@ -90,7 +90,7 @@ def batch_auto_consume(request):
 @require_GET
 @admin_required
 def expiring_batches(request):
-    days = int(request.GET.get("days", 7))
+    days = safe_int(request, "days", 7, minimum=1, maximum=3650)
     result, status_code = StockBatchService.get_expiring_batches(days)
     return JsonResponse(result, status=status_code)
 

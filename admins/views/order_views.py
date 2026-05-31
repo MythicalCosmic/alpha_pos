@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required, permission_required
 from base.security.audit import audit
@@ -339,7 +339,7 @@ def order_type_stats(request):
 def top_products(request):
     date_from = request.GET.get('date_from')
     date_to = request.GET.get('date_to')
-    limit = int(request.GET.get('limit', 20))
+    limit = safe_int(request, 'limit', 20, minimum=1, maximum=100)
     result, status_code = AdminOrderService.get_top_products(date_from, date_to, limit)
     return JsonResponse(result, status=status_code)
 
@@ -351,7 +351,7 @@ def top_products(request):
 def least_sold_products(request):
     date_from = request.GET.get('date_from')
     date_to = request.GET.get('date_to')
-    limit = int(request.GET.get('limit', 20))
+    limit = safe_int(request, 'limit', 20, minimum=1, maximum=100)
     result, status_code = AdminOrderService.get_least_sold_products(date_from, date_to, limit)
     return JsonResponse(result, status=status_code)
 

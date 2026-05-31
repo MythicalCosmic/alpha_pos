@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.db.models import Sum, Count, F
 from django.utils import timezone
@@ -150,7 +150,40 @@ class DiscountService:
         kwargs['discount_type'] = dt
         kwargs.pop('discount_type_id', None)
 
-        discount = DiscountRepository.create(**kwargs)
+        # Reject negative money fields before they reach the model. A negative
+        # `value` would invert the discount into a surcharge; negative bounds
+        # are meaningless.
+        for money_field in ('value', 'min_order_amount', 'max_discount_amount'):
+            raw = kwargs.get(money_field)
+            if raw is None or raw == '':
+                continue
+            try:
+                if Decimal(str(raw)) < 0:
+                    return ServiceResponse.validation_error(
+                        errors={money_field: 'Must be zero or greater'},
+                        message=f'{money_field} cannot be negative',
+                    )
+            except (InvalidOperation, TypeError, ValueError):
+                return ServiceResponse.validation_error(
+                    errors={money_field: 'Must be a number'},
+                    message=f'{money_field} must be a number',
+                )
+
+        # Allowlist the fields a client may set on create. Without this the
+        # raw request body is splatted into the model, letting a caller set
+        # server-managed fields (usage_count, created_by_id, is_active, …) —
+        # mass-assignment. Mirrors the allowlist in update().
+        allowed_fields = {
+            'name', 'code', 'description', 'value', 'min_order_amount',
+            'max_discount_amount', 'applies_to', 'target_product_ids',
+            'target_category_ids', 'buy_quantity', 'get_quantity',
+            'free_product', 'free_product_id', 'secret_word', 'usage_limit',
+            'usage_per_user', 'start_date', 'end_date', 'is_stackable',
+            'is_active', 'discount_type',
+        }
+        create_kwargs = {k: v for k, v in kwargs.items() if k in allowed_fields}
+
+        discount = DiscountRepository.create(**create_kwargs)
 
         discount = DiscountRepository.get_with_relations(discount.id)
 

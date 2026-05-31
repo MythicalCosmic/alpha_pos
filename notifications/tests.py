@@ -5,6 +5,7 @@ import pytest
 from django.test import Client
 
 from base.models import Session
+from base.repositories.session import SessionRepository
 from notifications.models import NotificationTemplate
 
 
@@ -22,7 +23,7 @@ def _admin_client(user):
         user_id=user,
         ip_address='127.0.0.1',
         user_agent='pytest',
-        payload=token,
+        payload=SessionRepository.hash_token(token),
         expires_at=timezone.now() + timedelta(days=1),
     )
     client = Client(HTTP_USER_AGENT='pytest')

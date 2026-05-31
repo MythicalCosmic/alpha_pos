@@ -175,29 +175,39 @@ class ShiftService:
 
         now = timezone.now()
 
-        # cash_collected separates physical cash from card/Payme so the
-        # reconciliation step (expected_cash vs actual_cash) doesn't
-        # report every card-paying cashier as short on cash.
-        # Legacy paid orders pre-payment_method use NULL: treat them as
-        # CASH so historical shifts don't suddenly read zero cash.
-        stats = Order.objects.filter(
+        # total_orders = orders TAKEN this shift, attributed by created_at.
+        orders_taken = Order.objects.filter(
             is_deleted=False,
             cashier_id=shift.user_id,
             created_at__gte=shift.start_time,
             created_at__lte=now,
+        ).aggregate(total_orders=Count('id'))
+
+        # Revenue and cash are attributed by paid_at, NOT created_at: the cash
+        # actually entered THIS shift's drawer when the order was paid. Filtering
+        # by created_at mis-credits an order created near the end of one shift but
+        # paid in the next, so neither shift reconciles against its physical cash.
+        #
+        # cash_collected separates physical cash from card/Payme so the
+        # reconciliation step (expected_cash vs actual_cash) doesn't report every
+        # card-paying cashier as short on cash. Legacy paid orders pre-payment_method
+        # use NULL: treat them as CASH so historical shifts don't suddenly read zero.
+        money = Order.objects.filter(
+            is_deleted=False,
+            cashier_id=shift.user_id,
+            is_paid=True,
+            paid_at__gte=shift.start_time,
+            paid_at__lte=now,
         ).aggregate(
-            total_orders=Count('id'),
             total_revenue=Coalesce(
-                Sum('total_amount', filter=Q(is_paid=True)),
+                Sum('total_amount'),
                 Decimal('0.00'),
                 output_field=DecimalField(),
             ),
             cash_collected=Coalesce(
                 Sum(
                     'total_amount',
-                    filter=Q(is_paid=True) & (
-                        Q(payment_method='CASH') | Q(payment_method__isnull=True)
-                    ),
+                    filter=Q(payment_method='CASH') | Q(payment_method__isnull=True),
                 ),
                 Decimal('0.00'),
                 output_field=DecimalField(),
@@ -208,9 +218,9 @@ class ShiftService:
             shift,
             end_time=now,
             status='COMPLETED',
-            total_orders=stats['total_orders'],
-            total_revenue=stats['total_revenue'],
-            cash_collected=stats['cash_collected'],
+            total_orders=orders_taken['total_orders'],
+            total_revenue=money['total_revenue'],
+            cash_collected=money['cash_collected'],
             notes=notes or '',
         )
 

@@ -33,6 +33,15 @@ services:
     env_file:
       - .env
     environment:
+      # The security-critical trio is set HERE (environment overrides env_file)
+      # so a production bring-up can't silently inherit a stale DEBUG=True or a
+      # placeholder SECRET_KEY from a developer .env:
+      #   - DEBUG defaults to False; a developer opts in via DEBUG=True in .env.
+      #   - SECRET_KEY is fail-loud — compose refuses to start without it.
+      #   - ALLOWED_HOSTS defaults to localhost; set it for any real hostname.
+      DEBUG: ${DEBUG:-False}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env (generate: python -c "import secrets; print(secrets.token_urlsafe(64))")}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       DB_ENGINE: ${DB_ENGINE:-django.db.backends.postgresql}
       DB_NAME: ${DB_NAME:-alpha_pos}
       DB_USER: ${DB_USER:-alpha_pos}

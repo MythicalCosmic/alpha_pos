@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import RecipeService, RecipeIngredientService
@@ -17,10 +17,10 @@ def recipes(request):
             per_page=safe_per_page(request, 20),
             search=request.GET.get("search"),
             recipe_type=request.GET.get("recipe_type"),
-            output_item_id=int(request.GET.get("output_item_id")) if request.GET.get("output_item_id") else None,
+            output_item_id=safe_int(request, "output_item_id"),
             active_only=request.GET.get("active_only", "true").lower() == "true",
             active_version_only=request.GET.get("active_version_only", "true").lower() == "true",
-            production_location_id=int(request.GET.get("production_location_id")) if request.GET.get("production_location_id") else None,
+            production_location_id=safe_int(request, "production_location_id"),
         )
         return JsonResponse(result, status=status)
 

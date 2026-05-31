@@ -19,7 +19,7 @@ class AdminInkassaService:
             is_deleted=False, defaults={'current_balance': 0}
         )
         return ServiceResponse.success(data={
-            'balance': float(register.current_balance),
+            'balance': str(register.current_balance),
             'last_updated': register.last_updated.isoformat(),
         })
 
@@ -63,14 +63,14 @@ class AdminInkassaService:
         return ServiceResponse.success(data={
             'stats': {
                 'today': {
-                    'total_revenue': float(today_agg['total_revenue'] or 0),
+                    'total_revenue': str(today_agg['total_revenue'] or Decimal('0')),
                     'order_count': today_agg['order_count'] or 0,
                 },
                 'cashier_performance': [
                     {
                         'cashier_id': cp['cashier__id'],
                         'cashier_name': f"{cp['cashier__first_name'] or ''} {cp['cashier__last_name'] or ''}".strip(),
-                        'total_revenue': float(cp['total_revenue'] or 0),
+                        'total_revenue': str(cp['total_revenue'] or Decimal('0')),
                         'order_count': cp['order_count'],
                     }
                     for cp in cashier_perf
@@ -80,7 +80,7 @@ class AdminInkassaService:
                         'product_id': tp['product__id'],
                         'product_name': tp['product__name'],
                         'total_quantity': tp['total_quantity'],
-                        'total_revenue': float(tp['total_revenue'] or 0),
+                        'total_revenue': str(tp['total_revenue'] or Decimal('0')),
                     }
                     for tp in top_products
                 ],
@@ -154,15 +154,21 @@ class AdminInkassaService:
                 message='Insufficient register balance',
             )
 
-        last_inkassa = Inkassa.objects.filter(is_deleted=False).order_by('-created_at').first()
-        period_start = last_inkassa.period_end if last_inkassa else None
-
         now = timezone.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_orders = Order.objects.filter(
-            is_deleted=False, paid_at__gte=period_start or today_start,
+
+        last_inkassa = Inkassa.objects.filter(is_deleted=False).order_by('-created_at').first()
+        # Chain the period to the previous inkassa's end. Previously period_end
+        # was never set on creation, so this always fell back to today_start and
+        # every partial inkassa re-counted the WHOLE day's revenue/orders —
+        # double-reporting across multiple same-day collections. We now stamp
+        # period_end=now below so the next collection starts where this one ends.
+        period_start = last_inkassa.period_end if (last_inkassa and last_inkassa.period_end) else today_start
+
+        period_orders = Order.objects.filter(
+            is_deleted=False, paid_at__gte=period_start, paid_at__lte=now,
         )
-        today_agg = today_orders.aggregate(
+        today_agg = period_orders.aggregate(
             total_revenue=Sum('total_amount'),
             order_count=Count('id'),
         )
@@ -177,6 +183,7 @@ class AdminInkassaService:
                 balance_before=balance_before,
                 balance_after=balance_before - running_removed - amount,
                 period_start=period_start,
+                period_end=now,
                 total_orders=today_agg['order_count'] or 0,
                 total_revenue=today_agg['total_revenue'] or 0,
                 notes=amounts.get('notes', ''),
@@ -189,9 +196,9 @@ class AdminInkassaService:
 
         return ServiceResponse.success(
             data={
-                'amount_removed': float(total_removed),
-                'balance_before': float(balance_before),
-                'balance_after': float(register.current_balance),
+                'amount_removed': str(total_removed),
+                'balance_before': str(balance_before),
+                'balance_after': str(register.current_balance),
                 'inkassas': [_serialize_inkassa(i) for i in created_inkassas],
             },
             message='Inkassa performed successfully',
@@ -201,14 +208,14 @@ class AdminInkassaService:
 def _serialize_inkassa(i):
     return {
         'id': i.id,
-        'amount': float(i.amount),
+        'amount': str(i.amount),
         'inkass_type': i.inkass_type,
-        'balance_before': float(i.balance_before),
-        'balance_after': float(i.balance_after),
+        'balance_before': str(i.balance_before),
+        'balance_after': str(i.balance_after),
         'period_start': i.period_start.isoformat() if i.period_start else None,
         'period_end': i.period_end.isoformat() if i.period_end else None,
         'total_orders': i.total_orders,
-        'total_revenue': float(i.total_revenue),
+        'total_revenue': str(i.total_revenue),
         'notes': i.notes or '',
         'cashier': {
             'id': i.cashier.id,

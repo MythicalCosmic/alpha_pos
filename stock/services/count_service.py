@@ -490,12 +490,46 @@ class StockCountService:
     def _apply_adjustments(cls, count: StockCount):
         from .level_service import StockLevelService
 
-        items_with_variance = count.items.exclude(variance=0).select_related(
+        # A physical count SETS each level to what was physically counted. The
+        # `variance` stored at record-time was measured against `system_quantity`,
+        # which is snapshotted when the count is created (_populate_count_items).
+        # By approval time that snapshot is stale: any SALE_OUT / PURCHASE_IN that
+        # happened between creation and approval moved the live level. Replaying
+        # the stale variance as a signed delta would double-count those interim
+        # movements and corrupt inventory. So we recompute the delta against the
+        # CURRENT (row-locked) live quantity here and adjust by that — landing the
+        # level exactly on the counted quantity regardless of interim movements.
+        #
+        # Every counted item is reconciled (not only those whose snapshot variance
+        # was non-zero): a snapshot variance of zero can still be wrong now if the
+        # live level drifted after the snapshot was taken.
+        items = count.items.filter(counted_quantity__isnull=False).select_related(
             "stock_item", "batch"
         )
 
-        for item in items_with_variance:
-            if item.variance == 0:
+        for item in items:
+            counted = to_decimal(item.counted_quantity)
+
+            if item.batch_id:
+                # Batch-tracked: current truth is the batch's live quantity
+                # (decremented on consumption in batch_service). adjust() only
+                # touches the aggregate level, so we set the batch quantity here
+                # and feed the same delta to the level for the transaction record.
+                batch = StockBatchRepository.get_for_update(item.batch_id)
+                if not batch:
+                    raise RuntimeError(
+                        f"Count adjustment failed: batch {item.batch_id} not found"
+                    )
+                delta = counted - batch.current_quantity
+            else:
+                level = StockLevelService.get_level_for_update(
+                    item.stock_item_id, count.location_id
+                )
+                delta = counted - level.quantity
+
+            if delta == 0:
+                item.is_adjusted = True
+                item.save(update_fields=["is_adjusted"])
                 continue
 
             movement_type = "COUNT_ADJUSTMENT"
@@ -503,7 +537,7 @@ class StockCountService:
             result, status = StockLevelService.adjust(
                 stock_item_id=item.stock_item_id,
                 location_id=count.location_id,
-                quantity=item.variance,
+                quantity=delta,
                 movement_type=movement_type,
                 user_id=count.approved_by_id or count.counted_by_id,
                 batch_id=item.batch_id,
@@ -520,6 +554,12 @@ class StockCountService:
                     f"Count adjustment failed for item {item.stock_item_id}: "
                     f"{result.get('message', 'unknown error')}"
                 )
+
+            if item.batch_id:
+                # adjust() does not touch batch.current_quantity — set the
+                # batch to the counted truth so the next count diffs correctly.
+                batch.current_quantity = counted
+                batch.save(update_fields=["current_quantity", "updated_at"])
 
             item.is_adjusted = True
             if "transaction_id" in result.get("data", {}):

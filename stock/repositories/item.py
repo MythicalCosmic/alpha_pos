@@ -12,6 +12,14 @@ class StockItemRepository(BaseSyncRepository):
         return cls.model.objects.filter(is_deleted=False, is_active=True)
 
     @classmethod
+    def get_for_update(cls, pk):
+        # Row-level lock — must be called inside a @transaction.atomic block.
+        try:
+            return cls.model.objects.select_for_update().get(pk=pk, is_deleted=False)
+        except cls.model.DoesNotExist:
+            return None
+
+    @classmethod
     def get_with_relations(cls, pk):
         try:
             return cls.model.objects.select_related(

@@ -80,6 +80,16 @@ class PurchaseReceivingRepository(BaseSyncRepository):
             return None
 
     @classmethod
+    def get_for_update(cls, pk):
+        # Row-level lock — must be called inside a @transaction.atomic block.
+        try:
+            return cls.model.objects.select_for_update().select_related(
+                'purchase_order', 'location'
+            ).get(pk=pk, is_deleted=False)
+        except cls.model.DoesNotExist:
+            return None
+
+    @classmethod
     def get_for_order(cls, po_id):
         return cls.model.objects.filter(
             purchase_order_id=po_id, is_deleted=False

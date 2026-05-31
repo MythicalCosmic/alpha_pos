@@ -763,7 +763,12 @@ class PurchaseReceivingService:
     @classmethod
     @transaction.atomic
     def complete(cls, receiving_id: int) -> Tuple[Dict[str, Any], int]:
-        rcv = PurchaseReceivingRepository.get_with_relations(receiving_id)
+        # Lock the receiving row and re-check status under the lock. Without the
+        # lock two concurrent complete() calls both read DRAFT and both run the
+        # stock-in + cost-update loop, doubling received stock and corrupting the
+        # average cost. select_for_update serializes them; the loser sees the
+        # status already flipped to COMPLETED and bails out below.
+        rcv = PurchaseReceivingRepository.get_for_update(receiving_id)
         if not rcv:
             return ServiceResponse.not_found("Receiving not found")
 

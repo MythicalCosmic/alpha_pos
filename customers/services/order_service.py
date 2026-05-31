@@ -402,12 +402,27 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
+
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
 
         product = ProductRepository.get_by_id(product_id)
         if not product:
             return ServiceResponse.not_found('Product not found')
+
+        # A zero/negative quantity flows straight into F('quantity') + quantity
+        # and the subtotal recalculate, producing a negative line and a negative
+        # order total that then removes cash from the register on payment.
+        if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+            return ServiceResponse.validation_error(
+                errors={'quantity': 'Must be a positive integer'},
+                message='Quantity must be greater than 0',
+            )
 
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
         if existing:
@@ -441,6 +456,12 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
+
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
 
@@ -473,6 +494,12 @@ class CustomerOrderService:
         ownership = _check_cashier_ownership(order, cashier_id, user_id=user_id, user_role=user_role)
         if ownership:
             return ownership
+
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
 
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')

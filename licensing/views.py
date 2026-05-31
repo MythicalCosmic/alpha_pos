@@ -10,6 +10,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from base.security.permissions import admin_required
 from base.security.rate_limit import rate_limit, rate_limit_by
 from licensing.models import License
 from licensing.services import heartbeat as heartbeat_svc
@@ -140,11 +141,18 @@ def plans_view(request):
 
 @csrf_exempt
 @require_POST
+@admin_required
 def plan_change_view(request):
     """Customer-initiated plan change. Forwards the request to the
     control center which queues it for vendor approval. The next
     /heartbeat will surface the pending request in
-    `pending_plan_change` so the renderer can show "change pending"."""
+    `pending_plan_change` so the renderer can show "change pending".
+
+    Admin-only: this triggers a billing/subscription action against the
+    tenant using the install's bearer key. Although it sits on the open
+    license allowlist (so it works while the license is in grace), it must
+    NOT be callable unauthenticated — otherwise any LAN client could queue
+    plan changes on the tenant's subscription."""
     try:
         data = json.loads(request.body) if request.body else {}
     except (ValueError, TypeError):

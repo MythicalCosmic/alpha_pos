@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int, safe_date
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import PurchaseOrderService, PurchaseOrderItemService, PurchaseReceivingService
@@ -12,19 +12,13 @@ from stock.services import PurchaseOrderService, PurchaseOrderItemService, Purch
 @admin_required
 def purchase_orders(request):
     if request.method == "GET":
-        from datetime import datetime
-
-        date_from = None
-        date_to = None
-        if request.GET.get("date_from"):
-            date_from = datetime.fromisoformat(request.GET["date_from"]).date()
-        if request.GET.get("date_to"):
-            date_to = datetime.fromisoformat(request.GET["date_to"]).date()
+        date_from = safe_date(request, "date_from")
+        date_to = safe_date(request, "date_to")
 
         result, status_code = PurchaseOrderService.list(
             page=safe_page(request),
             per_page=safe_per_page(request, 20),
-            supplier_id=int(request.GET.get("supplier_id")) if request.GET.get("supplier_id") else None,
+            supplier_id=safe_int(request, "supplier_id"),
             status=request.GET.get("status"),
             date_from=date_from,
             date_to=date_to,

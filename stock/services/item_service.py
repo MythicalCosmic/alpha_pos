@@ -466,7 +466,11 @@ class StockItemService:
     def update_cost(cls, item_id: int, new_cost: Decimal,
                     update_type: str = "LAST",
                     received_qty: Decimal = None) -> Tuple[Dict[str, Any], int]:
-        item = StockItemRepository.get_by_id(item_id)
+        # Lock the item row: the AVG branch is a read-modify-write of
+        # avg_cost_price. Two concurrent receipts of the same item would each
+        # read the old average and the second save() would clobber the first,
+        # corrupting the cost basis. select_for_update serializes them.
+        item = StockItemRepository.get_for_update(item_id)
         if not item:
             return ServiceResponse.not_found(f"Stock item with id {item_id} not found")
 

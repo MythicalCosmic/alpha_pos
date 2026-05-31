@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services.item_service import StockItemService
@@ -17,7 +17,7 @@ def stock_items(request):
             per_page=safe_per_page(request, 20),
             search=request.GET.get("search"),
             item_type=request.GET.get("type"),
-            category_id=int(request.GET.get("category_id")) if request.GET.get("category_id") else None,
+            category_id=safe_int(request, "category_id"),
             low_stock_only=request.GET.get("low_stock") == "true",
             active_only=request.GET.get("active_only", "true") == "true",
         )
@@ -54,7 +54,7 @@ def stock_item_detail(request, item_id):
 @admin_required
 def stock_item_search(request):
     query = request.GET.get("q", "")
-    limit = int(request.GET.get("limit", 20))
+    limit = safe_int(request, "limit", 20, minimum=1, maximum=100)
     result, status = StockItemService.search(query, limit)
     return JsonResponse(result, status=status)
 

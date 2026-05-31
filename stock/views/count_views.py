@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import StockCountService, VarianceReasonCodeService
@@ -16,7 +16,7 @@ def stock_counts(request):
             page=safe_page(request),
             per_page=safe_per_page(request, 20),
             status=request.GET.get("status"),
-            location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
+            location_id=safe_int(request, "location_id"),
             count_type=request.GET.get("type"),
         )
         return JsonResponse(result, status=status)

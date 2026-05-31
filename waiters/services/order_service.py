@@ -31,11 +31,27 @@ def _serialize_order_list(order):
         'status': order.status,
         'is_paid': order.is_paid,
         'total_amount': str(order.total_amount or 0),
-        'items_count': order.items.count(),
-        'items': list(order.items.values(
-            'id', 'product__id', 'product__name', 'product__category__id',
-            'product__category__name', 'quantity', 'detail', 'price', 'ready_at'
-        )),
+        # The list queryset is prefetched with `items__product__category`
+        # (OrderRepository.get_with_relations) — iterate the cached items
+        # instead of `.count()` (extra query per order) and `.values()` (fresh
+        # query that bypasses the prefetch). Mirrors the admin list serializer.
+        'items_count': len(order.items.all()),
+        'items': [
+            {
+                'id': i.id,
+                'product__id': i.product_id,
+                'product__name': i.product.name if i.product else None,
+                'product__category__id': i.product.category_id if i.product else None,
+                'product__category__name': (
+                    i.product.category.name if i.product and i.product.category else None
+                ),
+                'quantity': i.quantity,
+                'detail': i.detail,
+                'price': i.price,
+                'ready_at': i.ready_at,
+            }
+            for i in order.items.all()
+        ],
         'created_at': order.created_at.isoformat(),
         'updated_at': order.updated_at.isoformat(),
     }
@@ -272,6 +288,12 @@ class WaiterOrderService:
         if ownership:
             return ownership
 
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
+
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
 
@@ -316,6 +338,12 @@ class WaiterOrderService:
         if ownership:
             return ownership
 
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
+
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')
 
@@ -345,6 +373,12 @@ class WaiterOrderService:
         ownership = _check_waiter_ownership(order, waiter_user_id)
         if ownership:
             return ownership
+
+        if order.is_paid:
+            # A paid order's total was already credited to the cash register on
+            # payment. Editing items afterwards rewrites total_amount with no
+            # matching register adjustment, desyncing the drawer. Block it.
+            return ServiceResponse.error('Cannot modify an order that has already been paid')
 
         if order.status != 'PREPARING':
             return ServiceResponse.error('Cannot modify order that is not in PREPARING status')

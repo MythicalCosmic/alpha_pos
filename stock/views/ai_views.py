@@ -4,12 +4,18 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 from base.helpers.request import parse_json_body
 from base.helpers.response import json_response, ServiceResponse
+from base.security.rate_limit import rate_limit
 from base.security.permissions import admin_required
 from stock.services.ai_assistant_service import AIStockAssistant
 
 
+# Each query runs a batch of heavy aggregate ORM queries AND a billable Gemini
+# call. The in-service per-user daily quota caps total volume, but nothing
+# bounded the *rate* — a single session could fire them as fast as the network
+# allows. Cap to 10/min per IP; normal interactive use is far below that.
 @csrf_exempt
 @require_POST
+@rate_limit('ai_query', 10, 60)
 @admin_required
 def ai_query(request):
     # The assistant calls Gemini. Without a key the SDK raises deep in the

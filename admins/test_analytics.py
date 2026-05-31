@@ -7,6 +7,7 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
+from base.repositories.session import SessionRepository
 from admins.services.analytics_service import menu_engineering, shift_performance
 
 
@@ -156,7 +157,7 @@ def admin_session(admin_user):
     from base.models import Session
     payload = secrets.token_hex(32)
     Session.objects.create(
-        user_id=admin_user, ip_address='127.0.0.1', payload=payload,
+        user_id=admin_user, ip_address='127.0.0.1', payload=SessionRepository.hash_token(payload),
         expires_at=timezone.now() + timedelta(hours=1),
     )
     return payload

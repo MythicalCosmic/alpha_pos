@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import StockTransferService, StockTransferItemService
@@ -16,8 +16,8 @@ def transfers(request):
             page=safe_page(request),
             per_page=safe_per_page(request, 20),
             status=request.GET.get("status"),
-            from_location_id=int(request.GET.get("from_location_id")) if request.GET.get("from_location_id") else None,
-            to_location_id=int(request.GET.get("to_location_id")) if request.GET.get("to_location_id") else None,
+            from_location_id=safe_int(request, "from_location_id"),
+            to_location_id=safe_int(request, "to_location_id"),
             transfer_type=request.GET.get("type"),
         )
         return JsonResponse(result, status=status)

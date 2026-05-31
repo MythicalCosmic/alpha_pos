@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_POST
-from base.helpers.request import parse_json_body, safe_page, safe_per_page
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
 from base.helpers.response import json_response
 from base.security.permissions import admin_required
 from stock.services import ProductionOrderService
@@ -16,9 +16,9 @@ def production_orders(request):
             page=safe_page(request),
             per_page=safe_per_page(request, 20),
             status=request.GET.get("status"),
-            recipe_id=int(request.GET.get("recipe_id")) if request.GET.get("recipe_id") else None,
+            recipe_id=safe_int(request, "recipe_id"),
             priority=request.GET.get("priority"),
-            location_id=int(request.GET.get("location_id")) if request.GET.get("location_id") else None,
+            location_id=safe_int(request, "location_id"),
         )
         return JsonResponse(result, status=status)
 
