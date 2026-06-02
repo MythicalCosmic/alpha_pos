@@ -655,6 +655,11 @@ class AIStockAssistant:
                 values.append(0)
 
             mean = sum(values) / len(values) if values else 0
+            # Initialize before the guard: a single data point (one week of
+            # history / a brand-new item) has mean > 0 but len == 1, which
+            # left stddev unbound and raised NameError at the result row,
+            # 500-ing the whole analytics payload.
+            stddev = 0
             if mean > 0 and len(values) > 1:
                 variance = sum((v - mean) ** 2 for v in values) / len(values)
                 stddev = math.sqrt(variance)
@@ -675,7 +680,7 @@ class AIStockAssistant:
                 "sku": data["sku"],
                 "unit": data["unit"],
                 "weekly_avg": round(mean, 2),
-                "weekly_stddev": round(stddev if mean > 0 else 0, 2),
+                "weekly_stddev": round(stddev, 2),
                 "cv": round(cv, 3),
                 "xyz_class": xyz_class,
                 "demand_pattern": {

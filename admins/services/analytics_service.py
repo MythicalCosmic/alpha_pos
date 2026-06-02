@@ -115,6 +115,9 @@ def menu_engineering(date_from, date_to, cogs_fraction=DEFAULT_COGS_FRACTION):
             order__created_at__date__gte=date_from,
             order__created_at__date__lte=date_to,
         )
+        # Exclude cancelled orders — they never sold, so they must not skew
+        # menu-engineering quadrants (qty sold / revenue).
+        .exclude(order__status='CANCELED')
         .annotate(line_total=line_total)
         .values('product_id', 'product__name', 'product__price')
         .annotate(

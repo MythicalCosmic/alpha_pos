@@ -119,6 +119,17 @@ def checkout(customer, phone_required=True):
     error_code is one of: 'empty', 'no_phone'.
     """
     cart = get_or_create_active_cart(customer)
+    # Lock the cart row before converting it. Two near-simultaneous checkouts
+    # (trivially produced by double-tapping the "✅ Buyurtma" button) would
+    # otherwise both read the same ACTIVE cart and create two full orders for
+    # one cart. The loser blocks on this lock, then re-reads a non-ACTIVE
+    # status and returns the order the winner already created.
+    cart = Cart.objects.select_for_update().get(pk=cart.pk)
+    if cart.status != Cart.Status.ACTIVE:
+        if cart.order_id:
+            return cart.order, None
+        return None, 'empty'
+
     items = list(cart.items.select_related('product'))
     if not items:
         return None, 'empty'

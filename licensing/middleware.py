@@ -31,6 +31,15 @@ ALLOWLIST_PREFIXES = (
     '/api/licensing/',
 )
 
+# Paths that must NOT be processed when unlicensed, but must still return 200
+# rather than the 503 kill-switch body. The Telegram webhook treats any
+# non-200 as "retry this update" and will re-deliver for hours, building an
+# ever-growing backlog that hammers the host. We ack with 200 and silently
+# drop the update (no order is created while the license is dead).
+ACK_WHEN_BLOCKED_EXACT = frozenset({
+    '/api/telegram/webhook/',
+})
+
 
 def _is_allowlisted(path: str) -> bool:
     if path in ALLOWLIST_EXACT:
@@ -69,6 +78,14 @@ class LicenseEnforcementMiddleware:
 
         state = get_state()
         if state.is_blocked():
+            # The Telegram webhook must be acked with 200 even when blocked,
+            # or Telegram retry-storms the host. Drop the update unprocessed.
+            if request.path in ACK_WHEN_BLOCKED_EXACT:
+                logger.info(
+                    'license kill switch: acking %s with 200 no-op (status=%s)',
+                    request.path, state.status,
+                )
+                return JsonResponse({'ok': True})
             return self._refuse(request, state)
 
         return self.get_response(request)

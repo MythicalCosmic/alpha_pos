@@ -49,12 +49,25 @@ def webhook(request):
         logger.warning('Telegram webhook received non-JSON body')
         return JsonResponse({'ok': True})
 
+    # Handling an update makes blocking HTTPS calls back to Telegram
+    # (sendMessage, etc., ~10s timeout each). On a multi-worker gunicorn +
+    # Postgres deployment that can tie up workers under load, so the operator
+    # can opt into offloading to a background thread via TELEGRAM_ASYNC_INBOUND.
+    # It defaults OFF because the single-PC default runs on SQLite, where a
+    # background writer thread contends with request threads ("database is
+    # locked"). Inline handling stays correct and is what low-volume single-PC
+    # installs want.
     try:
+        if getattr(settings, 'TELEGRAM_ASYNC_INBOUND', False):
+            from notifications.services.inbound_worker import enqueue_update
+            if enqueue_update(update):
+                return JsonResponse({'ok': True})
+            # Queue full — fall through to inline handling.
         from notifications.services.telegram_bot import handle_update
         handle_update(update)
     except Exception:
         # Swallow + log: a handler bug must not make Telegram keep retrying
-        # the same update for hours. The bug will surface in our logs.
+        # the same update for hours. The bug surfaces in our logs.
         logger.exception('Telegram bot handler crashed on update %s',
                          update.get('update_id'))
 

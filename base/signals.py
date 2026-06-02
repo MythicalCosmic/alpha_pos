@@ -5,10 +5,24 @@ review. Only register things here that are genuinely cross-cutting (caches
 that shadow ORM state, etc.).
 """
 from django.core.cache import cache
-from django.db.models.signals import post_delete
+from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from base.models import Session
+from base.models import Session, User
+
+
+@receiver(post_save, sender=User)
+def _invalidate_user_session_cache(sender, instance, **kwargs):
+    """Flush a user's cached sessions whenever the user row changes.
+
+    Sessions are cached with their joined user for SESSION_CACHE_TTL, so a
+    suspend / role-change / deactivate would keep granting the old access for
+    up to the TTL. We invalidate on every user save (rare events) rather than
+    diffing fields — correctness over a negligible cache miss. The session
+    rows are untouched; only the cache entries are dropped.
+    """
+    from base.repositories.session import SessionRepository
+    SessionRepository.invalidate_user_cache(instance)
 
 
 @receiver(post_delete, sender=Session)

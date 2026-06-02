@@ -49,6 +49,9 @@ def gather_history(days=WINDOW_DAYS, top_n=DEFAULT_TOP_N):
             order__is_deleted=False,
             order__created_at__gte=cutoff,
         )
+        # Cancelled orders never actually sold — counting them biases the prep
+        # forecast upward.
+        .exclude(order__status='CANCELED')
         .values('product_id', 'product__name')
         .annotate(total_qty=Sum('quantity'))
         .order_by('-total_qty')[:top_n]
@@ -65,6 +68,7 @@ def gather_history(days=WINDOW_DAYS, top_n=DEFAULT_TOP_N):
             order__is_deleted=False,
             order__created_at__gte=cutoff,
         )
+        .exclude(order__status='CANCELED')
         .values(
             'product_id',
             weekday=F('order__created_at__week_day'),

@@ -110,16 +110,24 @@ def main() -> None:
     print('[1/3] Applying database migrations...')
     _run_management('migrate', '--noinput')
 
-    print('[2/3] Bootstrapping admin (idempotent)...')
+    print('[2/4] Bootstrapping admin (idempotent)...')
     _run_management('bootstrap_admin')
+
+    # Collect static so the Django admin and any static assets actually
+    # render. runserver does NOT serve static files when DEBUG=False (the
+    # default here), so without this + --insecure below the admin loads
+    # unstyled and asset requests 404 on the single-PC install path.
+    print('[3/4] Collecting static files...')
+    _run_management('collectstatic', '--noinput')
 
     host = os.environ.get('HOST', '127.0.0.1')
     port = os.environ.get('PORT', '8000')
-    print(f'[3/3] Starting server on http://{host}:{port}  (Ctrl+C to stop)')
-    # `runserver` is fine for single-PC use. For multi-cashier deployments
-    # the operator should run this app behind `waitress-serve` (Windows)
-    # or `gunicorn` (Linux/Docker) — see README.
-    _run_management('runserver', f'{host}:{port}', '--noreload')
+    print(f'[4/4] Starting server on http://{host}:{port}  (Ctrl+C to stop)')
+    # `runserver --insecure` serves static even with DEBUG=False — required
+    # for this single-PC convenience path. For multi-cashier deployments the
+    # operator should run behind `waitress-serve` (Windows) or `gunicorn`
+    # (Linux/Docker), which serve static via their own config — see README.
+    _run_management('runserver', f'{host}:{port}', '--noreload', '--insecure')
 
 
 if __name__ == '__main__':

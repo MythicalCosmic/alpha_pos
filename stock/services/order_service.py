@@ -15,6 +15,11 @@ from .product_link_service import ProductStockLinkService
 
 class OrderStockService:
 
+    # reference_type marker stamped on full order-cancellation reversals so
+    # they can be told apart from adjust_for_item_change's RETURN_FROM_CUSTOMER
+    # rows (both share the same movement type).
+    ORDER_REVERSAL_REF = "ORDER_REVERSAL"
+
     @classmethod
     def should_process_order(cls, order_status: str) -> bool:
         settings = StockSettingsRepository.load()
@@ -200,14 +205,16 @@ class OrderStockService:
                 "reason": "Stock system disabled"
             })
 
-        # Idempotency: if any reversal already exists for this order, treat
-        # this call as a no-op. Without this guard, double-cancel (or any
-        # path that fires the cancel handler twice — idempotency-key miss
-        # plus manual retry, sync replay, etc.) would phantom-credit stock
-        # by the order quantity each call.
+        # Idempotency: if a *full reversal* already exists for this order,
+        # treat this call as a no-op. We key on the ORDER_REVERSAL reference
+        # marker rather than the RETURN_FROM_CUSTOMER movement type, because
+        # adjust_for_item_change also writes RETURN_FROM_CUSTOMER rows when an
+        # item quantity is decreased — keying on the movement type alone would
+        # make any order that ever had an item reduced skip its cancel
+        # reversal entirely, permanently losing the remaining SALE_OUT stock.
         existing_reversals = StockTransactionRepository.filter(
             order_id=order_id,
-            movement_type="RETURN_FROM_CUSTOMER",
+            reference_type=cls.ORDER_REVERSAL_REF,
         )
         if existing_reversals.exists():
             return ServiceResponse.success(data={
@@ -239,12 +246,21 @@ class OrderStockService:
                 user_id=user_id,
                 batch_id=trans.batch_id,
                 order_id=order_id,
+                reference_type=cls.ORDER_REVERSAL_REF,
+                reference_id=order_id,
                 notes=f"Reversal: {reason}"
             )
 
+            # Fail closed: a partial reversal that silently reports success
+            # would leave stock half-credited with no signal. Roll the whole
+            # reversal back and surface the error.
+            if status >= 400:
+                transaction.set_rollback(True)
+                return result, status
+
             reversals.append({
                 "original_transaction_id": trans.id,
-                "reversal_transaction_id": result.get("data", {}).get("transaction_id") if status < 400 else None,
+                "reversal_transaction_id": result.get("data", {}).get("transaction_id"),
                 "stock_item_id": trans.stock_item_id,
                 "quantity": str(trans.base_quantity)
             })

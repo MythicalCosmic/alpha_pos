@@ -2,8 +2,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from django.conf import settings
-from base.helpers.request import parse_json_body, safe_per_page
-from base.helpers.response import json_response
+from base.helpers.request import safe_per_page
 
 
 @csrf_exempt
@@ -111,18 +110,26 @@ def receive(request):
                 status=403,
             )
 
-    data, error = parse_json_body(request)
-    if error:
-        return json_response(error)
+    # Parse the body directly (not via dict-only parse_json_body): the
+    # documented batch format is a JSON array, which parse_json_body rejects
+    # with a 400 before this handler ever sees it — making the list branch
+    # below dead code and hard-400ing every array-format push.
+    import json
+    try:
+        data = json.loads(request.body)
+    except (json.JSONDecodeError, ValueError):
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
 
     if isinstance(data, list):
         if not data:
             return JsonResponse({'error': 'Empty records'}, status=400)
         model_name = data[0].get('model_name', 'order')
         records = [item.get('data', item) for item in data]
-    else:
+    elif isinstance(data, dict):
         model_name = data.get('model')
         records = data.get('records', [])
+    else:
+        return JsonResponse({'error': 'Expected JSON object or array'}, status=400)
 
     if not model_name or not records:
         return JsonResponse({'error': 'Missing model or records'}, status=400)
@@ -247,7 +254,6 @@ def changes(request):
         return JsonResponse({'error': 'Invalid branch token'}, status=401)
 
     from base.services.sync.config import SYNC_ORDER, get_all_models
-    from base.services.sync.service import SyncService
     from django.utils.dateparse import parse_datetime
 
     requesting_branch = request.META.get('HTTP_X_BRANCH_ID', '')
@@ -269,33 +275,39 @@ def changes(request):
     data = {}
     total_records = 0
     has_more = False
+    # The cursor we tell the client to resume from. With per-model paging we
+    # can only safely advance to the *least* complete model's frontier — i.e.
+    # the smallest "max synced_at returned" among the models that overflowed.
+    # Advancing past that would skip another model's still-pending rows.
+    next_since = None
 
     for name in SYNC_ORDER:
         model_class = models.get(name)
         if not model_class:
             continue
 
+        qs = model_class.objects.all()
         if since_dt:
-            # Cap per-model to per_page+1 so a long-disconnected branch
-            # cannot OOM the server in a single response. has_more flips
-            # the moment any model overflows; client should re-poll with
-            # the latest `synced_at` from the previous batch.
-            records = SyncService.get_changes_after(
-                model_class, since_dt, limit=per_page + 1,
-            )
-            if len(records) > per_page:
-                records = records[:per_page]
-                has_more = True
-        else:
-            all_objs = model_class.objects.all()[:per_page + 1]
-            records = [obj.to_sync_dict() for obj in all_objs]
-            if len(records) > per_page:
-                records = records[:per_page]
-                has_more = True
-
+            qs = qs.filter(synced_at__gt=since_dt)
+        # Exclude the requester's own records in SQL, *before* the page cap.
+        # Filtering after slicing would shrink a page below per_page and make
+        # has_more / the frontier inconsistent with what was actually sent.
         if requesting_branch:
-            records = [r for r in records if r.get('branch_id') != requesting_branch]
+            qs = qs.exclude(branch_id=requesting_branch)
+        # Order by synced_at so the page boundary is a well-defined frontier
+        # the client can resume from. Cap at per_page+1 so a long-disconnected
+        # branch cannot OOM the server in a single response.
+        qs = qs.order_by('synced_at')
 
+        window = list(qs[:per_page + 1])
+        if len(window) > per_page:
+            window = window[:per_page]
+            has_more = True
+            frontier = window[-1].synced_at
+            if frontier is not None and (next_since is None or frontier < next_since):
+                next_since = frontier
+
+        records = [obj.to_sync_dict() for obj in window]
         if records:
             data[name] = records
             total_records += len(records)
@@ -306,6 +318,7 @@ def changes(request):
         'data': data,
         'total_records': total_records,
         'has_more': has_more,
+        'next_since': next_since.isoformat() if next_since else None,
         'server_timestamp': timezone.now().isoformat(),
     })
 

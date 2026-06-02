@@ -382,6 +382,34 @@ class Category(SyncMixin, models.Model):
         data['parent_category_uuid'] = str(self.parent.uuid) if self.parent else None
         return data
 
+    @classmethod
+    def from_sync_dict(cls, data, branch_id=None):
+        # The base implementation only setattrs keys the model has, so
+        # parent_category_uuid (a synthetic FK pointer) is silently dropped on
+        # the pull path — flattening the category tree on pulled branches.
+        # Resolve it explicitly here, then defer to the base for everything
+        # else (updated_at preservation, version tiebreaker, branch checks).
+        from django.utils import timezone
+
+        data = data.copy()
+        parent_uuid = data.pop('parent_category_uuid', None)
+        instance, action = super().from_sync_dict(data, branch_id=branch_id)
+        # Only touch the parent link when the row was actually written —
+        # a 'skipped' result means the incoming version lost the tiebreaker,
+        # so its parent must not overwrite the newer local value.
+        if instance is None or action not in ('created', 'updated'):
+            return instance, action
+
+        parent = None
+        if parent_uuid and parent_uuid != str(instance.uuid):  # never self-parent
+            parent = cls.objects.filter(uuid=parent_uuid).first()
+        if instance.parent_id != (parent.id if parent else None):
+            instance.parent = parent
+            cls.objects.filter(pk=instance.pk).update(
+                parent=parent, synced_at=timezone.now(),
+            )
+        return instance, action
+
     def __str__(self):
         return self.name
 
@@ -416,6 +444,7 @@ class Product(SyncMixin, models.Model):
     @classmethod
     def from_sync_dict(cls, data, branch_id=None):
         from django.utils import timezone
+        from django.utils.dateparse import parse_datetime
 
         data = data.copy()
         category_uuid = data.pop('category_uuid', None)
@@ -424,6 +453,14 @@ class Product(SyncMixin, models.Model):
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
         data = cls._strip_sync_denied(data)
+
+        # Preserve the source-of-truth updated_at across save(). updated_at is
+        # auto_now=True, so a plain setattr+save would overwrite it with the
+        # receiver's local clock and silently break the equal-version
+        # tiebreaker in _should_replace on the next sync round.
+        incoming_updated = data.pop('updated_at', None)
+        if isinstance(incoming_updated, str):
+            incoming_updated = parse_datetime(incoming_updated)
 
         category = None
         if category_uuid:
@@ -434,7 +471,10 @@ class Product(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if cls._should_replace(instance, sync_version, data, incoming_branch):
+            if cls._should_replace(
+                instance, sync_version,
+                {**data, 'updated_at': incoming_updated}, incoming_branch,
+            ):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -444,6 +484,9 @@ class Product(SyncMixin, models.Model):
                 instance.is_deleted = is_deleted
                 instance.synced_at = timezone.now()
                 instance.save(_syncing=True)
+                if incoming_updated:
+                    cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                    instance.updated_at = incoming_updated
             return instance, 'updated'
         except cls.DoesNotExist:
             instance = cls(
@@ -458,6 +501,9 @@ class Product(SyncMixin, models.Model):
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
+            if incoming_updated:
+                cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                instance.updated_at = incoming_updated
             return instance, 'created'
 
     def __str__(self):
@@ -656,6 +702,7 @@ class Order(SyncMixin, models.Model):
     @classmethod
     def from_sync_dict(cls, data, branch_id=None):
         from django.utils import timezone
+        from django.utils.dateparse import parse_datetime
 
         data = data.copy()
         user_uuid = data.pop('user_uuid', None)
@@ -666,6 +713,13 @@ class Order(SyncMixin, models.Model):
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
         data = cls._strip_sync_denied(data)
+
+        # Preserve the source-of-truth updated_at across save() (auto_now would
+        # overwrite it with the local clock and break the equal-version
+        # tiebreaker — see the base from_sync_dict for the full rationale).
+        incoming_updated = data.pop('updated_at', None)
+        if isinstance(incoming_updated, str):
+            incoming_updated = parse_datetime(incoming_updated)
 
         user = None
         cashier = None
@@ -694,7 +748,10 @@ class Order(SyncMixin, models.Model):
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
-            if cls._should_replace(instance, sync_version, data, incoming_branch):
+            if cls._should_replace(
+                instance, sync_version,
+                {**data, 'updated_at': incoming_updated}, incoming_branch,
+            ):
                 for key, value in data.items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
@@ -705,6 +762,9 @@ class Order(SyncMixin, models.Model):
                 instance.is_deleted = is_deleted
                 instance.synced_at = timezone.now()
                 instance.save(_syncing=True)
+                if incoming_updated:
+                    cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                    instance.updated_at = incoming_updated
             return instance, 'updated'
         except cls.DoesNotExist:
             instance = cls(
@@ -721,6 +781,9 @@ class Order(SyncMixin, models.Model):
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
+            if incoming_updated:
+                cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                instance.updated_at = incoming_updated
             return instance, 'created'
 
     def __str__(self):

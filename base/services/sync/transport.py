@@ -126,6 +126,12 @@ def fetch_changes(since_timestamp=None):
                     'success': True,
                     'data': data.get('data', {}),
                     'server_timestamp': data.get('server_timestamp'),
+                    # Surface pagination so the caller can page the rest of a
+                    # large change set instead of silently dropping everything
+                    # past the first page (which permanently loses data for a
+                    # long-disconnected branch).
+                    'has_more': data.get('has_more', False),
+                    'next_since': data.get('next_since'),
                 }
 
             last_error = f'HTTP {resp.status_code}: {resp.text[:200]}'

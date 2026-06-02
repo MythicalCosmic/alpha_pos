@@ -66,6 +66,8 @@ def _top_products_today(limit=5):
             order__is_deleted=False,
             order__created_at__gte=start, order__created_at__lt=end,
         )
+        # Cancelled orders never sold — keep them out of "top products today".
+        .exclude(order__status='CANCELED')
         .annotate(line_total=line_total)
         .values('product_id', 'product__name')
         .annotate(

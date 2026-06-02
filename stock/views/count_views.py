@@ -25,7 +25,11 @@ def stock_counts(request):
     if error:
         return json_response(error)
 
-    result, status = StockCountService.create(**data)
+    # The acting user is always the authenticated admin — never trust a
+    # client-supplied counted_by_id (actor spoofing + downstream approval
+    # attribution).
+    data.pop("counted_by_id", None)
+    result, status = StockCountService.create(**data, counted_by_id=request.user.id)
     return JsonResponse(result, status=status)
 
 

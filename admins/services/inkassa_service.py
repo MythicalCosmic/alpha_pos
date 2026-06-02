@@ -28,9 +28,13 @@ class AdminInkassaService:
         now = timezone.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
+        # Exclude cancelled orders. Cancelling a paid order reverses its cash
+        # from the register (add_to_register(-total)) but leaves is_paid /
+        # paid_at set, so without this exclusion the reported revenue counts
+        # money the drawer no longer holds — overstating expected cash.
         today_orders = Order.objects.filter(
             is_deleted=False, paid_at__gte=today_start,
-        )
+        ).exclude(status='CANCELED')
         today_agg = today_orders.aggregate(
             total_revenue=Sum('total_amount'),
             order_count=Count('id'),
@@ -38,6 +42,7 @@ class AdminInkassaService:
 
         cashier_perf = (
             Order.objects.filter(is_deleted=False, paid_at__gte=today_start)
+            .exclude(status='CANCELED')
             .values('cashier__id', 'cashier__first_name', 'cashier__last_name')
             .annotate(
                 total_revenue=Sum('total_amount'),
@@ -52,6 +57,7 @@ class AdminInkassaService:
                 order__paid_at__gte=today_start,
                 is_deleted=False,
             )
+            .exclude(order__status='CANCELED')
             .values('product__id', 'product__name')
             .annotate(
                 total_quantity=Sum('quantity'),
@@ -167,7 +173,7 @@ class AdminInkassaService:
 
         period_orders = Order.objects.filter(
             is_deleted=False, paid_at__gte=period_start, paid_at__lte=now,
-        )
+        ).exclude(status='CANCELED')
         today_agg = period_orders.aggregate(
             total_revenue=Sum('total_amount'),
             order_count=Count('id'),

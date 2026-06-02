@@ -178,9 +178,22 @@ def _parse_int_list(param):
 
 
 def _recalculate_total(order):
+    from django.db.models import Sum
+    from discounts.repositories import OrderDiscountRepository
+
     order.subtotal = OrderItemRepository.calculate_order_total(order)
-    order.total_amount = order.subtotal - order.discount_amount
-    order.save(update_fields=['subtotal', 'total_amount'])
+    # Re-derive the applied discount from the OrderDiscount rows (the source of
+    # truth) instead of trusting the cached field, and never let a frozen
+    # discount exceed the new subtotal. Without this, shrinking a discounted
+    # order (remove/update item) leaves a now-too-large discount, driving
+    # total_amount negative — and mark_as_paid would then *remove* real cash
+    # from the register via InkassaService.add_to_register.
+    applied = OrderDiscountRepository.get_for_order(order.id).aggregate(
+        total=Sum('discount_amount'),
+    )['total'] or Decimal('0')
+    order.discount_amount = min(applied, order.subtotal)
+    order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
+    order.save(update_fields=['subtotal', 'discount_amount', 'total_amount'])
 
 
 def _adjust_order_stock(order_id, product_id, quantity_delta, performed_by_id):

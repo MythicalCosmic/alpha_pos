@@ -2,6 +2,32 @@ import json
 from django.conf import settings
 
 
+def coerce_quantity(value, default=None):
+    """Coerce a JSON order quantity to a positive int, or None if invalid.
+
+    Order-item views did `if not quantity or quantity <= 0` on the raw JSON
+    value, so a string like "5" sailed past `not "5"` and then raised
+    TypeError on `"5" <= 0` — surfacing as a 500 instead of a clean 422.
+    This accepts ints and integer-valued numeric strings/floats, and rejects
+    bools, non-numeric strings, fractional floats, and anything <= 0.
+    """
+    if value is None:
+        value = default
+    if isinstance(value, bool):  # bool is a subclass of int — reject explicitly
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and value > 0 else None
+    if isinstance(value, str):
+        s = value.strip()
+        if s.isdigit():  # only non-negative integer literals
+            n = int(s)
+            return n if n > 0 else None
+        return None
+    return None
+
+
 def get_client_ip(request):
     # See base/security/rate_limit.py — same trust rule.
     if getattr(settings, 'TRUST_FORWARDED_FOR', False):

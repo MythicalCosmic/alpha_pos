@@ -87,7 +87,7 @@ class Discount(SyncMixin, models.Model):
         super().clean()
         from django.core.exceptions import ValidationError
         from decimal import Decimal
-        method = getattr(getattr(self, 'discount_type', None), 'method', None)
+        method = getattr(getattr(self, 'discount_type', None), 'discount_method', None)
         percent_methods = {'PERCENTAGE', 'SECRET_WORD', 'CUSTOM'}
         if method in percent_methods:
             if self.value is not None and (

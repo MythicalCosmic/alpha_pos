@@ -175,10 +175,42 @@ def _parse_date(date_str):
             return None
 
 
+def _parse_date_to(date_str):
+    """Parse an inclusive end-of-range bound.
+
+    A bare date like '2026-05-31' parses to midnight, and the stats filters
+    use created_at__lte=date_to — so every order placed during the day was
+    silently excluded (a single-day query returned ~nothing). When only a date
+    is supplied, roll it to the last microsecond of that day so the whole day
+    is included. An explicit timestamp is honored as-is.
+    """
+    if not date_str:
+        return None
+    dt = _parse_date(date_str)
+    if dt is None:
+        return None
+    # Date-only input (no time component) → extend to end of day.
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0 \
+            and len(date_str.strip()) <= 10:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
 def _recalculate_total(order):
+    from django.db.models import Sum
+    from discounts.repositories import OrderDiscountRepository
+
     order.subtotal = OrderItemRepository.calculate_order_total(order)
-    order.total_amount = order.subtotal - order.discount_amount
-    order.save(update_fields=['subtotal', 'total_amount'])
+    # Re-derive the applied discount from the OrderDiscount rows and never let
+    # a frozen discount exceed the new subtotal — otherwise shrinking a
+    # discounted order drives total_amount negative and mark_as_paid would
+    # *remove* real cash from the register.
+    applied = OrderDiscountRepository.get_for_order(order.id).aggregate(
+        total=Sum('discount_amount'),
+    )['total'] or Decimal('0')
+    order.discount_amount = min(applied, order.subtotal)
+    order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
+    order.save(update_fields=['subtotal', 'discount_amount', 'total_amount'])
 
 
 def _adjust_order_stock(order, product_id, quantity_delta):
@@ -222,7 +254,7 @@ class AdminOrderService:
         statuses_list = _parse_statuses(statuses)
         category_ids_list = _parse_int_list(category_ids)
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         if order_by not in ALLOWED_ORDER_FIELDS:
             order_by = '-created_at'
@@ -847,7 +879,7 @@ class AdminOrderService:
     @staticmethod
     def get_order_stats(date_from=None, date_to=None, cashier_id=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         stats = OrderRepository.get_stats_aggregate(date_from_dt, date_to_dt, cashier_id)
         avg_prep = OrderRepository.get_avg_prep_time(date_from_dt, date_to_dt)
@@ -869,7 +901,7 @@ class AdminOrderService:
     @staticmethod
     def get_daily_stats(date_from=None, date_to=None, cashier_id=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         if not date_from_dt:
             date_from_dt = timezone.now() - timedelta(days=30)
@@ -895,7 +927,7 @@ class AdminOrderService:
     @staticmethod
     def get_monthly_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         if not date_from_dt:
             date_from_dt = timezone.now() - timedelta(days=365)
@@ -930,7 +962,7 @@ class AdminOrderService:
     @staticmethod
     def get_cashier_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         by_cashier = OrderRepository.get_by_cashier_stats(date_from_dt, date_to_dt)
 
@@ -948,7 +980,7 @@ class AdminOrderService:
     @staticmethod
     def get_status_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         by_status = OrderRepository.get_by_status_stats(date_from_dt, date_to_dt)
 
@@ -963,7 +995,7 @@ class AdminOrderService:
     @staticmethod
     def get_order_type_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         by_type = OrderRepository.get_by_order_type_stats(date_from_dt, date_to_dt)
 
@@ -978,7 +1010,7 @@ class AdminOrderService:
     @staticmethod
     def get_top_products(date_from=None, date_to=None, limit=20):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         top = OrderItemRepository.get_top_products(date_from_dt, date_to_dt, limit)
 
@@ -996,7 +1028,7 @@ class AdminOrderService:
     @staticmethod
     def get_least_sold_products(date_from=None, date_to=None, limit=20):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         least = OrderItemRepository.get_least_sold_products(date_from_dt, date_to_dt, limit)
 
@@ -1014,7 +1046,7 @@ class AdminOrderService:
     @staticmethod
     def get_category_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         by_cat = OrderItemRepository.get_product_category_stats(date_from_dt, date_to_dt)
 
@@ -1031,7 +1063,7 @@ class AdminOrderService:
     @staticmethod
     def get_hourly_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         hourly = OrderRepository.get_hourly_distribution(date_from_dt, date_to_dt)
 
@@ -1046,7 +1078,7 @@ class AdminOrderService:
     @staticmethod
     def get_dashboard_stats(date_from=None, date_to=None):
         date_from_dt = _parse_date(date_from)
-        date_to_dt = _parse_date(date_to)
+        date_to_dt = _parse_date_to(date_to)
 
         today = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = today.replace(day=1)

@@ -6,7 +6,7 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
-from stock.models import StockTransfer, StockTransferItem, StockSettings
+from stock.models import StockTransfer, StockTransferItem, StockSettings, StockBatch
 from stock.services.base_service import to_decimal, generate_number
 from stock.repositories import (
     StockTransferRepository, StockTransferItemRepository,
@@ -359,8 +359,31 @@ class StockTransferService:
 
         from .level_service import StockLevelService
 
-        for item in transfer.items.select_related("stock_item", "unit"):
+        for item in transfer.items.select_related("stock_item", "unit", "batch"):
             qty = item.approved_qty or item.requested_qty
+
+            # Batch-tracked leg: debit the specific source batch so its
+            # current_quantity stays in lockstep with the location level.
+            # Without this the source batch keeps its full quantity and FIFO/
+            # FEFO consumption later fabricates stock that was already shipped.
+            if item.batch_id:
+                batch = StockBatchRepository.get_for_update(item.batch_id)
+                if not batch:
+                    transaction.set_rollback(True)
+                    return ServiceResponse.not_found(
+                        f"Batch {item.batch_id} not found for transfer item {item.id}"
+                    )
+                batch_available = batch.current_quantity - batch.reserved_quantity
+                if qty > batch_available:
+                    transaction.set_rollback(True)
+                    return ServiceResponse.error(
+                        f"Insufficient quantity in batch {batch.batch_number}: "
+                        f"requested {qty}, available {batch_available}"
+                    )
+                batch.current_quantity -= qty
+                if batch.current_quantity <= 0:
+                    batch.status = StockBatch.BatchStatus.CONSUMED
+                batch.save(update_fields=["current_quantity", "status", "updated_at"])
 
             result, status = StockLevelService.adjust(
                 stock_item_id=item.stock_item_id,
@@ -400,8 +423,9 @@ class StockTransferService:
             return ServiceResponse.error("Can only receive IN_TRANSIT transfers")
 
         from .level_service import StockLevelService
+        from .batch_service import StockBatchService
 
-        for item in transfer.items.select_related("stock_item", "unit"):
+        for item in transfer.items.select_related("stock_item", "unit", "batch"):
             shipped = item.shipped_qty or item.approved_qty or item.requested_qty
             if received_quantities and item.id in received_quantities:
                 qty = to_decimal(received_quantities[item.id])
@@ -419,13 +443,38 @@ class StockTransferService:
                     )},
                 )
 
+            # Batch-tracked leg: materialize a destination batch for the
+            # received quantity instead of stamping the source batch_id (which
+            # lives at the source location). A fresh batch_number is generated
+            # because (batch_number, stock_item) is unique — the same batch
+            # cannot exist at two locations. Cost/expiry are copied so FEFO and
+            # costing remain correct at the destination.
+            dest_batch_id = None
+            if item.batch_id and qty > 0:
+                src = item.batch
+                created, cstatus = StockBatchService.create(
+                    stock_item_id=item.stock_item_id,
+                    location_id=transfer.to_location_id,
+                    quantity=qty,
+                    unit_cost=src.unit_cost if src else None,
+                    manufactured_date=src.manufactured_date if src else None,
+                    expiry_date=src.expiry_date if src else None,
+                    supplier_id=src.supplier_id if src else None,
+                    notes=(f"Received via transfer #{transfer.id} from batch "
+                           f"{src.batch_number}") if src else "",
+                )
+                if cstatus >= 400:
+                    transaction.set_rollback(True)
+                    return created, cstatus
+                dest_batch_id = created["data"]["id"]
+
             result, status = StockLevelService.adjust(
                 stock_item_id=item.stock_item_id,
                 location_id=transfer.to_location_id,
                 quantity=qty,
                 movement_type="TRANSFER_IN",
                 user_id=received_by_id,
-                batch_id=item.batch_id,
+                batch_id=dest_batch_id,
                 transfer_id=transfer.id,
                 notes=f"Transfer from {transfer.from_location.name}"
             )

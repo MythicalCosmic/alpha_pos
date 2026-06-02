@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body, validate_pagination
+from base.helpers.request import parse_json_body, validate_pagination, coerce_quantity
 from base.helpers.response import json_response
 from base.security.auth import login_required, role_required
 from base.security.audit import audit
@@ -83,7 +83,7 @@ def add_item(request, order_id):
         return json_response(error)
 
     product_id = data.get('product_id')
-    quantity = data.get('quantity', 1)
+    quantity = coerce_quantity(data.get('quantity', 1))
 
     if not product_id:
         return json_response(({
@@ -92,11 +92,11 @@ def add_item(request, order_id):
             "errors": {"product_id": "product_id is required"}
         }, 422))
 
-    if quantity <= 0:
+    if quantity is None:
         return json_response(({
             "success": False,
             "message": "Invalid quantity",
-            "errors": {"quantity": "quantity must be greater than 0"}
+            "errors": {"quantity": "quantity must be a positive integer"}
         }, 422))
 
     result, status_code = WaiterOrderService.add_item(
@@ -114,12 +114,12 @@ def update_item(request, order_id, item_id):
     if error:
         return json_response(error)
 
-    quantity = data.get('quantity')
-    if not quantity or quantity <= 0:
+    quantity = coerce_quantity(data.get('quantity'))
+    if quantity is None:
         return json_response(({
             "success": False,
             "message": "Invalid quantity",
-            "errors": {"quantity": "quantity must be greater than 0"}
+            "errors": {"quantity": "quantity must be a positive integer"}
         }, 422))
 
     result, status_code = WaiterOrderService.update_item(

@@ -47,6 +47,21 @@ class SessionRepository(BaseRepository):
             cache.delete(f"session:{token_hash}")
 
     @classmethod
+    def invalidate_user_cache(cls, user):
+        """Drop the cached Session rows for a user *without* deleting them.
+
+        get_by_session_key caches the session together with its joined user
+        for SESSION_CACHE_TTL (5 min). When an admin suspends a user or
+        changes their role, that stale joined user keeps granting the old
+        access until the entry expires. Clearing the cache forces the next
+        request to re-read the user fresh; the sessions themselves stay valid.
+        """
+        payloads = cls.model.objects.filter(user_id=user).values_list('payload', flat=True)
+        for payload in payloads:
+            if payload:
+                cache.delete(f"session:{payload}")
+
+    @classmethod
     def get_by_user(cls, user):
         return cls.model.objects.filter(user_id=user)
 

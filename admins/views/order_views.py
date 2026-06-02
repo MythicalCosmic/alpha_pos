@@ -1,7 +1,7 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
-from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int
+from base.helpers.request import parse_json_body, safe_page, safe_per_page, safe_int, coerce_quantity
 from base.helpers.response import json_response
 from base.security.permissions import admin_required, permission_required
 from base.security.audit import audit
@@ -108,7 +108,7 @@ def add_item(request, order_id):
         return json_response(error)
 
     product_id = data.get('product_id')
-    quantity = data.get('quantity', 1)
+    quantity = coerce_quantity(data.get('quantity', 1))
 
     if not product_id:
         return json_response(({
@@ -116,10 +116,10 @@ def add_item(request, order_id):
             "errors": {"product_id": "product_id is required"},
         }, 422))
 
-    if quantity <= 0:
+    if quantity is None:
         return json_response(({
             "success": False, "message": "Invalid quantity",
-            "errors": {"quantity": "Must be greater than 0"},
+            "errors": {"quantity": "Must be a positive integer"},
         }, 422))
 
     result, status_code = AdminOrderService.add_item_to_order(order_id, product_id, quantity)
@@ -135,11 +135,11 @@ def update_item(request, order_id, item_id):
     if error:
         return json_response(error)
 
-    quantity = data.get('quantity')
-    if not quantity or quantity <= 0:
+    quantity = coerce_quantity(data.get('quantity'))
+    if quantity is None:
         return json_response(({
             "success": False, "message": "Invalid quantity",
-            "errors": {"quantity": "Must be greater than 0"},
+            "errors": {"quantity": "Must be a positive integer"},
         }, 422))
 
     result, status_code = AdminOrderService.update_order_item(order_id, item_id, quantity)

@@ -386,7 +386,7 @@ class ProductionOrderService:
             return availability_result, availability_status
 
         availability_data = availability_result.get("data", {})
-        if not availability_data.get("ingredients") and availability_data.get("all_available"):
+        if not availability_data.get("all_available"):
             return ServiceResponse.error("Not all ingredients are available")
 
         po.status = ProductionOrder.Status.PLANNED

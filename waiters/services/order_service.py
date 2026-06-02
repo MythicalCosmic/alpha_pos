@@ -114,9 +114,20 @@ def _check_waiter_ownership(order, waiter_user_id):
 
 
 def _recalculate_total(order):
+    from django.db.models import Sum
+    from discounts.repositories import OrderDiscountRepository
+
     order.subtotal = OrderItemRepository.calculate_order_total(order)
-    order.total_amount = order.subtotal - order.discount_amount
-    order.save(update_fields=['subtotal', 'total_amount'])
+    # Re-derive the applied discount from the OrderDiscount rows and never let
+    # a frozen discount exceed the new subtotal — otherwise shrinking a
+    # discounted order drives total_amount negative and mark_as_paid would
+    # *remove* real cash from the register.
+    applied = OrderDiscountRepository.get_for_order(order.id).aggregate(
+        total=Sum('discount_amount'),
+    )['total'] or Decimal('0')
+    order.discount_amount = min(applied, order.subtotal)
+    order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
+    order.save(update_fields=['subtotal', 'discount_amount', 'total_amount'])
 
 
 class WaiterOrderService:

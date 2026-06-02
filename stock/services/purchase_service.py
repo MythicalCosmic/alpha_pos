@@ -727,38 +727,26 @@ class PurchaseReceivingService:
 
     @classmethod
     @transaction.atomic
-    def add_item(cls, receiving_id: int, po_item_id: int, quantity_received: int,
-                 batch_number: int, expiry_date: date, unit_cost: float,
-                 quality_status: str, notes: str) -> Tuple[Dict[str, Any], int]:
-
-        rcv = PurchaseReceivingRepository.get_by_id(receiving_id)
-        if not rcv:
-            return ServiceResponse.not_found("Receiving not found")
-
-        po_item = PurchaseOrderItemRepository.get_by_id(po_item_id)
-        if not po_item:
-            return ServiceResponse.not_found("Purchase order item not found")
-
-        if rcv.status != PurchaseReceiving.Status.DRAFT:
-            return ServiceResponse.error("Cannot add items to completed receiving")
-
-        item = PurchaseReceivingItemRepository.create(
-            receiving=rcv,
-            po_item=po_item,
-            stock_item=po_item.stock_item,
+    def add_item(cls, receiving_id: int, po_item_id: int, quantity_received,
+                 batch_number: str = "", expiry_date: date = None,
+                 unit_cost=None, quality_status: str = "PASSED",
+                 notes: str = "") -> Tuple[Dict[str, Any], int]:
+        # Delegate to the validated PurchaseReceivingItemService.add. The
+        # previous bespoke body trusted raw input — it accepted negative /
+        # over-pending quantities and float costs straight from the client,
+        # driving PurchaseOrderItem.quantity_received negative and poisoning
+        # the moving-average cost on complete(). The defaults here also stop a
+        # request that omits an optional field from 500-ing with a TypeError.
+        return PurchaseReceivingItemService.add(
+            receiving_id=receiving_id,
+            po_item_id=po_item_id,
             quantity_received=quantity_received,
-            unit=po_item.unit,
-            batch_number=batch_number,
+            batch_number=batch_number or "",
             expiry_date=expiry_date,
             unit_cost=unit_cost,
-            quality_status=quality_status,
-            notes=notes,
+            quality_status=quality_status or "PASSED",
+            notes=notes or "",
         )
-
-        return ServiceResponse.success(data={
-            "id": item.id,
-            "item": PurchaseReceivingItemService.serialize(item)
-        }, message="Item added to receiving")
 
     @classmethod
     @transaction.atomic

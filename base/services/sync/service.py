@@ -166,42 +166,74 @@ class SyncService:
             SyncStatus.set_online(True)
 
             status_data = SyncStatus.get()
-            last_pull = status_data.get('last_pull')
-
-            result = fetch_changes(since_timestamp=last_pull)
-            if not result['success']:
-                error = result.get('error', 'Unknown')
-                cls._notify_error(f'Pull failed: {error}')
-                return {'success': False, 'message': error}
-
-            data = result.get('data', {})
-            if not data:
-                return {'success': True, 'message': 'Nothing to pull', 'created': 0, 'updated': 0}
+            cursor = status_data.get('last_pull')
 
             models = get_all_models()
             total_created = 0
             total_updated = 0
             errors = []
+            # Page through the change set. The server caps each response at
+            # per_page and returns has_more + next_since (the frontier that is
+            # safe to resume from). We must follow that frontier instead of
+            # jumping the cursor to server_timestamp, or every record past the
+            # first page is permanently lost on a long-disconnected branch.
+            MAX_PAGES = 10000  # safety bound against a misbehaving server
+            for _ in range(MAX_PAGES):
+                result = fetch_changes(since_timestamp=cursor)
+                if not result['success']:
+                    error = result.get('error', 'Unknown')
+                    cls._notify_error(f'Pull failed: {error}')
+                    SyncStatus.set_last_pull(
+                        total_created, total_updated, [str(e) for e in errors[:1]]
+                    )
+                    return {'success': False, 'message': error,
+                            'created': total_created, 'updated': total_updated}
 
-            for name in SYNC_ORDER:
-                if name not in data:
-                    continue
+                data = result.get('data', {})
+                for name in SYNC_ORDER:
+                    if name not in data:
+                        continue
+                    model_class = models.get(name)
+                    if not model_class:
+                        continue
+                    apply_result = cls._apply_records(model_class, data[name])
+                    total_created += apply_result['created']
+                    total_updated += apply_result['updated']
+                    if apply_result['errors']:
+                        errors.extend(apply_result['errors'])
 
-                model_class = models.get(name)
-                if not model_class:
-                    continue
+                has_more = result.get('has_more', False)
+                next_since = result.get('next_since')
+                server_ts = result.get('server_timestamp')
 
-                apply_result = cls._apply_records(model_class, data[name])
-                total_created += apply_result['created']
-                total_updated += apply_result['updated']
-                if apply_result['errors']:
-                    errors.extend(apply_result['errors'])
+                if not has_more:
+                    # Fully drained — advance the persisted cursor to the
+                    # server's snapshot time.
+                    if server_ts:
+                        SyncStatus.update(last_pull=server_ts)
+                    break
 
-            server_ts = result.get('server_timestamp')
+                if not next_since or next_since == cursor:
+                    # Server reports more but can't give us a frontier to
+                    # advance to (e.g. NULL synced_at rows). Stop without
+                    # advancing the cursor so the next pull retries from the
+                    # same point rather than skipping the unfetched tail.
+                    logger.warning(
+                        'Pull: has_more set but cursor cannot advance '
+                        '(next_since=%r); stopping to avoid data loss', next_since
+                    )
+                    break
+
+                # The frontier is "complete up to next_since"; persisting it now
+                # makes the paging crash-safe (a mid-loop failure resumes here
+                # instead of re-pulling from the start). Re-applies are
+                # idempotent upserts.
+                SyncStatus.update(last_pull=next_since)
+                cursor = next_since
+            else:
+                logger.warning('Pull: hit MAX_PAGES (%s); will resume next cycle', MAX_PAGES)
+
             SyncStatus.set_last_pull(total_created, total_updated, [str(e) for e in errors[:1]])
-
-            if server_ts:
-                SyncStatus.update(last_pull=server_ts)
 
             total = total_created + total_updated
             if total > 0 and not errors:
