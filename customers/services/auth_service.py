@@ -28,6 +28,9 @@ class AuthService:
             'role': user.role,
             'status': user.status,
             'branch_id': user.branch_id,
+            # BE-4: the frontend route guard maps meta.permissions[] against
+            # this list ('*' = all). Mirrors the admin login payload.
+            'permissions': user.permissions or [],
         }
 
     @staticmethod
