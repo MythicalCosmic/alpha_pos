@@ -209,3 +209,88 @@ class TestReverseDeductionIdempotent:
         OrderStockService.reverse_deduction(order_id=order.id, user_id=admin_user.id)
         level.refresh_from_db()
         assert level.quantity == Decimal('100'), 'double reverse must be idempotent'
+
+
+class TestCancelledSpellingContract:
+    """Issue #16 / BE-5: the POS frontend keys filters and badges on the
+    spelling `CANCELLED` (double L). The DB stores `CANCELED` (single L); the
+    customers API must translate at the boundary in both directions."""
+
+    def test_serializer_emits_double_l(self, order_factory, regular_user):
+        order = order_factory(user=regular_user, status='CANCELED')
+        result, status = CustomerOrderService.get_order_by_id(
+            order.id, user_id=regular_user.id, user_role='ADMIN',
+        )
+        assert status == 200
+        assert result['data']['order']['status'] == 'CANCELLED'
+
+    def test_list_filter_accepts_double_l(self, order_factory, regular_user):
+        cancelled = order_factory(user=regular_user, status='CANCELED')
+        order_factory(user=regular_user, status='PREPARING')
+        result, status = CustomerOrderService.get_all_orders(statuses='CANCELLED')
+        assert status == 200
+        ids = [o['id'] for o in result['data']['orders']]
+        assert cancelled.id in ids
+        assert all(o['status'] == 'CANCELLED' for o in result['data']['orders'])
+
+    def test_list_filter_still_accepts_single_l(self, order_factory, regular_user):
+        cancelled = order_factory(user=regular_user, status='CANCELED')
+        result, _ = CustomerOrderService.get_all_orders(statuses='CANCELED')
+        assert cancelled.id in [o['id'] for o in result['data']['orders']]
+
+
+class TestOrderLifecycleContract:
+    """BE-1 / BE-2: idempotent re-cancel and re-ready, 422 on invalid status,
+    and the full order object returned on a status mutation."""
+
+    def test_recancel_is_idempotent_200(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user, status='CANCELED')
+        result, status = CustomerOrderService.update_order_status(
+            order.id, 'CANCELLED', cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER',
+        )
+        assert status == 200
+        assert result['success'] is True
+        assert result['data']['order']['status'] == 'CANCELLED'
+
+    def test_cancelled_order_cannot_transition(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user, status='CANCELED')
+        result, status = CustomerOrderService.update_order_status(
+            order.id, 'PREPARING', cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER',
+        )
+        assert status == 422
+        assert result['success'] is False
+
+    def test_invalid_status_is_422(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user, status='PREPARING')
+        result, status = CustomerOrderService.update_order_status(
+            order.id, 'BOGUS', cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER',
+        )
+        assert status == 422
+
+    def test_status_change_returns_full_order(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user, status='PREPARING')
+        result, status = CustomerOrderService.update_order_status(
+            order.id, 'READY', cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER',
+        )
+        assert status == 200
+        body = result['data']['order']
+        assert body['id'] == order.id
+        assert body['status'] == 'READY'
+        assert 'items' in body and 'total_amount' in body
+
+    def test_mark_ready_is_idempotent(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user, status='READY')
+        from django.utils import timezone
+        order.ready_at = timezone.now()
+        order.save(update_fields=['ready_at'])
+        result, status = CustomerOrderService.mark_order_ready(
+            order.id, cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER',
+        )
+        assert status == 200
+        assert result['success'] is True
+        assert result['data']['status'] == 'READY'

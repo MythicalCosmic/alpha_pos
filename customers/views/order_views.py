@@ -238,6 +238,14 @@ def unmark_item_ready(request, order_id, item_id):
 @login_required
 @idempotent('orders.cancel')
 def cancel_order(request, order_id):
+    # Optional cancellation reason (BE-1). Recorded on the audit trail so the
+    # inkassa/stats reports can attribute who cancelled, when, and why.
+    reason = None
+    if request.body:
+        body, _ = parse_json_body(request)
+        if body:
+            reason = (body.get('reason') or '').strip()[:255] or None
+
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     result, status_code = CustomerOrderService.update_order_status(
         order_id, 'CANCELED', cashier_id,
@@ -249,7 +257,7 @@ def cancel_order(request, order_id):
             AuditLog.Action.ORDER_CANCEL,
             target_type='Order',
             target_id=order_id,
-            metadata={'role': request.user.role},
+            metadata={'role': request.user.role, 'reason': reason},
         )
     return JsonResponse(result, status=status_code)
 

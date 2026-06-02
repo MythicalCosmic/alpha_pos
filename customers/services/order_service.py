@@ -13,6 +13,26 @@ from notifications.handlers.order import OrderNotification
 
 ALLOWED_STATUSES = ['PREPARING', 'READY', 'CANCELED']
 
+# The POS frontend (smart-pos) keys its filters and badges on the spelling
+# `CANCELLED` (double L) — see issue #16. The Django model stores `CANCELED`
+# (single L). Normalize at this API boundary so the wire contract is always
+# the double-L spelling while the DB value is left untouched (no migration).
+def _to_api_status(status):
+    """Internal status -> wire status (CANCELED -> CANCELLED)."""
+    return 'CANCELLED' if status == 'CANCELED' else status
+
+
+def _from_api_status(status):
+    """Wire status -> internal status (CANCELLED -> CANCELED).
+
+    Accepts either spelling so both old and new clients work, and is
+    case-insensitive for robustness.
+    """
+    if not status:
+        return status
+    s = status.strip().upper()
+    return 'CANCELED' if s == 'CANCELLED' else s
+
 ALLOWED_ORDER_FIELDS = {
     'created_at', '-created_at', 'updated_at', '-updated_at',
     'total_amount', '-total_amount', 'display_id', '-display_id',
@@ -44,7 +64,7 @@ def _serialize_order_list(order):
             'id': order.cashier.id,
             'name': f"{order.cashier.first_name} {order.cashier.last_name}"
         } if order.cashier else None,
-        'status': order.status,
+        'status': _to_api_status(order.status),
         'is_paid': order.is_paid,
         'total_amount': str(order.total_amount or 0),
         'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
@@ -116,7 +136,7 @@ def _serialize_order_detail(order):
         } if order.cashier else None,
         'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
         'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
-        'status': order.status,
+        'status': _to_api_status(order.status),
         'is_paid': order.is_paid,
         'paid_at': order.paid_at.isoformat() if order.paid_at else None,
         'total_amount': str(order.total_amount),
@@ -160,7 +180,12 @@ def _parse_statuses(statuses_param):
     param = statuses_param.strip().strip('[]')
     if not param:
         return None
-    return [s.strip().strip('"\'') for s in param.split(',') if s.strip()]
+    # Map each requested status through the boundary so a frontend filter of
+    # `statuses=CANCELLED` matches the stored `CANCELED` rows.
+    return [
+        _from_api_status(s.strip().strip('"\''))
+        for s in param.split(',') if s.strip()
+    ]
 
 
 def _parse_int_list(param):
@@ -549,11 +574,28 @@ class CustomerOrderService:
         if ownership:
             return ownership
 
+        status = _from_api_status(status)
+        # Invalid enum value is a client contract error -> 422 (not 400), so
+        # the frontend can distinguish "bad request shape" from "rejected".
         if status not in ALLOWED_STATUSES:
-            return ServiceResponse.error(f'Invalid status. Allowed: {", ".join(ALLOWED_STATUSES)}')
+            return ServiceResponse.validation_error(
+                errors={'status': f'Allowed: {", ".join(_to_api_status(s) for s in ALLOWED_STATUSES)}'},
+                message='Invalid status',
+            )
 
         if order.status == 'CANCELED':
-            return ServiceResponse.error('Cannot update cancelled order')
+            # Cancelling an already-cancelled order is idempotent: return 200
+            # with the order, no repeated side-effects (the frontend may retry
+            # on a flaky network). Any *other* target from CANCELED is an
+            # illegal transition (the kitchen treats CANCELLED as terminal).
+            if status == 'CANCELED':
+                return CustomerOrderService.get_order_by_id(
+                    order_id, user_id=user_id, user_role=user_role,
+                )
+            return ServiceResponse.validation_error(
+                errors={'status': 'A cancelled order cannot change status'},
+                message='Illegal status transition',
+            )
 
         old_status = order.status
         update_fields = ['status']
@@ -598,9 +640,16 @@ class CustomerOrderService:
         except Exception:
             logger.exception('non-critical stock-handler error in order flow')
 
+        # Return the full updated order object (BE-1/BE-2 contract). Re-fetch
+        # with relations so the serialized payload reflects the just-applied
+        # status and ready_at.
+        fresh = OrderRepository.get_by_id_with_relations(order_id)
         return ServiceResponse.success(
-            data={'status': status},
-            message=f'Order status updated to {status}',
+            data={
+                'status': _to_api_status(status),
+                'order': _serialize_order_detail(fresh) if fresh else None,
+            },
+            message=f'Order status updated to {_to_api_status(status)}',
         )
 
     @staticmethod
@@ -661,7 +710,7 @@ class CustomerOrderService:
                 'order': {
                     'id': order.id,
                     'display_id': order.display_id,
-                    'status': order.status,
+                    'status': _to_api_status(order.status),
                     'all_items_ready': all_ready,
                     'ready_at': order.ready_at.isoformat() if order.ready_at else None,
                     'preparation_time_seconds': order_prep_time,
@@ -700,7 +749,7 @@ class CustomerOrderService:
             order.save(update_fields=['status', 'ready_at'])
 
         return ServiceResponse.success(
-            data={'item_id': item_id, 'order_status': order.status},
+            data={'item_id': item_id, 'order_status': _to_api_status(order.status)},
             message='Item unmarked as ready',
         )
 
@@ -780,7 +829,23 @@ class CustomerOrderService:
             return ServiceResponse.error('Cannot mark cancelled order as ready')
 
         if order.status == 'READY':
-            return ServiceResponse.error('Order is already ready')
+            # Idempotent: the KDS may retry /ready on a flaky network. Return
+            # 200 with the current state instead of an error, and skip the
+            # side-effects (notification, ready_at re-stamp) so a retry can't
+            # reset the prep timer or re-notify.
+            order_prep_time = (
+                (order.ready_at - order.created_at).total_seconds()
+                if order.ready_at else None
+            )
+            return ServiceResponse.success(
+                data={
+                    'status': _to_api_status(order.status),
+                    'ready_at': order.ready_at.isoformat() if order.ready_at else None,
+                    'preparation_time_seconds': order_prep_time,
+                    'preparation_time_formatted': _format_duration(order_prep_time),
+                },
+                message='Order already marked as ready',
+            )
 
         now = timezone.now()
         order.status = 'READY'
@@ -793,7 +858,7 @@ class CustomerOrderService:
 
         return ServiceResponse.success(
             data={
-                'status': order.status,
+                'status': _to_api_status(order.status),
                 'ready_at': order.ready_at.isoformat(),
                 'preparation_time_seconds': order_prep_time,
                 'preparation_time_formatted': _format_duration(order_prep_time),
@@ -835,7 +900,7 @@ class CustomerOrderService:
                 'display_id': order.display_id,
                 'user': f"{order.user.first_name} {order.user.last_name}",
                 'total_amount': str(order.total_amount),
-                'status': order.status,
+                'status': _to_api_status(order.status),
                 'is_paid': order.is_paid,
                 'items_ready': ready_items,
                 'items_total': total_items,
