@@ -27,7 +27,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
-RUN python manage.py collectstatic --noinput 2>/dev/null || true
+# A throwaway SECRET_KEY lets settings import at build time — with DEBUG unset
+# (False) settings is fail-loud without one, which is why this previously ran
+# under `2>/dev/null || true` and silently collected NOTHING. collectstatic
+# needs no real secret and no DB. Fail the build if it errors rather than
+# shipping an admin with no CSS.
+RUN SECRET_KEY=build-time-only-not-used-at-runtime \
+    python manage.py collectstatic --noinput
 
 # Run as a non-root user; createUser ahead of chown so the container can
 # write to the working directory but not poke at root-owned files.
@@ -35,7 +41,9 @@ RUN groupadd --system app && useradd --system --gid app --home /app --shell /usr
     && chown -R app:app /app
 
 COPY --chown=app:app entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Strip any CR so a Windows (CRLF) checkout doesn't yield a `#!/bin/sh\r`
+# shebang that crashes the container with "no such file or directory".
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 USER app
 

@@ -11,6 +11,9 @@ cryptography==48.0.0
 psycopg2-binary==2.9.10
 gunicorn==23.0.0
 django-cors-headers==4.9.0
+# Serves collected static files (admin assets) from gunicorn in production;
+# without it DEBUG=False + no nginx 404s every /static/ request.
+whitenoise==6.8.2
 # Modern Gemini SDK. Replaced the legacy `google-generativeai` package
 # (end-of-life late 2025) — uses `from google import genai; genai.Client(...)`.
 google-genai==2.7.0

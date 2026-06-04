@@ -54,6 +54,11 @@ MIDDLEWARE = [
     # licensing/apps.py — moving this line will fail `manage.py check`.
     'licensing.middleware.LicenseEnforcementMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    # Serve collected static files (Django admin assets, etc.) directly from
+    # gunicorn. Without this, DEBUG=False + no nginx means every /static/...
+    # request 404s and the admin — the documented vendor recovery surface —
+    # renders unstyled. Must sit immediately after SecurityMiddleware.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -99,6 +104,26 @@ else:
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
             'NAME': BASE_DIR / 'db.sqlite3',
+            # SQLite has no row-level locking, so every select_for_update() in
+            # the codebase (stock levels, cash register, display-id counter,
+            # orders) is a silent no-op here. The only real serialization is
+            # SQLite's single-writer database lock. Make that lock usable:
+            #   - WAL lets readers run concurrently with the one writer.
+            #   - busy_timeout makes concurrent writers wait-and-retry instead
+            #     of immediately raising "database is locked".
+            #   - IMMEDIATE takes the write lock at BEGIN so atomic() blocks
+            #     that read-then-write don't deadlock against each other.
+            # This is correctness, not tuning: without it concurrent sales can
+            # lose updates / oversell on the documented single-PC deployment.
+            'OPTIONS': {
+                'timeout': 20,
+                'init_command': (
+                    'PRAGMA journal_mode=WAL;'
+                    'PRAGMA synchronous=NORMAL;'
+                    'PRAGMA foreign_keys=ON;'
+                ),
+                'transaction_mode': 'IMMEDIATE',
+            },
         }
     }
 
@@ -144,6 +169,19 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# WhiteNoise compresses and serves STATIC_ROOT from gunicorn. Use the
+# non-manifest compressed backend: it gzips assets without the strict
+# manifest hashing that 500s the page if a referenced static file wasn't
+# collected. Sufficient for the admin/static surface this backend exposes.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+    },
+}
 
 # Private media (HR documents). Files are NOT served by Django's static
 # file machinery — they're streamed only via auth-gated download views.

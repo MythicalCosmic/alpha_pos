@@ -1,0 +1,11 @@
+# Shell scripts MUST use LF even on Windows checkouts. The Dockerfile does
+# `COPY . .` from the working tree, so a CRLF entrypoint.sh produces a
+# `#!/bin/sh\r` shebang and the container fails to start with
+# "no such file or directory" / "exec format error".
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+install.sh text eol=lf
+start.sh text eol=lf
+
+# Normalize line endings for text by default; let Git decide what's text.
+* text=auto
