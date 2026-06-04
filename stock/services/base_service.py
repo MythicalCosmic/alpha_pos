@@ -19,22 +19,54 @@ def round_decimal(value, places=4):
     return value.quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP)
 
 
+def _max_existing_seq(model_class, field, scope):
+    """Highest sequence number already used for `scope` (prefix-date), or 0.
+
+    Lets the counter seed itself on first use so it never re-issues a number
+    that pre-dates the counter (e.g. the transition day, or rows created by an
+    older build). Cheap, indexed startswith lookup; runs only when the counter
+    row for the scope doesn't exist yet.
+    """
+    last = (
+        model_class.objects
+        .filter(**{f"{field}__startswith": f"{scope}-"})
+        .order_by(f"-{field}")
+        .first()
+    )
+    if not last:
+        return 0
+    try:
+        return int(getattr(last, field).split("-")[-1])
+    except (ValueError, AttributeError):
+        return 0
+
+
 def generate_number(prefix, model_class, field="order_number"):
+    """Allocate the next `PREFIX-YYYYMMDD-NNNN` document number atomically.
+
+    Was a read-max-then-+1 with no lock: two concurrent creates computed the
+    same NNNN, and the second insert violated the unique constraint and aborted
+    its enclosing operation (notably the sale's stock deduction). Now backed by
+    a select_for_update-locked SequenceCounter row, mirroring DisplayIdCounter.
+    """
+    from django.db import transaction
+    from base.models import SequenceCounter
+
     today = timezone.now()
-    date_part = today.strftime("%Y%m%d")
-    filter_kwargs = {f"{field}__startswith": f"{prefix}-{date_part}"}
-    last = model_class.objects.filter(**filter_kwargs).order_by(f"-{field}").first()
+    scope = f"{prefix}-{today.strftime('%Y%m%d')}"
 
-    if last:
-        last_num = getattr(last, field)
-        try:
-            seq = int(last_num.split("-")[-1]) + 1
-        except Exception:
-            seq = 1
-    else:
-        seq = 1
-
-    return f"{prefix}-{date_part}-{seq:04d}"
+    with transaction.atomic():
+        row, created = (
+            SequenceCounter.objects
+            .select_for_update()
+            .get_or_create(
+                scope=scope,
+                defaults={"value": _max_existing_seq(model_class, field, scope)},
+            )
+        )
+        row.value = row.value + 1
+        row.save(update_fields=["value", "updated_at"])
+        return f"{scope}-{row.value:04d}"
 
 
 def get_date_range(period):

@@ -1266,3 +1266,33 @@ class DisplayIdCounter(models.Model):
 
     def __str__(self):
         return f"DisplayIdCounter<{self.scope}={self.value}>"
+
+
+class SequenceCounter(models.Model):
+    """Per-scope monotonic counter for human-readable document numbers
+    (TRX / PO / TRF / CNT / PROD / RCV - YYYYMMDD - NNNN).
+
+    Replaces the racy read-max-then-+1 in
+    `stock.services.base_service.generate_number`, which under concurrent
+    creates produced duplicate numbers and tripped the unique constraint
+    (e.g. `StockTransaction.transaction_number`) — aborting the sale's stock
+    deduction. On Postgres the old read wasn't locked; on SQLite this counter
+    plus the IMMEDIATE-transaction setting serialize allocation. Locked via
+    select_for_update, exactly like DisplayIdCounter.
+
+    One row per `prefix-date` scope. Seeded lazily from the current max so it
+    never collides with numbers created before this counter existed.
+
+    Not a SyncMixin — numbering is per-branch bookkeeping and must never
+    propagate to sibling branches or the cloud.
+    """
+
+    scope = models.CharField(max_length=64, primary_key=True)
+    value = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sequence_counter'
+
+    def __str__(self):
+        return f"SequenceCounter<{self.scope}={self.value}>"

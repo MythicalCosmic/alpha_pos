@@ -184,3 +184,124 @@ class TestRecipeOverDeduction:
         assert deductions[0]['quantity'] == Decimal('0.1'), (
             f"expected 0.1 (1kg / 10 cookies * 1 sold), got {deductions[0]['quantity']}"
         )
+
+
+class TestDocumentNumberAllocation:
+    """Pre-fix: generate_number read the max existing number and added 1 with
+    no lock. Two concurrent sales computed the SAME transaction_number; the
+    second insert violated the unique constraint and aborted the sale's stock
+    deduction. Now backed by a select_for_update-locked SequenceCounter."""
+
+    def test_adjust_issues_unique_sequential_numbers(
+        self, stock_item, location, stock_enabled, admin_user,
+    ):
+        from stock.repositories import StockLevelRepository
+        from stock.services.level_service import StockLevelService
+
+        level = StockLevelRepository.get_or_create_level(stock_item.id, location.id)
+        level.quantity = Decimal('100')
+        level.save()
+
+        numbers = []
+        for _ in range(5):
+            result, status = StockLevelService.adjust(
+                stock_item_id=stock_item.id,
+                location_id=location.id,
+                quantity=Decimal('-1'),
+                movement_type='SALE_OUT',
+                user_id=admin_user.id,
+            )
+            assert status == 200, result
+            numbers.append(result['data']['transaction_number'])
+
+        assert len(set(numbers)) == 5, f'numbers must be unique, got {numbers}'
+        # Sequential within the day's scope: TRX-YYYYMMDD-0001..0005
+        suffixes = sorted(int(n.split('-')[-1]) for n in numbers)
+        assert suffixes == [1, 2, 3, 4, 5], suffixes
+
+    def test_counter_seeds_from_existing_max(
+        self, stock_item, location, base_unit, admin_user,
+    ):
+        """A row created before the counter existed must not be re-issued:
+        the counter seeds itself from the current max for the scope."""
+        from django.utils import timezone
+        from stock.models import StockTransaction
+        from stock.services.base_service import generate_number
+
+        date_part = timezone.now().strftime('%Y%m%d')
+        StockTransaction.objects.create(
+            transaction_number=f'TRX-{date_part}-0007',
+            stock_item=stock_item, location=location, unit=base_unit,
+            movement_type='ADJUSTMENT_PLUS',
+            quantity=Decimal('1'), base_quantity=Decimal('1'),
+            quantity_before=Decimal('0'), quantity_after=Decimal('1'),
+            user=admin_user,
+        )
+
+        nxt = generate_number('TRX', StockTransaction, 'transaction_number')
+        assert nxt == f'TRX-{date_part}-0008', (
+            f'must continue past existing max 0007, got {nxt}'
+        )
+
+
+class TestReserveForOrderHonorsFailures:
+    """Pre-fix: reserve_for_order discarded the (result, status) from
+    StockLevelService.reserve and appended every item as 'reserved', so an
+    insufficient-stock failure was reported as success and the order proceeded
+    against stock that was never held (oversell)."""
+
+    def _setup_recipe_product(self, stock_item, base_unit):
+        from base.models import Category, Product
+        from stock.models import Recipe, RecipeIngredient, ProductStockLink, StockItem
+
+        output_item = StockItem.objects.create(
+            name='Cookie', base_unit=base_unit, item_type='FINISHED',
+        )
+        recipe = Recipe.objects.create(
+            name='Cookie Recipe', code='COOKIE-R', output_item=output_item,
+            output_quantity=Decimal('10'), output_unit=base_unit,
+        )
+        RecipeIngredient.objects.create(
+            recipe=recipe, stock_item=stock_item, quantity=Decimal('1'), unit=base_unit,
+        )
+        category = Category.objects.create(name='Bakery')
+        product = Product.objects.create(name='Cookie', price='2.00', category=category)
+        ProductStockLink.objects.create(
+            product=product, link_type='RECIPE', recipe=recipe,
+            quantity_per_sale=Decimal('1'),
+        )
+        return product
+
+    def test_insufficient_stock_returns_error_and_does_not_reserve(
+        self, stock_item, location, base_unit, admin_user,
+    ):
+        from stock.models import StockSettings
+        from stock.repositories import StockLevelRepository
+        from stock.services.order_service import OrderStockService
+
+        settings = StockSettings.load()
+        settings.stock_enabled = True
+        settings.reserve_on_order_create = True
+        settings.allow_negative_stock = False
+        settings.save()
+
+        product = self._setup_recipe_product(stock_item, base_unit)
+
+        # Flour level exists but is empty → reservation must fail.
+        level = StockLevelRepository.get_or_create_level(stock_item.id, location.id)
+        level.quantity = Decimal('0')
+        level.reserved_quantity = Decimal('0')
+        level.save()
+
+        result, status = OrderStockService.reserve_for_order(
+            order_id=999,
+            order_items=[{'product_id': product.id, 'quantity': 1}],
+            location_id=location.id,
+            user_id=admin_user.id,
+        )
+
+        assert status >= 400, f'insufficient stock must error, got {status}: {result}'
+        assert result['success'] is False
+        # Rolled back: nothing left reserved.
+        level.refresh_from_db()
+        assert level.reserved_quantity == Decimal('0'), 'must not hold any reservation'

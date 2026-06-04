@@ -65,6 +65,7 @@ def send_batch(model_name, records, retry=True):
                     return {
                         'success': False,
                         'error': f'Server rejected all records: {errors[0][:200]}',
+                        'failed_uuids': data.get('failed_uuids', []),
                         'response': data,
                     }
 
@@ -74,6 +75,9 @@ def send_batch(model_name, records, retry=True):
                     'updated': data.get('updated', 0),
                     'skipped': data.get('skipped', 0),
                     'errors': errors,
+                    # Records the receiver could not apply. The pusher keeps these
+                    # queued instead of purging them on this HTTP-200.
+                    'failed_uuids': data.get('failed_uuids', []),
                     'response': data,
                 }
 

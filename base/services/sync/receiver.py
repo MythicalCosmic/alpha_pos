@@ -147,6 +147,11 @@ class CloudReceiver:
             'updated': 0,
             'skipped': 0,
             'errors': [],
+            # UUIDs of records that raised during apply. Surfaced to the pusher
+            # so it removes ONLY confirmed records from its durable queue and
+            # re-queues the failures — otherwise a partial-failure batch was
+            # purged wholesale on the HTTP-200, silently losing the bad rows.
+            'failed_uuids': [],
         }
 
         try:
@@ -181,8 +186,11 @@ class CloudReceiver:
                 else:
                     result['skipped'] += 1
             except Exception as e:
-                error_msg = f'{record_data.get("uuid", "?")}: {str(e)}'
+                rec_uuid = record_data.get("uuid")
+                error_msg = f'{rec_uuid or "?"}: {str(e)}'
                 result['errors'].append(error_msg)
+                if rec_uuid:
+                    result['failed_uuids'].append(rec_uuid)
                 logger.error(f'Receive error: {error_msg}')
 
         return result

@@ -367,6 +367,16 @@ class OrderStockService:
                     reference_id=order_id
                 )
 
+                # Previously the (result, status) was discarded and every item
+                # was appended as if reserved — so an insufficient-stock failure
+                # was reported as success and the order proceeded against stock
+                # that was never actually held (oversell). Mirror
+                # deduct_for_order: roll the whole reservation back and surface
+                # the error so the caller can refuse the order.
+                if status >= 400:
+                    transaction.set_rollback(True)
+                    return result, status
+
                 reservations.append({
                     "stock_item_id": item["stock_item_id"],
                     "quantity": str(item["quantity"])

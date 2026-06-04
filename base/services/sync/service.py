@@ -77,9 +77,26 @@ class SyncService:
                     result = send_batch(model_name, batch_data)
 
                     if result['success']:
-                        synced_uuids.extend(batch_uuids)
-                        total_synced += len(batch_uuids)
-                        logger.info(f'Synced {len(batch_uuids)} {model_name} records')
+                        # A 200 can still carry per-record failures (partial
+                        # batch). Remove ONLY the records the receiver confirmed
+                        # and keep the rest queued — purging the whole batch on
+                        # the HTTP-200 silently lost the failed rows.
+                        failed = set(result.get('failed_uuids') or [])
+                        confirmed = [u for u in batch_uuids if u not in failed]
+                        synced_uuids.extend(confirmed)
+                        total_synced += len(confirmed)
+                        if failed:
+                            failed_in_batch = [u for u in batch_uuids if u in failed]
+                            total_failed += len(failed_in_batch)
+                            SyncQueue.mark_batch_failed(
+                                failed_in_batch,
+                                'receiver rejected record(s) in a partial batch',
+                            )
+                            msg = (f'{model_name}: {len(failed_in_batch)} of '
+                                   f'{len(batch_uuids)} record(s) rejected by receiver')
+                            errors.append(msg)
+                            logger.warning(msg)
+                        logger.info(f'Synced {len(confirmed)} {model_name} records')
                     else:
                         total_failed += len(batch)
                         error_msg = f'{model_name}: {result.get("error", "Unknown")}'
