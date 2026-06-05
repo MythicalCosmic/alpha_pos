@@ -48,8 +48,9 @@ CONFIG_FIELDS = [
     ('SYNC_ENABLED', 'False'),
     ('CLOUD_SYNC_URL', ''),
     ('CLOUD_SYNC_TOKEN', ''),
-    # Telegram
+    # Telegram (token + chat ids drive real message delivery)
     ('TELEGRAM_BOT_TOKEN', ''),
+    ('TELEGRAM_CHAT_IDS', ''),
     ('TELEGRAM_WEBHOOK_SECRET', ''),
     # Fiscalization (this business's OWN identity)
     ('FISCALIZATION_MODE', 'off'),

@@ -19,6 +19,18 @@ local POS server, and runs the built-in self-tests.
 - **Tests tab:** test server connection · send/get mock sync data · Telegram bot
   test · fake notification · fiscalization test (mock sign + QR).
 - **Fiscalization tab:** flip mode off/mock/sandbox/live live; run a test.
+- **License & Subscription tab:** view status/expiry/balance, register online
+  against the control center + pick a plan, request a plan change, run a
+  heartbeat, or **activate offline** (interim, no control center needed).
+- **Notifications tab:** admin Telegram **bot token + chat IDs** (real delivery,
+  saved to NotificationSettings), brand name, and a **message-layout editor** —
+  edit each notification template's text with live preview + safe-placeholder
+  validation, wired to the real notification models.
+- **Open full admin panel:** opens Django admin (`/admin/`) — full CRUD over
+  every backend model (products, users, stock, loyalty, queue, …). Telegram
+  message delivery is REAL (calls api.telegram.org); it needs a bot token + chat
+  IDs to actually send. The inbound ordering bot additionally needs the webhook
+  pointed at a public HTTPS URL Telegram can reach (not localhost).
 
 ## Run from source (dev)
 

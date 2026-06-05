@@ -59,16 +59,29 @@ class Api:
             else:
                 clean[k] = v
         config_store.write_config(clean)
-        # Apply the fiscal mode live (cache toggle) so it takes effect without a
-        # restart; other settings need a server restart (noted in the UI).
         try:
             self.server.ensure_django()
+            # Fiscal mode is a live cache toggle — applies without a restart.
             from fiscalization.config import FiscalConfig
             mode = clean.get('FISCALIZATION_MODE')
             if mode:
                 FiscalConfig.set_mode(mode)
+            # Telegram token + chat ids go into the DB-backed NotificationSettings
+            # (the canonical source TelegramAPI reads) so messages deliver
+            # immediately — no restart, unlike the .env-only settings.
+            token = clean.get('TELEGRAM_BOT_TOKEN')
+            chat_raw = clean.get('TELEGRAM_CHAT_IDS')
+            if (token and token != '••••••••') or chat_raw is not None:
+                from notifications.models import NotificationSettings
+                ns = NotificationSettings.load()
+                if token and token != '••••••••':
+                    ns.bot_token = token.strip()
+                if chat_raw is not None:
+                    ns.chat_ids = [c.strip() for c in str(chat_raw)
+                                   .replace(' ', ',').split(',') if c.strip()]
+                ns.save()
         except Exception:  # noqa: BLE001
-            logger.exception('live fiscal mode apply failed')
+            logger.exception('live config apply failed')
         return {'ok': True, 'restart_required': self.server.is_running()}
 
     # -- install + server lifecycle -----------------------------------------
@@ -158,8 +171,9 @@ class Api:
     def telegram_test(self):
         self.server.ensure_django()
         from base.notifications.telegram import TelegramAPI
-        res = TelegramAPI.send_message('✅ Alpha POS test message from the control panel.')
-        return {'ok': bool(res), 'result': bool(res)}
+        # send_message returns (ok, error) — a REAL send to api.telegram.org.
+        ok, err = TelegramAPI.send_message('✅ Alpha POS test message from the control panel.')
+        return {'ok': bool(ok), 'error': err}
 
     @_safe
     def send_fake_notification(self):
@@ -167,8 +181,161 @@ class Api:
         from base.notifications.telegram import TelegramAPI
         text = ('🧾 <b>TEST notification</b>\n\nOrder #TEST paid: 60 000 soʼm\n'
                 'This is a fake notification from the control panel.')
-        res = TelegramAPI.send_message(text)
-        return {'ok': bool(res), 'sent': bool(res)}
+        ok, err = TelegramAPI.send_message(text)
+        return {'ok': bool(ok), 'error': err}
+
+    @_safe
+    def get_telegram(self):
+        self.server.ensure_django()
+        from notifications.models import NotificationSettings
+        ns = NotificationSettings.load()
+        return {'ok': True, 'bot_token_set': bool(ns.bot_token), 'chat_ids': ns.chat_ids}
+
+    # -- notifications: admin telegram config + message layouts -------------
+    @_safe
+    def notif_settings(self):
+        self.server.ensure_django()
+        from notifications.models import NotificationSettings
+        ns = NotificationSettings.load()
+        return {'ok': True, 'bot_token_set': bool(ns.bot_token),
+                'chat_ids': ns.chat_ids, 'brand_name': getattr(ns, 'brand_name', '')}
+
+    @_safe
+    def save_notif_settings(self, bot_token=None, chat_ids=None, brand_name=None):
+        self.server.ensure_django()
+        from django.core.cache import cache
+        from notifications.models import NotificationSettings
+        ns = NotificationSettings.load()
+        if bot_token and bot_token != '••••••••':
+            ns.bot_token = bot_token.strip()
+        if chat_ids is not None:
+            if isinstance(chat_ids, str):
+                chat_ids = [c.strip() for c in chat_ids.replace(' ', ',').split(',') if c.strip()]
+            ns.chat_ids = chat_ids
+        if brand_name is not None:
+            ns.brand_name = brand_name
+        ns.save()
+        try:
+            cache.delete(getattr(NotificationSettings, '_CACHE_KEY', 'notif:settings:v1'))
+        except Exception:
+            pass
+        return {'ok': True}
+
+    @_safe
+    def list_templates(self):
+        """All Telegram/notification message layouts, editable."""
+        self.server.ensure_django()
+        from notifications.models import NotificationTemplate
+        rows = [{
+            'id': t.id, 'notification_type': t.notification_type, 'name': t.name,
+            'template_text': t.template_text, 'description': t.description,
+            'is_enabled': t.is_enabled, 'language': t.language,
+        } for t in NotificationTemplate.objects.all()]
+        return {'ok': True, 'templates': rows}
+
+    @_safe
+    def save_template(self, template_id, template_text, is_enabled=True):
+        self.server.ensure_django()
+        from django.core.cache import cache
+        from notifications.models import NotificationTemplate
+        from notifications.services.safe_format import validate_template_text
+        err = validate_template_text(template_text)
+        if err:
+            return {'ok': False, 'error': err}
+        t = NotificationTemplate.objects.filter(id=template_id).first()
+        if not t:
+            return {'ok': False, 'error': 'template not found'}
+        t.template_text = template_text
+        t.is_enabled = bool(is_enabled)
+        t.save()
+        try:
+            cache.delete(f'notif:template:{t.notification_type}')
+        except Exception:
+            pass
+        return {'ok': True}
+
+    @_safe
+    def preview_template(self, template_text):
+        self.server.ensure_django()
+        import string
+        from notifications.services.safe_format import validate_template_text, safe_format
+        err = validate_template_text(template_text)
+        if err:
+            return {'ok': False, 'error': err}
+        samples = {'order_id': 'A-0042', 'display_id': 'A-0042', 'total': '60 000',
+                   'amount': '60 000', 'customer': 'Akmal', 'name': 'Akmal',
+                   'status': 'READY', 'branch': 'Main', 'phone': '+998 90 123 45 67',
+                   'brand_name': 'My Cafe', 'time': '14:32', 'date': '2026-06-05',
+                   'cashier': 'Dilnoza', 'table': '7', 'points': '12'}
+        ctx = {}
+        for _l, f, _s, _c in string.Formatter().parse(template_text):
+            if f:
+                ctx[f] = samples.get(f, f.upper())
+        try:
+            return {'ok': True, 'rendered': safe_format(template_text, **ctx)}
+        except Exception as exc:  # noqa: BLE001
+            return {'ok': False, 'error': str(exc)}
+
+    @_safe
+    def admin_url(self):
+        """The Django admin — full CRUD over every backend model (products,
+        users, stock, loyalty, queue, ...)."""
+        return {'ok': True, 'url': self.server.url() + '/admin/',
+                'running': self.server.is_running()}
+
+    # -- license / subscription ---------------------------------------------
+    @_safe
+    def license_register(self, email, plan_id=None):
+        """Register this install against the control center (online). Requires
+        LICENSE_CONTROL_CENTER_URL — returns its error if not configured."""
+        self.server.ensure_django()
+        from licensing.services import heartbeat
+        body, status = heartbeat.register(email, plan_id)
+        return {'ok': bool(body.get('success')), 'status': status, 'data': body}
+
+    @_safe
+    def license_plans(self):
+        self.server.ensure_django()
+        from licensing.services import heartbeat
+        body, status = heartbeat.list_plans()
+        return {'ok': status == 200, 'status': status, 'data': body}
+
+    @_safe
+    def license_plan_change(self, plan_id, note=''):
+        self.server.ensure_django()
+        from licensing.services import heartbeat
+        body, status = heartbeat.request_plan_change(plan_id, note)
+        return {'ok': status in (200, 201) or bool(body.get('success')),
+                'status': status, 'data': body}
+
+    @_safe
+    def license_heartbeat_now(self):
+        self.server.ensure_django()
+        from licensing.services.heartbeat import do_heartbeat
+        body, status = do_heartbeat()
+        return {'ok': status == 200, 'status': status, 'data': body}
+
+    @_safe
+    def license_activate_offline(self, email='', org='', expires=''):
+        """Interim activation with no control center: flips the license ACTIVE
+        locally. expires='' means a perpetual license (explicit)."""
+        self.server.ensure_django()
+        import io
+        from django.core.management import call_command
+        out = io.StringIO()
+        call_command('activate_offline', stdout=out, email=email or '', org=org or '',
+                     expires=expires or '', perpetual=not bool(expires), deactivate=False)
+        return {'ok': True, 'output': out.getvalue().strip()}
+
+    @_safe
+    def license_deactivate(self):
+        self.server.ensure_django()
+        import io
+        from django.core.management import call_command
+        out = io.StringIO()
+        call_command('activate_offline', stdout=out, deactivate=True,
+                     email='', org='', expires='', perpetual=False)
+        return {'ok': True, 'output': out.getvalue().strip()}
 
     # -- fiscalization -------------------------------------------------------
     @_safe

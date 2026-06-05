@@ -102,6 +102,8 @@
     <div class="brand">Alpha<span>POS</span></div>
     <nav class="nav">
       <button data-tab="dashboard" class="active">🏠 Dashboard</button>
+      <button data-tab="license">🔑 License &amp; Subscription</button>
+      <button data-tab="notifications">📨 Notifications</button>
       <button data-tab="config">⚙️ Configuration</button>
       <button data-tab="tests">🧪 Tests</button>
       <button data-tab="fiscal">🧾 Fiscalization</button>
@@ -149,6 +151,76 @@
       </div>
       <div class="row" style="margin-top:18px">
         <button class="btn ghost" onclick="refreshAll()">↻ Refresh</button>
+        <button class="btn" onclick="openAdmin()">🗄️ Open full admin panel</button>
+        <span class="result" id="admin-hint"></span>
+      </div>
+    </section>
+
+    <!-- LICENSE -->
+    <section id="license" class="hidden">
+      <h1>License &amp; Subscription</h1>
+      <div class="sub">Register this install, choose a plan, or activate offline.</div>
+      <div class="grid">
+        <div class="card">
+          <h3>Current status</h3>
+          <div class="kv"><span>Status</span><span id="lz-status">—</span></div>
+          <div class="kv"><span>Org</span><span id="lz-org">—</span></div>
+          <div class="kv"><span>Expires</span><span id="lz-expires">—</span></div>
+          <div class="kv"><span>Days left</span><span id="lz-days">—</span></div>
+          <div class="kv"><span>Balance</span><span id="lz-balance">—</span></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn ghost" onclick="run('license_heartbeat_now','lz-hb')">Sync now (heartbeat)</button>
+            <span class="result" id="lz-hb"></span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Register (online)</h3>
+          <div class="field full"><label>Email</label><input id="lz-email" type="email" placeholder="you@business.uz"></div>
+          <div class="field full" style="margin-top:10px"><label>Plan</label>
+            <select id="lz-plan"><option value="">— load plans —</option></select></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn ghost" onclick="loadPlans()">Load plans</button>
+            <button class="btn" onclick="doRegister()">Register</button>
+          </div>
+          <span class="result" id="lz-reg"></span>
+          <div class="qr" style="margin-top:8px">Needs the control-center URL set in Configuration. Without it, use offline activation →</div>
+        </div>
+        <div class="card">
+          <h3>Activate offline (interim)</h3>
+          <div class="field full"><label>Email</label><input id="lz-oemail" type="email"></div>
+          <div class="field full" style="margin-top:10px"><label>Organization</label><input id="lz-oorg" type="text"></div>
+          <div class="field full" style="margin-top:10px"><label>Expires (YYYY-MM-DD, blank = perpetual)</label><input id="lz-oexp" type="text" placeholder="2027-01-01"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" onclick="doActivateOffline()">Activate offline</button>
+            <button class="btn ghost" onclick="doDeactivate()">Deactivate</button>
+          </div>
+          <span class="result" id="lz-off"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- NOTIFICATIONS -->
+    <section id="notifications" class="hidden">
+      <h1>Notifications</h1>
+      <div class="sub">Admin Telegram bot config and the message layouts that go out to staff/customers.</div>
+      <div class="card">
+        <h3>Telegram (admin)</h3>
+        <div class="form">
+          <div class="field full"><label>Bot token (from @BotFather)</label><input id="nt-token" type="password" placeholder="leave blank to keep existing"></div>
+          <div class="field full"><label>Chat IDs (comma-separated — staff/admin chats that receive alerts)</label><input id="nt-chats" type="text" placeholder="-1001234567890, 987654321"></div>
+          <div class="field"><label>Brand name</label><input id="nt-brand" type="text"></div>
+        </div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" onclick="saveNotifSettings()">Save Telegram settings</button>
+          <button class="btn ghost" onclick="run('telegram_test','nt-test')">Send test message</button>
+          <span class="result" id="nt-test"></span>
+        </div>
+        <div class="qr" id="nt-status" style="margin-top:8px"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Message layouts</h3>
+        <div class="sub" style="margin:0 0 12px">Edit how each notification reads. Use only <code>{named}</code> placeholders.</div>
+        <div id="tpl-list" class="test-list">Loading…</div>
       </div>
     </section>
 
@@ -269,8 +341,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
-  ['dashboard','config','tests','fiscal'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+  ['dashboard','license','notifications','config','tests','fiscal'].forEach(id=>document.getElementById(id).classList.add('hidden'));
   document.getElementById(b.dataset.tab).classList.remove('hidden');
+  if(b.dataset.tab==='license') loadLicense();
+  if(b.dataset.tab==='notifications') loadNotifications();
 });
 
 async function agreeTos(){ await api.accept_tos(); document.getElementById('tos').classList.add('hidden'); toast('Welcome to Alpha POS'); }
@@ -338,7 +412,7 @@ async function buildConfigForm(){
   const groups={'General':['BRANCH_ID','DEPLOYMENT_MODE','PORT'],
     'Licensing':['LICENSE_CONTROL_CENTER_URL'],
     'Sync (cloud)':['SYNC_ENABLED','CLOUD_SYNC_URL','CLOUD_SYNC_TOKEN'],
-    'Telegram':['TELEGRAM_BOT_TOKEN','TELEGRAM_WEBHOOK_SECRET'],
+    'Telegram (webhook — bot token/chats are in the Notifications tab)':['TELEGRAM_WEBHOOK_SECRET'],
     'Fiscalization (your TIN)':['FISCALIZATION_MODE','FISCAL_PROVIDER','FISCAL_TIN','FISCAL_PROVIDER_URL','FISCAL_MERCHANT_ID','FISCAL_SECRET','FISCAL_VAT_PERCENT','FISCAL_BLOCK_ON_FAILURE']};
   const form=document.getElementById('cfgform'); form.innerHTML='';
   for(const [g,keys] of Object.entries(groups)){
@@ -393,6 +467,120 @@ document.querySelectorAll('#modeseg button').forEach(b=>b.onclick=async()=>{
   const r=await api.fiscal_set_mode(b.dataset.mode);
   if(r.ok){ toast('Fiscal mode: '+r.mode); refreshAll(); }
 });
+
+// ---- Open admin (full Django admin = CRUD over every model) ----
+async function openAdmin(){
+  const r = await api.admin_url();
+  if(!r.running){ document.getElementById('admin-hint').className='result err';
+    document.getElementById('admin-hint').textContent='Start the server first'; return; }
+  window.open(r.url, '_blank');
+  document.getElementById('admin-hint').className='result';
+  document.getElementById('admin-hint').textContent='Opened '+r.url+' (login with your admin account)';
+}
+
+// ---- License & Subscription ----
+async function loadLicense(){
+  const r = await api.license_status();
+  if(r.ok){ const l=r.license;
+    document.getElementById('lz-status').innerHTML=pill(l.status==='ACTIVE', l.status||'—');
+    document.getElementById('lz-org').textContent=l.org_name||'—';
+    document.getElementById('lz-expires').textContent=fmt(l.expires_at);
+    document.getElementById('lz-days').textContent=l.days_remaining??'—';
+    document.getElementById('lz-balance').textContent=l.balance!=null?l.balance:'—';
+  }
+}
+async function loadPlans(){
+  const sel=document.getElementById('lz-plan');
+  const r=await api.license_plans();
+  if(!r.ok){ toast('Could not load plans (control center not reachable)'); return; }
+  const plans=(r.data&&(r.data.plans||r.data.data))||[];
+  sel.innerHTML='<option value="">— choose a plan —</option>';
+  plans.forEach(p=>{ const o=document.createElement('option');
+    o.value=p.id||p.plan_id||p.code; o.textContent=(p.name||o.value)+(p.price?(' — '+p.price):'');
+    sel.appendChild(o); });
+  toast(plans.length+' plans loaded');
+}
+async function doRegister(){
+  const el=document.getElementById('lz-reg'); el.className='result'; el.textContent='Registering…';
+  const email=document.getElementById('lz-email').value.trim();
+  const plan=document.getElementById('lz-plan').value||null;
+  if(!email){ el.className='result err'; el.textContent='Email required'; return; }
+  const r=await api.license_register(email, plan);
+  el.className='result '+(r.ok?'ok':'err');
+  el.textContent=r.ok?'Registered & activated':(r.data&&r.data.message)||r.error||'Failed';
+  loadLicense();
+}
+async function doActivateOffline(){
+  const el=document.getElementById('lz-off'); el.className='result'; el.textContent='Activating…';
+  const r=await api.license_activate_offline(
+    document.getElementById('lz-oemail').value.trim(),
+    document.getElementById('lz-oorg').value.trim(),
+    document.getElementById('lz-oexp').value.trim());
+  el.className='result '+(r.ok?'ok':'err'); el.textContent=r.ok?'Activated offline':(r.error||'Failed');
+  loadLicense(); refreshAll();
+}
+async function doDeactivate(){
+  const el=document.getElementById('lz-off');
+  const r=await api.license_deactivate();
+  el.className='result '+(r.ok?'ok':'err'); el.textContent=r.ok?'Deactivated':(r.error||'Failed');
+  loadLicense(); refreshAll();
+}
+
+// ---- Notifications: telegram config + message layouts ----
+async function loadNotifications(){
+  const r=await api.notif_settings();
+  if(r.ok){
+    document.getElementById('nt-token').placeholder=r.bot_token_set?'•••••••• (set — blank keeps it)':'paste bot token';
+    document.getElementById('nt-chats').value=(r.chat_ids||[]).join(', ');
+    document.getElementById('nt-brand').value=r.brand_name||'';
+    document.getElementById('nt-status').textContent='Bot token '+(r.bot_token_set?'configured':'NOT set')+' · '+((r.chat_ids||[]).length)+' chat id(s)';
+  }
+  loadTemplates();
+}
+async function saveNotifSettings(){
+  const r=await api.save_notif_settings(
+    document.getElementById('nt-token').value,
+    document.getElementById('nt-chats').value,
+    document.getElementById('nt-brand').value);
+  if(r.ok){ toast('Telegram settings saved'); document.getElementById('nt-token').value=''; loadNotifications(); }
+  else toast(r.error||'Save failed');
+}
+async function loadTemplates(){
+  const box=document.getElementById('tpl-list');
+  const r=await api.list_templates();
+  if(!r.ok){ box.textContent=r.error||'Failed to load'; return; }
+  if(!r.templates.length){ box.innerHTML='<div class="sub">No templates yet. They are seeded by the backend; you can also edit them in the full admin panel.</div>'; return; }
+  box.innerHTML='';
+  r.templates.forEach(t=>{
+    const card=document.createElement('div'); card.className='test'; card.style.display='block';
+    card.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center">'+
+      '<b>'+t.name+' <small style="color:var(--muted)">('+t.notification_type+')</small></b>'+
+      '<label style="font-size:12px;color:var(--muted)"><input type="checkbox" '+(t.is_enabled?'checked':'')+' id="en-'+t.id+'"> enabled</label></div>'+
+      (t.description?'<small style="color:var(--muted)">'+t.description+'</small>':'')+
+      '<textarea id="tx-'+t.id+'" style="width:100%;min-height:80px;margin-top:8px;background:var(--panel2);'+
+      'border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font-family:monospace;font-size:13px">'+
+      (t.template_text||'').replace(/</g,'&lt;')+'</textarea>'+
+      '<div class="row" style="margin-top:8px">'+
+      '<button class="btn ghost" onclick="previewTpl('+t.id+')">Preview</button>'+
+      '<button class="btn" onclick="saveTpl('+t.id+')">Save</button>'+
+      '<span class="result" id="tr-'+t.id+'"></span></div>'+
+      '<div class="qr" id="pv-'+t.id+'"></div>';
+    box.appendChild(card);
+  });
+}
+async function previewTpl(id){
+  const r=await api.preview_template(document.getElementById('tx-'+id).value);
+  const pv=document.getElementById('pv-'+id);
+  if(r.ok){ pv.style.color='var(--text)'; pv.innerHTML='<b>Preview:</b><br>'+r.rendered.replace(/\n/g,'<br>'); }
+  else { pv.style.color='var(--red)'; pv.textContent=r.error; }
+}
+async function saveTpl(id){
+  const el=document.getElementById('tr-'+id);
+  const r=await api.save_template(id, document.getElementById('tx-'+id).value, document.getElementById('en-'+id).checked);
+  el.className='result '+(r.ok?'ok':'err'); el.textContent=r.ok?'Saved':(r.error||'Failed');
+  if(r.ok) toast('Layout saved');
+}
 </script>
 </body>
 </html>
