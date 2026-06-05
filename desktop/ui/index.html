@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpha POS — Control Panel</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171d2b; --panel2:#1e2536; --line:#2a3346;
+    --text:#e6eaf2; --muted:#8a94a8; --accent:#3b82f6; --accent2:#2563eb;
+    --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);
+       color:var(--text);height:100vh;overflow:hidden}
+  .app{display:flex;height:100vh}
+  /* Sidebar */
+  .side{width:210px;background:var(--panel);border-right:1px solid var(--line);
+        display:flex;flex-direction:column;padding:18px 0}
+  .brand{font-weight:700;font-size:18px;padding:0 22px 18px;letter-spacing:.3px}
+  .brand span{color:var(--accent)}
+  .nav{display:flex;flex-direction:column;gap:2px;padding:0 10px}
+  .nav button{all:unset;cursor:pointer;padding:11px 14px;border-radius:9px;
+        color:var(--muted);font-size:14px;display:flex;gap:10px;align-items:center}
+  .nav button:hover{background:var(--panel2);color:var(--text)}
+  .nav button.active{background:var(--accent);color:#fff}
+  .side .foot{margin-top:auto;padding:14px 22px;color:var(--muted);font-size:12px}
+  /* Main */
+  .main{flex:1;overflow:auto;padding:26px 30px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card h3{margin:0 0 12px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .kv{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:none}
+  .kv span:last-child{color:var(--muted)}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600}
+  .pill.on{background:rgba(34,197,94,.15);color:var(--green)}
+  .pill.off{background:rgba(239,68,68,.15);color:var(--red)}
+  .pill.warn{background:rgba(245,158,11,.15);color:var(--amber)}
+  .dot{width:8px;height:8px;border-radius:99px;background:currentColor}
+  /* Big start button */
+  .hero{display:flex;flex-direction:column;align-items:center;justify-content:center;
+        padding:34px 0 26px}
+  .power{width:170px;height:170px;border-radius:50%;border:none;cursor:pointer;
+        font-size:17px;font-weight:700;color:#fff;background:linear-gradient(160deg,#22c55e,#16a34a);
+        box-shadow:0 16px 40px rgba(34,197,94,.35);transition:transform .15s, box-shadow .15s;
+        display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}
+  .power:hover{transform:translateY(-2px)}
+  .power.running{background:linear-gradient(160deg,#ef4444,#dc2626);box-shadow:0 16px 40px rgba(239,68,68,.35)}
+  .power .ico{font-size:40px}
+  .hero .url{margin-top:14px;color:var(--muted);font-size:13px}
+  /* Forms */
+  .form{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field.full{grid-column:1/3}
+  label{font-size:12px;color:var(--muted)}
+  input,select{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+        color:var(--text);padding:9px 11px;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  .group-title{grid-column:1/3;margin:10px 0 0;font-size:12px;color:var(--accent);
+        text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+  /* Buttons */
+  .btn{all:unset;cursor:pointer;background:var(--accent);color:#fff;padding:10px 16px;
+        border-radius:9px;font-size:14px;font-weight:600;text-align:center}
+  .btn:hover{background:var(--accent2)}
+  .btn.ghost{background:var(--panel2);border:1px solid var(--line)}
+  .btn.ghost:hover{background:var(--line)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .test-list{display:flex;flex-direction:column;gap:10px}
+  .test{display:flex;align-items:center;justify-content:space-between;gap:12px;
+        background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+  .test .meta{display:flex;flex-direction:column;gap:3px}
+  .test .meta b{font-size:14px}
+  .test .meta small{color:var(--muted);font-size:12px}
+  .result{font-size:12px;color:var(--muted);margin-left:auto;max-width:320px;text-align:right;word-break:break-word}
+  .result.ok{color:var(--green)} .result.err{color:var(--red)}
+  .hidden{display:none!important}
+  /* ToS overlay */
+  .overlay{position:fixed;inset:0;background:rgba(8,11,18,.92);display:flex;
+        align-items:center;justify-content:center;z-index:50;padding:30px}
+  .tos{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+        max-width:620px;width:100%;padding:26px}
+  .tos h2{margin:0 0 10px}
+  .tos .body{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+        padding:16px;max-height:300px;overflow:auto;font-size:13px;color:var(--muted);white-space:pre-wrap;line-height:1.5}
+  .tos .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+        background:var(--panel2);border:1px solid var(--line);padding:11px 18px;border-radius:10px;
+        font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60}
+  .toast.show{opacity:1}
+  .modeseg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .modeseg button{all:unset;cursor:pointer;padding:8px 16px;font-size:13px;color:var(--muted)}
+  .modeseg button.active{background:var(--accent);color:#fff}
+  .qr{margin-top:12px;font-size:12px;color:var(--muted);word-break:break-all}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">Alpha<span>POS</span></div>
+    <nav class="nav">
+      <button data-tab="dashboard" class="active">🏠 Dashboard</button>
+      <button data-tab="config">⚙️ Configuration</button>
+      <button data-tab="tests">🧪 Tests</button>
+      <button data-tab="fiscal">🧾 Fiscalization</button>
+    </nav>
+    <div class="foot">v1.0 · single-PC install</div>
+  </aside>
+
+  <main class="main">
+    <!-- DASHBOARD -->
+    <section id="dashboard">
+      <h1>Dashboard</h1>
+      <div class="sub">Start the local POS server and monitor everything at a glance.</div>
+      <div class="hero">
+        <button id="power" class="power"><span class="ico">⏻</span><span id="powerlabel">Start Server</span></button>
+        <div class="url" id="serverurl">Server stopped</div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Sync — heartbeat</h3>
+          <div class="kv"><span>Online</span><span id="sync-online">—</span></div>
+          <div class="kv"><span>Pending</span><span id="sync-pending">—</span></div>
+          <div class="kv"><span>Last sync</span><span id="sync-last">—</span></div>
+          <div class="kv"><span>Last error</span><span id="sync-err">—</span></div>
+        </div>
+        <div class="card">
+          <h3>Subscription / License</h3>
+          <div class="kv"><span>Status</span><span id="lic-status">—</span></div>
+          <div class="kv"><span>Expires</span><span id="lic-expires">—</span></div>
+          <div class="kv"><span>Last heartbeat</span><span id="lic-hb">—</span></div>
+          <div class="kv"><span>Days left</span><span id="lic-days">—</span></div>
+        </div>
+        <div class="card">
+          <h3>Account balance</h3>
+          <div class="kv"><span>Balance</span><span id="lic-balance">—</span></div>
+          <div class="kv"><span>Org</span><span id="lic-org">—</span></div>
+          <div class="kv"><span>Message</span><span id="lic-msg">—</span></div>
+        </div>
+        <div class="card">
+          <h3>Fiscalization</h3>
+          <div class="kv"><span>Mode</span><span id="fz-mode">—</span></div>
+          <div class="kv"><span>Confirmed</span><span id="fz-confirmed">—</span></div>
+          <div class="kv"><span>Failed</span><span id="fz-failed">—</span></div>
+          <div class="kv"><span>Provider</span><span id="fz-provider">—</span></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn ghost" onclick="refreshAll()">↻ Refresh</button>
+      </div>
+    </section>
+
+    <!-- CONFIG -->
+    <section id="config" class="hidden">
+      <h1>Configuration</h1>
+      <div class="sub">This business's own settings &amp; fiscal identity. Stored locally in <code>.env</code>.</div>
+      <div class="card">
+        <div class="form" id="cfgform"></div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn" onclick="saveConfig()">Save configuration</button>
+          <span class="result" id="cfg-result"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- TESTS -->
+    <section id="tests" class="hidden">
+      <h1>Tests</h1>
+      <div class="sub">Everything self-contained — no real customer data needed.</div>
+      <div class="test-list">
+        <div class="test"><div class="meta"><b>Test server connection</b><small>Ping the local POS server</small></div>
+          <button class="btn ghost" onclick="run('test_server_connection','t1')">Run</button><span class="result" id="t1"></span></div>
+        <div class="test"><div class="meta"><b>Send mock sync data</b><small>Loopback through the sync receiver</small></div>
+          <button class="btn ghost" onclick="run('send_mock_sync','t2')">Run</button><span class="result" id="t2"></span></div>
+        <div class="test"><div class="meta"><b>Get mock sync data</b><small>Read unsynced records back</small></div>
+          <button class="btn ghost" onclick="run('fetch_mock_sync','t3')">Run</button><span class="result" id="t3"></span></div>
+        <div class="test"><div class="meta"><b>Telegram bot test</b><small>Send a test message via the bot</small></div>
+          <button class="btn ghost" onclick="run('telegram_test','t4')">Run</button><span class="result" id="t4"></span></div>
+        <div class="test"><div class="meta"><b>Send fake notification</b><small>Simulate an order-paid alert</small></div>
+          <button class="btn ghost" onclick="run('send_fake_notification','t5')">Run</button><span class="result" id="t5"></span></div>
+        <div class="test"><div class="meta"><b>Fiscalization test</b><small>Mock receipt → fiscal sign + QR</small></div>
+          <button class="btn ghost" onclick="run('fiscal_test','t6')">Run</button><span class="result" id="t6"></span></div>
+      </div>
+    </section>
+
+    <!-- FISCAL -->
+    <section id="fiscal" class="hidden">
+      <h1>Fiscalization (Soliq)</h1>
+      <div class="sub">Toggle the mode. <b>off</b> = none · <b>mock</b> = local test · <b>sandbox/live</b> = real provider.</div>
+      <div class="card">
+        <h3>Mode</h3>
+        <div class="modeseg" id="modeseg">
+          <button data-mode="off">Off</button>
+          <button data-mode="mock">Mock</button>
+          <button data-mode="sandbox">Sandbox</button>
+          <button data-mode="live">Live</button>
+        </div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn" onclick="run('fiscal_test','fztest')">Run test fiscalization</button>
+          <span class="result" id="fztest"></span>
+        </div>
+        <div class="qr" id="fzqr"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Status</h3>
+        <div class="kv"><span>Enabled</span><span id="fzs-enabled">—</span></div>
+        <div class="kv"><span>Provider</span><span id="fzs-provider">—</span></div>
+        <div class="kv"><span>TIN set</span><span id="fzs-tin">—</span></div>
+        <div class="kv"><span>Credentials set</span><span id="fzs-creds">—</span></div>
+        <div class="kv"><span>Confirmed / Failed</span><span id="fzs-counts">—</span></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- ToS overlay -->
+<div class="overlay hidden" id="tos">
+  <div class="tos">
+    <h2>Terms of Service</h2>
+    <div class="body" id="tosbody">Loading…</div>
+    <div class="actions">
+      <button class="btn ghost" onclick="window.close && window.close()">Decline &amp; Exit</button>
+      <button class="btn" onclick="agreeTos()">I Agree</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const TOS_TEXT = `By installing and using Alpha POS you agree that:
+
+1. Alpha POS is licensed, not sold, and requires a valid license.
+
+2. FISCAL COMPLIANCE — Each business fiscalizes its sales under its OWN tax
+   identity (TIN/СТИР) and its own agreement with a Fiscal Data Operator. You
+   are solely responsible for the accuracy of fiscal data reported under your
+   account and for maintaining fiscal compliance.
+
+3. Your business and sales data is stored locally and synced only where you
+   enable it.
+
+4. The software is provided "as is", without warranty. The vendor is not liable
+   for tax penalties from misconfiguration or incorrect IKPU codes.
+
+Click "I Agree" to accept on behalf of your business.`;
+
+// The backend is the local control server; each api.method(...args) POSTs to
+// /api/<method> with the args as a JSON array and resolves with the JSON result.
+const api = new Proxy({}, { get: (_, name) => (...args) =>
+  fetch('/api/' + name, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(args),
+  }).then(r => r.json())
+});
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+
+window.addEventListener('DOMContentLoaded', async () => {
+  document.getElementById('tosbody').textContent = TOS_TEXT;
+  const st = await api.get_state();
+  if(!st.tos_accepted){ document.getElementById('tos').classList.remove('hidden'); }
+  buildConfigForm();
+  refreshAll();
+});
+
+// nav
+document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  ['dashboard','config','tests','fiscal'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+  document.getElementById(b.dataset.tab).classList.remove('hidden');
+});
+
+async function agreeTos(){ await api.accept_tos(); document.getElementById('tos').classList.add('hidden'); toast('Welcome to Alpha POS'); }
+
+// power button
+document.getElementById('power').onclick = async () => {
+  const btn=document.getElementById('power');
+  const running = btn.classList.contains('running');
+  btn.disabled=true;
+  if(running){ await api.stop_server(); }
+  else {
+    document.getElementById('serverurl').textContent='Setting up (first run installs everything)…';
+    await api.run_setup();
+    const r = await api.start_server();
+    if(!r.running){ toast('Start failed: '+(r.error||'')); }
+  }
+  btn.disabled=false;
+  refreshServer(); setTimeout(refreshAll,800);
+};
+
+async function refreshServer(){
+  const s = await api.server_status();
+  const btn=document.getElementById('power'); const lbl=document.getElementById('powerlabel');
+  if(s.running){ btn.classList.add('running'); lbl.textContent='Stop Server';
+    document.getElementById('serverurl').textContent='Running · '+s.url; }
+  else { btn.classList.remove('running'); lbl.textContent='Start Server';
+    document.getElementById('serverurl').textContent = s.last_error? ('Error: '+s.last_error):'Server stopped'; }
+}
+
+async function refreshAll(){
+  await refreshServer();
+  try{ const r=await api.sync_status(); if(r.ok){ const s=r.sync;
+    setPill('sync-online', s.is_online); document.getElementById('sync-pending').textContent=s.pending_count??'—';
+    document.getElementById('sync-last').textContent=fmt(s.last_sync); document.getElementById('sync-err').textContent=s.last_error||'none'; } }catch(e){}
+  try{ const r=await api.license_status(); if(r.ok){ const l=r.license;
+    document.getElementById('lic-status').innerHTML=pill(l.status==='ACTIVE', l.status||'—');
+    document.getElementById('lic-expires').textContent=fmt(l.expires_at);
+    document.getElementById('lic-hb').textContent=fmt(l.last_heartbeat_at);
+    document.getElementById('lic-days').textContent=l.days_remaining??'—';
+    document.getElementById('lic-balance').textContent=l.balance!=null?l.balance:'—';
+    document.getElementById('lic-org').textContent=l.org_name||'—';
+    document.getElementById('lic-msg').textContent=l.last_message||'—'; } }catch(e){}
+  try{ const r=await api.fiscal_status(); if(r.ok){ const f=r.fiscal;
+    document.getElementById('fz-mode').textContent=f.config.mode;
+    document.getElementById('fz-confirmed').textContent=f.confirmed;
+    document.getElementById('fz-failed').textContent=f.failed;
+    document.getElementById('fz-provider').textContent=f.config.provider;
+    document.getElementById('fzs-enabled').innerHTML=pill(f.config.enabled, f.config.enabled?'yes':'no');
+    document.getElementById('fzs-provider').textContent=f.config.provider;
+    document.getElementById('fzs-tin').innerHTML=pill(f.config.tin_set,f.config.tin_set?'yes':'no');
+    document.getElementById('fzs-creds').innerHTML=pill(f.config.credentials_set,f.config.credentials_set?'yes':'no');
+    document.getElementById('fzs-counts').textContent=f.confirmed+' / '+f.failed;
+    document.querySelectorAll('#modeseg button').forEach(b=>b.classList.toggle('active',b.dataset.mode===f.config.mode));
+  } }catch(e){}
+}
+
+function setPill(id,on){ document.getElementById(id).innerHTML=pill(on,on?'online':'offline'); }
+function pill(on,label){ const c=on?'on':'off'; return `<span class="pill ${c}"><span class="dot"></span>${label}</span>`; }
+function fmt(v){ if(!v) return '—'; try{return new Date(v).toLocaleString();}catch(e){return v;} }
+
+// config form
+let CFG=null;
+async function buildConfigForm(){
+  const r=await api.get_config(); CFG=r;
+  const groups={'General':['BRANCH_ID','DEPLOYMENT_MODE','PORT'],
+    'Licensing':['LICENSE_CONTROL_CENTER_URL'],
+    'Sync (cloud)':['SYNC_ENABLED','CLOUD_SYNC_URL','CLOUD_SYNC_TOKEN'],
+    'Telegram':['TELEGRAM_BOT_TOKEN','TELEGRAM_WEBHOOK_SECRET'],
+    'Fiscalization (your TIN)':['FISCALIZATION_MODE','FISCAL_PROVIDER','FISCAL_TIN','FISCAL_PROVIDER_URL','FISCAL_MERCHANT_ID','FISCAL_SECRET','FISCAL_VAT_PERCENT','FISCAL_BLOCK_ON_FAILURE']};
+  const form=document.getElementById('cfgform'); form.innerHTML='';
+  for(const [g,keys] of Object.entries(groups)){
+    const t=document.createElement('div'); t.className='group-title'; t.textContent=g; form.appendChild(t);
+    for(const k of keys){
+      const wrap=document.createElement('div'); wrap.className='field'+(k.length>20?' full':'');
+      const isSecret=r.secret_keys.includes(k);
+      let inp;
+      if(k==='FISCALIZATION_MODE'){ inp=sel(k,['off','mock','sandbox','live']); }
+      else if(k==='FISCAL_PROVIDER'){ inp=sel(k,['mock','multikassa']); }
+      else if(k==='SYNC_ENABLED'||k==='FISCAL_BLOCK_ON_FAILURE'){ inp=sel(k,['False','True'].map(x=>k==='FISCAL_BLOCK_ON_FAILURE'?x.toLowerCase():x)); }
+      else { inp=document.createElement('input'); inp.type=isSecret?'password':'text'; inp.value=r.config[k]||''; inp.dataset.key=k; }
+      wrap.innerHTML='<label>'+k+'</label>'; wrap.appendChild(inp); form.appendChild(wrap);
+    }
+  }
+}
+function sel(k,opts){ const s=document.createElement('select'); s.dataset.key=k;
+  opts.forEach(o=>{const op=document.createElement('option');op.value=o;op.textContent=o;s.appendChild(op);});
+  if(CFG&&CFG.config[k]!=null) s.value=CFG.config[k]; return s; }
+
+async function saveConfig(){
+  const vals={}; document.querySelectorAll('#cfgform [data-key]').forEach(el=>{ vals[el.dataset.key]=el.value; });
+  const r=await api.save_config(vals);
+  const res=document.getElementById('cfg-result');
+  if(r.ok){ res.className='result ok'; res.textContent='Saved'+(r.restart_required?' — restart the server to apply':''); toast('Configuration saved'); refreshAll(); }
+  else { res.className='result err'; res.textContent=r.error||'Failed'; }
+}
+
+// generic test runner
+async function run(method,resultId){
+  const el=document.getElementById(resultId); el.className='result'; el.textContent='Running…';
+  try{
+    const r=await api[method]();
+    const ok = r.ok!==false && r.success!==false;
+    el.className='result '+(ok?'ok':'err');
+    el.textContent = summarize(method,r);
+    if(method==='fiscal_test' && r.qr_url){ const q=document.getElementById('fzqr'); if(q) q.textContent='QR: '+r.qr_url; }
+  }catch(e){ el.className='result err'; el.textContent=String(e); }
+}
+function summarize(m,r){
+  if(r.ok===false||r.success===false) return r.error||r.message||'failed';
+  if(m==='test_server_connection') return 'OK ('+r.status+')';
+  if(m==='send_mock_sync') return 'sent→received, read-back '+(r.read_back?'OK':'MISS');
+  if(m==='fetch_mock_sync') return r.unsynced_categories+' unsynced';
+  if(m==='telegram_test'||m==='send_fake_notification') return r.ok?'sent':'not configured';
+  if(m==='fiscal_test') return 'sign '+r.fiscal_sign;
+  return 'OK';
+}
+
+// fiscal mode toggle
+document.querySelectorAll('#modeseg button').forEach(b=>b.onclick=async()=>{
+  const r=await api.fiscal_set_mode(b.dataset.mode);
+  if(r.ok){ toast('Fiscal mode: '+r.mode); refreshAll(); }
+});
+</script>
+</body>
+</html>

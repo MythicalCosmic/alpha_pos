@@ -197,17 +197,27 @@ def _parse_date_to(date_str):
 
 
 def _recalculate_total(order):
-    from django.db.models import Sum
     from discounts.repositories import OrderDiscountRepository
+    from discounts.services.discount_service import DiscountService
 
     order.subtotal = OrderItemRepository.calculate_order_total(order)
-    # Re-derive the applied discount from the OrderDiscount rows and never let
-    # a frozen discount exceed the new subtotal — otherwise shrinking a
-    # discounted order drives total_amount negative and mark_as_paid would
-    # *remove* real cash from the register.
-    applied = OrderDiscountRepository.get_for_order(order.id).aggregate(
-        total=Sum('discount_amount'),
-    )['total'] or Decimal('0')
+    # Recompute each applied discount against the *current* items rather than
+    # trusting the frozen OrderDiscount.discount_amount. A percentage / BUY_X /
+    # FREE_ITEM rule frozen at apply-time goes stale the moment items change:
+    # if the order grew the customer is over-charged, if it shrank the drawer is
+    # under-credited (mark_as_paid would settle the wrong cash, or drive
+    # total_amount negative and *remove* real cash via add_to_register). The
+    # OrderDiscount rows are the source of truth — refresh them, then sum.
+    order_items = list(order.items.select_related('product__category').all())
+    applied = Decimal('0')
+    for od in OrderDiscountRepository.get_for_order(order.id).select_related(
+        'discount__discount_type'
+    ):
+        new_amount = DiscountService.calculate_discount(od.discount, order_items)
+        if new_amount != od.discount_amount:
+            od.discount_amount = new_amount
+            od.save(update_fields=['discount_amount'])
+        applied += new_amount
     order.discount_amount = min(applied, order.subtotal)
     order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
     order.save(update_fields=['subtotal', 'discount_amount', 'total_amount'])
@@ -680,6 +690,14 @@ class AdminOrderService:
             loyalty_service.maybe_accrue(order)
         except Exception:
             logger.exception('loyalty accrual failed for order %s', order.id)
+
+        # Fiscalize the sale (Soliq). No-op unless enabled; serve-now policy
+        # means a provider failure never blocks the sale (queued for retry).
+        try:
+            from fiscalization.services import FiscalizationService
+            FiscalizationService.fiscalize_on_payment(order.id)
+        except Exception:
+            logger.exception('non-critical fiscalization error in pay flow (order=%s)', order.id)
 
         return ServiceResponse.success(
             data={'is_paid': True},

@@ -1,0 +1,25 @@
+ALPHA POS — TERMS OF SERVICE
+
+1. License. Alpha POS is licensed, not sold. Use of this software requires a
+   valid license activated through the vendor's control center or an authorized
+   offline activation.
+
+2. Fiscal compliance. Alpha POS provides fiscalization integration with the
+   State Tax Committee of Uzbekistan (Soliq) through accredited Fiscal Data
+   Operators. EACH BUSINESS IS RESPONSIBLE for fiscalizing its sales under its
+   OWN tax identity (TIN/СТИР) and registration. The business operator is solely
+   responsible for the accuracy and completeness of fiscal data reported under
+   its account, and for maintaining a valid agreement with its fiscal data
+   operator.
+
+3. Data. The software stores business and sales data locally and, where the
+   operator enables it, synchronizes with the operator's own cloud/branches.
+
+4. No warranty. The software is provided "as is" without warranty of any kind.
+   The vendor is not liable for tax penalties arising from misconfiguration,
+   incorrect IKPU codes, or the operator's failure to maintain fiscal compliance.
+
+5. Support. Support is provided per the agreement between the business and the
+   vendor.
+
+By clicking "I Agree" you accept these terms on behalf of your business.

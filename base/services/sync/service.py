@@ -51,6 +51,14 @@ class SyncService:
 
             SyncStatus.set_online(True)
 
+            # Self-heal rows whose transaction.on_commit enqueue silently failed
+            # (DB hiccup / queue-table lock): SyncMixin.save() leaves synced_at
+            # NULL and relies on on_commit to enqueue, but _queue_for_sync
+            # swallows exceptions — such a row is live locally yet never pushed.
+            # The queue is a cache, not the source of truth; reconcile any
+            # unsynced row that isn't already queued before building the batch.
+            cls._reconcile_unsynced()
+
             grouped = SyncQueue.get_grouped()
             if not grouped:
                 return {'success': True, 'message': 'Nothing to sync', 'synced': 0}
@@ -64,6 +72,7 @@ class SyncService:
             total_failed = 0
             errors = []
             synced_uuids = []
+            confirmed_by_model = {}
             batch_size = get_sync_batch_size()
 
             for model_name in sorted_models:
@@ -84,6 +93,7 @@ class SyncService:
                         failed = set(result.get('failed_uuids') or [])
                         confirmed = [u for u in batch_uuids if u not in failed]
                         synced_uuids.extend(confirmed)
+                        confirmed_by_model.setdefault(model_name, []).extend(confirmed)
                         total_synced += len(confirmed)
                         if failed:
                             failed_in_batch = [u for u in batch_uuids if u in failed]
@@ -107,6 +117,19 @@ class SyncService:
 
             if synced_uuids:
                 SyncQueue.remove(synced_uuids)
+
+            # Stamp synced_at on the local rows the cloud confirmed so
+            # objects.unsynced() is a meaningful "not yet pushed" signal — both
+            # for status_report and the orphan-reconcile sweep. .update() bypasses
+            # save(), so it won't bump sync_version or re-null synced_at; a later
+            # edit to the row sets synced_at=None again and re-queues it normally.
+            if confirmed_by_model:
+                models_map = get_all_models()
+                now = timezone.now()
+                for mname, uuids in confirmed_by_model.items():
+                    mclass = models_map.get(mname)
+                    if mclass and uuids:
+                        mclass.objects.filter(uuid__in=uuids).update(synced_at=now)
 
             SyncStatus.set_last_sync(total_synced, total_failed, errors)
 
@@ -408,6 +431,39 @@ class SyncService:
         if local_v > remote_v:
             return 'local'
         return 'conflict'
+
+    @classmethod
+    def _reconcile_unsynced(cls):
+        """Re-queue any unsynced row that isn't already in the sync queue.
+
+        Backstop for the on_commit enqueue path: if _queue_for_sync ever fails
+        (and it swallows the exception), the row is saved with synced_at=NULL
+        but never enqueued. This sweep, run at the top of push(), makes the
+        queue self-healing without a separate cron. Bounded work after the first
+        run because push() now stamps synced_at on confirmed records.
+        """
+        branch = get_branch_id()
+        models = get_all_models()
+        requeued = 0
+        for name in SYNC_ORDER:
+            model_class = models.get(name)
+            if not model_class:
+                continue
+            try:
+                qs = model_class.objects.unsynced()
+                if branch:
+                    qs = qs.filter(branch_id=branch)
+                queued = SyncQueue.queued_uuids_for_model(name)
+                for obj in qs.iterator():
+                    if str(obj.uuid) in queued:
+                        continue
+                    SyncQueue.add(name, str(obj.uuid), obj.to_sync_dict())
+                    requeued += 1
+            except Exception as e:
+                logger.warning('reconcile unsynced failed for %s: %s', name, e)
+        if requeued:
+            logger.info('Sync reconcile: re-queued %d orphaned record(s)', requeued)
+        return requeued
 
     @classmethod
     def _apply_records(cls, model_class, records, source_branch=None):

@@ -203,22 +203,40 @@ def _parse_int_list(param):
 
 
 def _recalculate_total(order):
-    from django.db.models import Sum
     from discounts.repositories import OrderDiscountRepository
+    from discounts.services.discount_service import DiscountService
 
     order.subtotal = OrderItemRepository.calculate_order_total(order)
-    # Re-derive the applied discount from the OrderDiscount rows (the source of
-    # truth) instead of trusting the cached field, and never let a frozen
-    # discount exceed the new subtotal. Without this, shrinking a discounted
-    # order (remove/update item) leaves a now-too-large discount, driving
-    # total_amount negative — and mark_as_paid would then *remove* real cash
-    # from the register via InkassaService.add_to_register.
-    applied = OrderDiscountRepository.get_for_order(order.id).aggregate(
-        total=Sum('discount_amount'),
-    )['total'] or Decimal('0')
+    # Recompute each applied discount against the *current* items rather than
+    # trusting the frozen OrderDiscount.discount_amount. A percentage / BUY_X /
+    # FREE_ITEM rule frozen at apply-time goes stale the moment items change:
+    # if the order grew the customer is over-charged, if it shrank the drawer is
+    # under-credited (mark_as_paid would settle the wrong cash, or drive
+    # total_amount negative and *remove* real cash via add_to_register). The
+    # OrderDiscount rows are the source of truth — refresh them, then sum.
+    order_items = list(order.items.select_related('product__category').all())
+    applied = Decimal('0')
+    for od in OrderDiscountRepository.get_for_order(order.id).select_related(
+        'discount__discount_type'
+    ):
+        new_amount = DiscountService.calculate_discount(od.discount, order_items)
+        if new_amount != od.discount_amount:
+            od.discount_amount = new_amount
+            od.save(update_fields=['discount_amount'])
+        applied += new_amount
     order.discount_amount = min(applied, order.subtotal)
     order.total_amount = max(Decimal('0'), order.subtotal - order.discount_amount)
     order.save(update_fields=['subtotal', 'discount_amount', 'total_amount'])
+
+
+def _fiscalize_after_pay(order_id):
+    # Serve-now policy: fiscalization must never break the pay flow. The service
+    # call self-gates (no-op when disabled) and never raises.
+    try:
+        from fiscalization.services import FiscalizationService
+        FiscalizationService.fiscalize_on_payment(order_id)
+    except Exception:
+        logger.exception('non-critical fiscalization error in pay flow (order=%s)', order_id)
 
 
 def _adjust_order_stock(order_id, product_id, quantity_delta, performed_by_id):
@@ -788,6 +806,11 @@ class CustomerOrderService:
         if payment_method == 'CASH':
             InkassaService.add_to_register(order.total_amount)
         OrderNotification.on_order_paid(order_id)
+
+        # Fiscalize the sale (Soliq). No-op unless fiscalization is enabled.
+        # serve-now: never blocks the sale on a provider error — a failure is
+        # recorded and retried by the queue. Honors block-on-failure if set.
+        _fiscalize_after_pay(order_id)
 
         try:
             from stock.services import OrderStatusHandler, StockSettingsService

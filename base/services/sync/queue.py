@@ -74,6 +74,15 @@ class SyncQueue:
         return dict(grouped)
 
     @classmethod
+    def queued_uuids_for_model(cls, model_name):
+        from base.models import SyncQueueRecord
+        return {
+            str(u) for u in SyncQueueRecord.objects.filter(
+                model_name=model_name,
+            ).values_list('record_uuid', flat=True)
+        }
+
+    @classmethod
     def count(cls):
         from base.models import SyncQueueRecord
         total = SyncQueueRecord.objects.count()

@@ -44,6 +44,12 @@ class Command(BaseCommand):
             '--deactivate', action='store_true',
             help='Reset the license back to UNREGISTERED (re-enables the kill switch).',
         )
+        parser.add_argument(
+            '--perpetual', action='store_true',
+            help='Explicitly confirm a NEVER-EXPIRING offline license. Required '
+                 'when --expires is omitted, so a perpetual, un-revocable '
+                 'activation can never be created by accident.',
+        )
 
     def handle(self, *args, **opts):
         lic = License.load()
@@ -70,6 +76,16 @@ class Command(BaseCommand):
             except ValueError:
                 raise CommandError('--expires must be an ISO date like 2027-01-01')
             expires_at = parsed.replace(tzinfo=dt_timezone.utc)
+        elif not opts['perpetual']:
+            # A no-expiry offline activation never expires and (with the daemon
+            # disabled) has no grace clock — it can only be undone by shell
+            # access. Refuse to create one without explicit confirmation so it
+            # can't happen by accident or be slipped in unnoticed.
+            raise CommandError(
+                'Refusing to create a perpetual, un-revocable license without '
+                'confirmation. Pass --expires YYYY-MM-DD for a bounded license, '
+                'or --perpetual to explicitly confirm a never-expiring one.'
+            )
 
         lic.status = License.Status.ACTIVE
         lic.email = opts['email'] or lic.email
@@ -94,6 +110,11 @@ class Command(BaseCommand):
             + (f', expires {opts["expires"]}' if expires_at else ', perpetual')
             + '). Business endpoints will now respond.'
         ))
+        if not expires_at:
+            self.stdout.write(self.style.WARNING(
+                'WARNING: this is a PERPETUAL, never-expiring license with no '
+                'remote kill path. Revoke only via "activate_offline --deactivate".'
+            ))
         self.stdout.write(
             'Reminder: set LICENSE_HEARTBEAT_DISABLED=1 so the daemon does not '
             'retry a non-existent control center.'

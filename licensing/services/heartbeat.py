@@ -19,6 +19,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import platform
 import socket
 from decimal import Decimal, InvalidOperation
@@ -89,18 +90,69 @@ def _http_timeout_s() -> int:
     return getattr(settings, 'LICENSE_HTTP_TIMEOUT_S', 10)
 
 
+def _persisted_install_id() -> str:
+    """Last-resort machine id: a random UUID persisted to disk. Stable per
+    install and unique, so the fingerprint never collapses to a value two
+    installs can share (which is what `platform.node()` == hostname did)."""
+    import uuid as _uuid
+    base_dir = str(getattr(settings, 'BASE_DIR', '.'))
+    path = getattr(settings, 'LICENSE_FINGERPRINT_FILE', '') or \
+        os.path.join(base_dir, '.license_install_id')
+    try:
+        with open(path) as f:
+            val = f.read().strip()
+            if val:
+                return val
+    except OSError:
+        pass
+    val = _uuid.uuid4().hex
+    try:
+        with open(path, 'w') as f:
+            f.write(val)
+    except OSError:
+        logger.warning('fingerprint: could not persist install id to %s', path)
+    return val
+
+
+def _machine_id() -> str:
+    """Cross-platform stable machine identifier. /etc/machine-id is Linux-only;
+    on Windows it does not exist, so the previous code fell back to
+    platform.node() (== hostname) and every Windows install with the same
+    computer name produced an identical fingerprint — defeating the control
+    center's duplicate-install detection. Resolve per-OS instead."""
+    # Linux / most Unix.
+    for candidate in ('/etc/machine-id', '/var/lib/dbus/machine-id'):
+        try:
+            with open(candidate) as f:
+                mid = f.read().strip()
+                if mid:
+                    return mid
+        except OSError:
+            continue
+    # Windows: the per-install MachineGuid in the registry.
+    if platform.system() == 'Windows':
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r'SOFTWARE\Microsoft\Cryptography',
+            ) as k:
+                guid, _ = winreg.QueryValueEx(k, 'MachineGuid')
+                if guid:
+                    return str(guid)
+        except OSError:
+            pass
+    # Final fallback: a persisted random UUID (never the bare hostname).
+    return _persisted_install_id()
+
+
 def _fingerprint() -> str:
     """sha256 of (hostname + machine-id). Stable across restarts of the
-    same container; changes if the install is cloned to a new host. Used
-    by the control center to flag duplicate installs (don't auto-block —
-    surface only)."""
+    same host; changes if the install is cloned to a new host. Used by the
+    control center to flag duplicate installs (don't auto-block — surface
+    only)."""
     import hashlib
-    parts = [socket.gethostname()]
-    try:
-        with open('/etc/machine-id') as f:
-            parts.append(f.read().strip())
-    except OSError:
-        parts.append(platform.node())
+    parts = [socket.gethostname(), _machine_id()]
     return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()
 
 
@@ -141,10 +193,36 @@ def _parse_iso(value):
     return parse_datetime(value)
 
 
-def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
+def _apply_heartbeat_response(lic: License, payload: Dict[str, Any],
+                              expected_sent_at: Optional[str] = None) -> License:
     """Mutate the License singleton from a /heartbeat (or /register)
     response. Writes through the cache so the middleware sees the new
-    state on the next request."""
+    state on the next request.
+
+    `expected_sent_at` is the `sent_at` nonce this client put in the request.
+    A live control center echoes it back inside the signed body, binding the
+    signed response to *this* request — so a captured signed 200 cannot be
+    replayed later (stale sent_at) or onto a clone (its request carries a
+    different sent_at). If the server doesn't echo it yet we warn and fall
+    back to the monotonic server_now guard alone."""
+    if expected_sent_at is not None:
+        echoed = payload.get('sent_at')
+        if echoed is None:
+            logger.warning(
+                'heartbeat: response did not echo sent_at — replay binding '
+                'unavailable; control center should echo the request nonce',
+            )
+        elif echoed != expected_sent_at:
+            logger.error(
+                'heartbeat: sent_at mismatch (echoed %r != sent %r); '
+                'rejecting as replay', echoed, expected_sent_at,
+            )
+            LicenseEvent.objects.create(
+                action=LicenseEvent.Action.HEARTBEAT_FAILED,
+                detail={'kind': 'sent_at_mismatch'},
+            )
+            return lic
+
     valid_statuses = {c[0] for c in License.Status.choices}
     status_in = payload.get('status', License.Status.ACTIVE)
     if status_in not in valid_statuses:
@@ -175,8 +253,13 @@ def _apply_heartbeat_response(lic: License, payload: Dict[str, Any]) -> License:
     # replayed to refresh last_heartbeat_at and extend the offline-grace window
     # indefinitely. server_now is monotonic for legitimate responses. Comparison
     # errors (naive/aware mismatch) fail toward applying — no worse than before.
+    # `<=` (not `<`): a replay of the *most recent* response carries
+    # server_now == last_server_now and must also be rejected, otherwise it
+    # could keep refreshing last_heartbeat_at (and the grace window) forever.
+    # Legitimate consecutive heartbeats always have a strictly greater
+    # server_now (the control center's clock advances between beats).
     try:
-        is_stale = bool(lic.last_server_now) and server_now < lic.last_server_now
+        is_stale = bool(lic.last_server_now) and server_now <= lic.last_server_now
     except TypeError:
         is_stale = False
     if is_stale:
@@ -290,6 +373,29 @@ def register(email: str, plan_id=None) -> Tuple[Dict[str, Any], int]:
             'message': 'Control center returned a malformed response (no key).',
             'code': 'control_center_response_invalid',
         }, 502)
+
+    # Verify the register response signature (same full-body HMAC convention as
+    # the heartbeat), keyed on the returned key. This is weaker than the
+    # heartbeat case — an active MITM that substitutes the key can re-sign with
+    # it — so TLS (_require_https, enforced in production) stays the primary
+    # defense. But a *present-but-invalid* signature means tampering or
+    # corruption in flight: refuse to persist the key. A missing signature is
+    # tolerated for backward compatibility with control centers that don't yet
+    # sign /register, with a warning to harden that side.
+    reg_sig = resp.headers.get('X-Response-Signature', '')
+    if reg_sig:
+        if not _verify_response_signature(body, reg_sig, key):
+            logger.error('register: response signature failed verification')
+            return ({
+                'success': False,
+                'message': 'Control center response failed signature verification.',
+                'code': 'response_signature_invalid',
+            }, 502)
+    else:
+        logger.warning(
+            'register: control center did not sign the response; relying on TLS '
+            'alone. Harden the control center to sign /register responses.',
+        )
 
     # TOCTOU close: recheck the singleton status INSIDE the row lock. The
     # view-level check happens outside any transaction, so two parallel setup
@@ -410,11 +516,12 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
     if https_err is not None:
         return https_err
 
+    sent_at = timezone.now().isoformat()
     payload = {
         'client_version': _client_version(),
         'branch_id': getattr(settings, 'BRANCH_ID', 'main'),
         'fingerprint': _fingerprint(),
-        'sent_at': timezone.now().isoformat(),
+        'sent_at': sent_at,
         'metrics': _collect_metrics(),
     }
     headers = {'Authorization': f'Bearer {cleartext}'}
@@ -506,7 +613,7 @@ def do_heartbeat() -> Tuple[Dict[str, Any], int]:
     with transaction.atomic():
         lic = License.objects.select_for_update().get(pk=1)
         prior_status = lic.status
-        _apply_heartbeat_response(lic, body)
+        _apply_heartbeat_response(lic, body, expected_sent_at=sent_at)
         if lic.status != prior_status:
             LicenseEvent.objects.create(
                 action=LicenseEvent.Action.STATUS_CHANGED,

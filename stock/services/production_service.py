@@ -18,6 +18,21 @@ from stock.repositories import (
 )
 
 
+class _ProductionStepError(Exception):
+    """Raised by complete()'s helpers to abort the whole production-completion
+    transaction with a clean (result, status) response. Replaces the old
+    nested-@transaction.atomic + transaction.set_rollback(True) + return
+    pattern, which only rolled back the *inner* savepoint — so a failure in
+    _create_output left the ingredients consumed by _consume_ingredients
+    committed while the PO stayed IN_PROGRESS (silent stock loss). Raising
+    instead lets the single outer atomic roll everything back together."""
+
+    def __init__(self, result, status):
+        super().__init__(result.get('message') if isinstance(result, dict) else str(result))
+        self.result = result
+        self.status = status
+
+
 def _pagination_data(page_obj, paginator):
     return {
         "page": page_obj.number,
@@ -423,7 +438,6 @@ class ProductionOrderService:
         }, message="Production started")
 
     @classmethod
-    @transaction.atomic
     def complete(cls, po_id: int,
                  actual_output_qty: Decimal,
                  user_id: int,
@@ -437,27 +451,31 @@ class ProductionOrderService:
             return ServiceResponse.error(f"Cannot complete order in {po.status} status")
 
         actual_output_qty = to_decimal(actual_output_qty)
+        if actual_output_qty <= 0:
+            # Zero/negative output would create a zero-quantity batch (rejected
+            # downstream) and a meaningless zero-cost PRODUCTION_IN. Reject up
+            # front instead of failing mid-transaction.
+            return ServiceResponse.error("Actual output quantity must be greater than zero")
 
-        consume_result = cls._consume_ingredients(po_id, user_id)
-        if consume_result is not None:
-            result, status = consume_result
-            if status >= 400:
-                return result, status
+        # Single transaction owns the whole completion: consume ingredients,
+        # create output, flip status. The helpers raise _ProductionStepError on
+        # a stock failure so the atomic rolls back EVERYTHING — no partial
+        # commit where stock is consumed but no output is produced.
+        try:
+            with transaction.atomic():
+                cls._consume_ingredients(po_id, user_id)
+                cls._create_output(po_id, actual_output_qty, user_id, quality_status)
 
-        output_result = cls._create_output(po_id, actual_output_qty, user_id, quality_status)
-        if output_result is not None:
-            result, status = output_result
-            if status >= 400:
-                return result, status
+                po.status = ProductionOrder.Status.COMPLETED
+                po.actual_output_qty = actual_output_qty
+                po.actual_end = timezone.now()
 
-        po.status = ProductionOrder.Status.COMPLETED
-        po.actual_output_qty = actual_output_qty
-        po.actual_end = timezone.now()
+                if notes:
+                    po.notes = f"{po.notes}\n{notes}".strip()
 
-        if notes:
-            po.notes = f"{po.notes}\n{notes}".strip()
-
-        po.save(update_fields=["status", "actual_output_qty", "actual_end", "notes", "updated_at"])
+                po.save(update_fields=["status", "actual_output_qty", "actual_end", "notes", "updated_at"])
+        except _ProductionStepError as e:
+            return e.result, e.status
 
         variance = actual_output_qty - po.expected_output_qty
         variance_pct = (variance / po.expected_output_qty * 100) if po.expected_output_qty else 0
@@ -611,8 +629,10 @@ class ProductionOrderService:
             ing.save(update_fields=["status"])
 
     @classmethod
-    @transaction.atomic
     def _consume_ingredients(cls, po_id: int, user_id: int):
+        # No own @transaction.atomic — runs inside complete()'s transaction and
+        # signals failure by raising _ProductionStepError so the whole thing
+        # rolls back together (see complete()).
         po = ProductionOrderRepository.get_by_id(po_id)
         if not po:
             return
@@ -651,8 +671,7 @@ class ProductionOrderService:
                     notes=f"Production: {po.order_number}"
                 )
                 if status >= 400:
-                    transaction.set_rollback(True)
-                    return result, status
+                    raise _ProductionStepError(result, status)
 
                 if result.get("data", {}).get("batches"):
                     first_batch = result["data"]["batches"][0]
@@ -668,8 +687,7 @@ class ProductionOrderService:
                     notes=f"Production: {po.order_number}"
                 )
                 if status >= 400:
-                    transaction.set_rollback(True)
-                    return result, status
+                    raise _ProductionStepError(result, status)
 
             if ing.actual_quantity:
                 ing.variance = ing.actual_quantity - ing.planned_quantity
@@ -678,8 +696,9 @@ class ProductionOrderService:
             ing.save(update_fields=["status", "batch_used", "variance"])
 
     @classmethod
-    @transaction.atomic
     def _create_output(cls, po_id: int, quantity: Decimal, user_id: int, quality_status: str):
+        # No own @transaction.atomic — runs inside complete()'s transaction and
+        # raises _ProductionStepError on failure (see complete()).
         po = ProductionOrderRepository.get_by_id(po_id)
         if not po:
             return
@@ -704,8 +723,7 @@ class ProductionOrderService:
                 quality_status=quality_status,
             )
             if batch_status >= 400:
-                transaction.set_rollback(True)
-                return batch_result, batch_status
+                raise _ProductionStepError(batch_result, batch_status)
             batch = StockBatch.objects.get(id=batch_result["data"]["id"])
 
         from .level_service import StockLevelService
@@ -721,8 +739,7 @@ class ProductionOrderService:
             notes=f"Production output: {po.order_number}"
         )
         if status >= 400:
-            transaction.set_rollback(True)
-            return result, status
+            raise _ProductionStepError(result, status)
 
         ProductionOrderOutputRepository.create(
             production_order=po,
@@ -758,8 +775,7 @@ class ProductionOrderService:
                     notes=f"By-product from: {po.order_number}"
                 )
                 if bp_status >= 400:
-                    transaction.set_rollback(True)
-                    return bp_result, bp_status
+                    raise _ProductionStepError(bp_result, bp_status)
 
 
 class ProductionOrderIngredientService:

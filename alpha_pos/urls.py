@@ -40,6 +40,7 @@ urlpatterns = [
     # the operator can complete setup and the renderer can read status even
     # when the install is UNREGISTERED / SUSPENDED / EXPIRED.
     path('api/licensing/', include('licensing.urls')),
+    path('api/fiscalization/', include('fiscalization.urls')),
     # Telegram webhook lives at the root (not under /api/admins) because
     # Telegram delivers it directly with a secret-token header instead of
     # a session. Keep it short and stable so reconfiguring setWebhook is

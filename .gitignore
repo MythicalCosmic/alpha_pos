@@ -53,5 +53,8 @@ pip-wheel-metadata/
 htmlcov/
 .tox/
 
+# Desktop control panel runtime state
+desktop_state.json
+
 # Misc
 *.bak

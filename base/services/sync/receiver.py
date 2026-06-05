@@ -1,6 +1,7 @@
 import logging
 from decimal import Decimal
 from django.apps import apps
+from django.db import transaction
 from django.utils import timezone
 from base.services.sync.config import FK_UUID_MAPPINGS
 
@@ -254,59 +255,73 @@ class CloudReceiver:
 
         cleaned = _prepare_fields(model_class, data)
 
-        try:
-            instance = model_class.objects.get(uuid=uuid_val)
+        # Per-record atomic + row lock. Without this the get → _should_replace →
+        # save sequence is a read-modify-write with no isolation: two concurrent
+        # receives of the same UUID both pass _should_replace against the *old*
+        # version and the later writer clobbers the earlier one, defeating the
+        # deterministic tiebreaker. The caller loops per record and catches
+        # exceptions, so each record owns its own transaction; a rollback here
+        # leaves the row untouched and the UUID is re-queued via failed_uuids.
+        with transaction.atomic():
+            try:
+                instance = model_class.objects.select_for_update().get(uuid=uuid_val)
 
-            # Route through SyncMixin._should_replace so the deterministic
-            # tiebreaker (updated_at then branch_id) applies on equal
-            # sync_version. Without this, two branches that landed at the
-            # same version silently let whichever batch arrived second win.
-            if hasattr(model_class, '_should_replace'):
-                if not model_class._should_replace(
-                    instance, sync_version, cleaned, incoming_branch,
-                ):
+                # Route through SyncMixin._should_replace so the deterministic
+                # tiebreaker (updated_at then branch_id) applies on equal
+                # sync_version. Without this, two branches that landed at the
+                # same version silently let whichever batch arrived second win.
+                if hasattr(model_class, '_should_replace'):
+                    if not model_class._should_replace(
+                        instance, sync_version, cleaned, incoming_branch,
+                    ):
+                        return instance, 'skipped'
+                elif sync_version < instance.sync_version:
                     return instance, 'skipped'
-            elif sync_version < instance.sync_version:
-                return instance, 'skipped'
 
-            # Preserve source-of-truth updated_at across save(): every SyncMixin
-            # model declares updated_at with auto_now=True, so save() would stamp
-            # the receiver's local clock and defeat the _should_replace tiebreaker
-            # on every subsequent compare. Pop it and re-apply via .update(),
-            # which bypasses auto_now (same approach as SyncMixin.from_sync_dict).
-            incoming_updated = cleaned.pop('updated_at', None)
+                # A locally-tombstoned row is terminal: never let a stale
+                # incoming record that won the version/tiebreaker resurrect it
+                # by clearing is_deleted (FS7). Deletes only propagate forward.
+                if instance.is_deleted and not is_deleted:
+                    return instance, 'skipped'
 
-            for key, value in cleaned.items():
-                setattr(instance, key, value)
+                # Preserve source-of-truth updated_at across save(): every SyncMixin
+                # model declares updated_at with auto_now=True, so save() would stamp
+                # the receiver's local clock and defeat the _should_replace tiebreaker
+                # on every subsequent compare. Pop it and re-apply via .update(),
+                # which bypasses auto_now (same approach as SyncMixin.from_sync_dict).
+                incoming_updated = cleaned.pop('updated_at', None)
 
-            for fk_field, fk_instance in resolved_fks.items():
-                setattr(instance, fk_field, fk_instance)
+                for key, value in cleaned.items():
+                    setattr(instance, key, value)
 
-            instance.sync_version = sync_version
-            instance.is_deleted = is_deleted
-            instance.synced_at = timezone.now()
-            instance.branch_id = incoming_branch
-            instance.save(_syncing=True)
-            _preserve_updated_at(model_class, instance, incoming_updated)
-            return instance, 'updated'
+                for fk_field, fk_instance in resolved_fks.items():
+                    setattr(instance, fk_field, fk_instance)
 
-        except model_class.DoesNotExist:
-            instance = model_class(
-                uuid=uuid_val,
-                sync_version=sync_version,
-                is_deleted=is_deleted,
-                branch_id=incoming_branch,
-                synced_at=timezone.now(),
-            )
+                instance.sync_version = sync_version
+                instance.is_deleted = is_deleted
+                instance.synced_at = timezone.now()
+                instance.branch_id = incoming_branch
+                instance.save(_syncing=True)
+                _preserve_updated_at(model_class, instance, incoming_updated)
+                return instance, 'updated'
 
-            incoming_updated = cleaned.pop('updated_at', None)
+            except model_class.DoesNotExist:
+                instance = model_class(
+                    uuid=uuid_val,
+                    sync_version=sync_version,
+                    is_deleted=is_deleted,
+                    branch_id=incoming_branch,
+                    synced_at=timezone.now(),
+                )
 
-            for key, value in cleaned.items():
-                setattr(instance, key, value)
+                incoming_updated = cleaned.pop('updated_at', None)
 
-            for fk_field, fk_instance in resolved_fks.items():
-                setattr(instance, fk_field, fk_instance)
+                for key, value in cleaned.items():
+                    setattr(instance, key, value)
 
-            instance.save(_syncing=True)
-            _preserve_updated_at(model_class, instance, incoming_updated)
-            return instance, 'created'
+                for fk_field, fk_instance in resolved_fks.items():
+                    setattr(instance, fk_field, fk_instance)
+
+                instance.save(_syncing=True)
+                _preserve_updated_at(model_class, instance, incoming_updated)
+                return instance, 'created'

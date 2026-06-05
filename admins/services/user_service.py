@@ -122,6 +122,20 @@ class AdminUserService:
             if field in kwargs and kwargs[field] is not None:
                 setattr(user, field, kwargs[field])
 
+        # Fine-grained permissions (JSON list, consumed by @permission_required).
+        # Previously dropped silently here: the view audited a permissions change
+        # as succeeded while the grant/revoke was a no-op. Validate the shape so
+        # a stray non-list can't be stored (the decorator would then ignore it),
+        # then apply it.
+        if 'permissions' in kwargs and kwargs['permissions'] is not None:
+            perms = kwargs['permissions']
+            if not isinstance(perms, list) or not all(isinstance(p, str) for p in perms):
+                return ServiceResponse.validation_error(
+                    errors={'permissions': 'Must be a list of permission strings'},
+                    message='Invalid permissions',
+                )
+            user.permissions = perms
+
         if kwargs.get('password'):
             user.password = hash_password(str(kwargs['password']))
 

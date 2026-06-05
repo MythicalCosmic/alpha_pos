@@ -5,6 +5,7 @@ from base.helpers.request import get_client_ip, get_user_agent, get_session_key,
 from base.helpers.response import json_response, ServiceResponse
 from base.helpers.cookie import set_session_cookie, clear_session_cookie
 from base.security.rate_limit import rate_limit, rate_limit_by
+from base.security.auth import login_required
 from waiters.services.auth_service import WaiterAuthService
 
 
@@ -55,6 +56,7 @@ def login(request):
 @csrf_exempt
 @rate_limit('waiter_logout', 10, 60)
 @require_POST
+@login_required
 def logout(request):
     session_key = get_session_key(request)
     if not session_key:
@@ -71,6 +73,7 @@ def logout(request):
 
 @csrf_exempt
 @require_GET
+@login_required
 def me(request):
     session_key = get_session_key(request)
     if not session_key:
@@ -83,6 +86,7 @@ def me(request):
 @csrf_exempt
 @rate_limit('waiter_change_password', 3, 60)
 @require_POST
+@login_required
 def change_password(request):
     session_key = get_session_key(request)
     if not session_key:
@@ -115,6 +119,7 @@ def change_password(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "DELETE"])
+@login_required
 def sessions(request):
     session_key = get_session_key(request)
     if not session_key:

@@ -163,6 +163,8 @@ class SyncMixin(models.Model):
     def from_sync_dict(cls, data, branch_id=None):
         from django.utils import timezone
         from django.utils.dateparse import parse_datetime
+        from django.apps import apps
+        from base.services.sync.config import FK_UUID_MAPPINGS
 
         data = data.copy()
         uuid_val = data.pop('uuid')
@@ -185,6 +187,46 @@ class SyncMixin(models.Model):
         incoming_branch = payload_branch or branch_id
         data = cls._strip_sync_denied(data)
 
+        # Resolve UUID-keyed FK references to local instances. The push/receive
+        # path does this in CloudReceiver._resolve_foreign_keys, but the
+        # pull-from-cloud path lands straight here — so a model without an
+        # explicit from_sync_dict override (Table, Shift, CashReconciliation,
+        # and most stock/HR models) would silently drop every FK to NULL,
+        # Integrity-erroring on non-nullable FKs (place, user, shift) or losing
+        # the association. Resolving in the default fixes it for every model.
+        # Each model's to_sync_dict only emits the *_uuid keys for its own FKs,
+        # so iterating the shared mapping over `data` can't cross-wire fields.
+        resolved_fks = {}
+        for uuid_field, (app_label, model_name, fk_field) in FK_UUID_MAPPINGS.items():
+            if uuid_field not in data:
+                continue
+            uuid_value = data.pop(uuid_field)
+            if not uuid_value:
+                continue
+            try:
+                related = apps.get_model(app_label, model_name).objects.filter(
+                    uuid=uuid_value,
+                ).first()
+            except Exception:
+                related = None
+            if related is not None:
+                resolved_fks[fk_field] = related
+            else:
+                # Don't materialize a row with a missing *required* FK — the
+                # parent UUID hasn't synced yet. Skip; the next pull cycle
+                # re-delivers once the parent has landed.
+                try:
+                    if not cls._meta.get_field(fk_field).null:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            'sync ingest: unresolved required FK %s=%s on %s; '
+                            'skipping record %s',
+                            fk_field, uuid_value, cls.__name__, uuid_val,
+                        )
+                        return None, 'skipped'
+                except Exception:
+                    pass
+
         # Source-of-truth `updated_at`. We need to preserve this across the
         # save(), because every SyncMixin model declares updated_at with
         # auto_now=True — Django would otherwise overwrite the incoming
@@ -206,9 +248,14 @@ class SyncMixin(models.Model):
             )
             if not should:
                 return instance, 'skipped'
+            # A locally-tombstoned row is terminal — never resurrect it.
+            if instance.is_deleted and not is_deleted:
+                return instance, 'skipped'
             for key, value in data.items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
+            for fk_field, related in resolved_fks.items():
+                setattr(instance, fk_field, related)
             instance.sync_version = sync_version
             instance.is_deleted = is_deleted
             instance.synced_at = timezone.now()
@@ -230,6 +277,8 @@ class SyncMixin(models.Model):
             for key, value in data.items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
+            for fk_field, related in resolved_fks.items():
+                setattr(instance, fk_field, related)
             instance.save(_syncing=True)
             if incoming_updated and hasattr(instance, 'updated_at'):
                 cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
@@ -425,6 +474,10 @@ class Product(SyncMixin, models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(null=True, blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    # Soliq IKPU / SPIC / MXIK classification code (from tasnif.soliq.uz).
+    # Required by the OFD for live fiscalization; blank is tolerated in
+    # mock/sandbox so the catalog can be coded gradually.
+    ikpu_code = models.CharField(max_length=17, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

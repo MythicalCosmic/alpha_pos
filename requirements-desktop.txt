@@ -1,0 +1,8 @@
+# Desktop control-panel extras (installed on top of requirements.txt).
+# The in-process production-grade WSGI server for the POS. The GUI itself is the
+# panel HTML rendered in a chromeless Edge "--app" window (Edge ships with
+# Windows; no GUI toolkit dependency), driven by a tiny stdlib control server.
+-r requirements.txt
+waitress==3.0.2
+# Only needed to BUILD the .exe, not to run from source. 6.15+ supports Py 3.14.
+pyinstaller>=6.15

@@ -4,9 +4,16 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Writable data directory. Normally the project root, but a packaged build (the
+# desktop .exe) sets ALPHA_POS_DATA_DIR to a persistent per-user location so the
+# SQLite DB, logs and media survive restarts — PyInstaller's BASE_DIR is a temp
+# extraction dir that is wiped every launch.
+DATA_DIR = Path(os.environ.get('ALPHA_POS_DATA_DIR') or BASE_DIR)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-SECRET_KEY = os.environ.get('SECRET_KEY')
+SECRET_KEY = os.environ.get('SECRET_KEY', "123213")
 if not SECRET_KEY:
     if DEBUG:
         SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
@@ -40,6 +47,7 @@ INSTALLED_APPS = [
     'waiters',
     'discounts',
     'notifications',
+    'fiscalization',
     # Licensing must boot before any app whose endpoints we want to gate;
     # the middleware checks the singleton row at request time.
     'licensing',
@@ -103,7 +111,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': DATA_DIR / 'db.sqlite3',
             # SQLite has no row-level locking, so every select_for_update() in
             # the codebase (stock levels, cash register, display-id counter,
             # orders) is a silent no-op here. The only real serialization is
@@ -168,7 +176,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = DATA_DIR / 'staticfiles'
 
 # WhiteNoise compresses and serves STATIC_ROOT from gunicorn. Use the
 # non-manifest compressed backend: it gzips assets without the strict
@@ -185,7 +193,7 @@ STORAGES = {
 
 # Private media (HR documents). Files are NOT served by Django's static
 # file machinery — they're streamed only via auth-gated download views.
-MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(BASE_DIR / 'private_media'))
+MEDIA_ROOT = os.environ.get('MEDIA_ROOT', str(DATA_DIR / 'private_media'))
 MEDIA_URL = '/private-media/'  # not actually served; placeholder for FileField.url
 
 # Default primary key field type
@@ -327,7 +335,7 @@ MAX_PER_PAGE = 100
 
 # Logging — file rotation in prod, console in dev. Override the log directory
 # via LOG_DIR env if you want logs outside the project root.
-LOG_DIR = os.environ.get('LOG_DIR', str(BASE_DIR / 'logs'))
+LOG_DIR = os.environ.get('LOG_DIR', str(DATA_DIR / 'logs'))
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
 
 if not DEBUG:
@@ -394,6 +402,32 @@ LOGGING = {
 # Origins are env-driven so production gets an explicit allowlist; in DEBUG
 # we permit all origins for local dev kiosks. Browsers reject the combination
 # of CORS_ALLOW_ALL_ORIGINS=True with credentials, so we never ship that.
+# ---------------------------------------------------------------------------
+# Soliq fiscalization (Uzbek tax / OFD)
+# ---------------------------------------------------------------------------
+# PER-INSTALL fiscal identity. Each business runs its own deployment and sets
+# its OWN values here (via the desktop control panel, which writes the .env) —
+# receipts are always fiscalized under the selling business's TIN, never the
+# vendor's. See docs/FISCALIZATION.md.
+#
+# Mode: off | mock | sandbox | live  (runtime-toggleable from the control panel)
+FISCALIZATION_MODE = os.environ.get('FISCALIZATION_MODE', 'off')
+# Provider when not in mock mode: mock | multikassa  (more added as integrated)
+FISCAL_PROVIDER = os.environ.get('FISCAL_PROVIDER', 'mock')
+# serve-now (False, default): a sale completes even if the OFD is unreachable;
+# the receipt is queued and retried. block-on-failure (True): refuse to close
+# the sale until Soliq confirms.
+FISCAL_BLOCK_ON_FAILURE = os.environ.get('FISCAL_BLOCK_ON_FAILURE', 'false').lower() in ('1', 'true', 'yes')
+# The business's own tax identity + provider connection.
+FISCAL_TIN = os.environ.get('FISCAL_TIN', '')
+FISCAL_PROVIDER_URL = os.environ.get('FISCAL_PROVIDER_URL', '')
+FISCAL_MERCHANT_ID = os.environ.get('FISCAL_MERCHANT_ID', '')
+FISCAL_SECRET = os.environ.get('FISCAL_SECRET', '')
+try:
+    FISCAL_VAT_PERCENT = int(os.environ.get('FISCAL_VAT_PERCENT', '0') or '0')
+except ValueError:
+    FISCAL_VAT_PERCENT = 0
+
 # ---------------------------------------------------------------------------
 # Licensing / control plane
 # ---------------------------------------------------------------------------
