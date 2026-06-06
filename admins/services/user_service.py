@@ -60,11 +60,14 @@ class AdminUserService:
                 message='Validation failed',
             )
 
-        if not password or len(str(password)) < 8:
+        # POS staff sign in with a 4-digit PIN, not a full password.
+        pin = str(password or '').strip()
+        if not pin.isdigit() or len(pin) != 4:
             return ServiceResponse.validation_error(
-                errors={'password': 'Password must be at least 8 characters'},
+                errors={'password': 'PIN must be exactly 4 digits'},
                 message='Validation failed',
             )
+        password = pin
 
         if role not in User.RoleChoices.values:
             return ServiceResponse.validation_error(

@@ -36,19 +36,30 @@ class TestUserRoleValidation:
         assert 'status' in result.get('errors', {})
 
     def test_invalid_role_rejected_on_create(self):
+        # Valid 4-digit PIN so the role check is what trips the rejection.
         result, status = AdminUserService.create_user(
             first_name='X', last_name='Y',
-            role='ROOT', password='longenough', email='x@y.local',
+            role='ROOT', password='1234', email='x@y.local',
         )
         assert status == 422
 
-    def test_short_password_rejected_on_create(self):
+    def test_non_pin_password_rejected_on_create(self):
+        # Staff sign in with a 4-digit PIN: anything that isn't exactly
+        # 4 digits (too short, too long, non-numeric) is rejected.
+        for bad in ('abc', '123', '12345', '12a4'):
+            result, status = AdminUserService.create_user(
+                first_name='X', last_name='Y',
+                role='CASHIER', password=bad, email='x@y.local',
+            )
+            assert status == 422
+            assert 'password' in result.get('errors', {})
+
+    def test_four_digit_pin_accepted_on_create(self):
         result, status = AdminUserService.create_user(
-            first_name='X', last_name='Y',
-            role='CASHIER', password='abc', email='x@y.local',
+            first_name='Pin', last_name='User',
+            role='CASHIER', password='4821', email='pin@y.local',
         )
-        assert status == 422
-        assert 'password' in result.get('errors', {})
+        assert status == 201
 
 
 class TestInkassaFloor:
