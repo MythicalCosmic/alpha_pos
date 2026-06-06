@@ -166,6 +166,55 @@ class Api:
         rows = SyncService.get_unsynced(Category)
         return {'ok': True, 'unsynced_categories': len(rows), 'sample': rows[:3]}
 
+    # -- cloud sync (this branch <-> the cloud hub) --------------------------
+    @_safe
+    def cloud_status(self):
+        """Sync config + whether the cloud hub is reachable right now."""
+        self.server.ensure_django()
+        from base.services.sync.config import SyncConfig, get_cloud_url
+        from base.services.sync import transport
+        cfg = SyncConfig.get_status()
+        reachable = bool(get_cloud_url()) and transport.check_health()
+        return {'ok': True, 'config': cfg, 'reachable': reachable}
+
+    @_safe
+    def cloud_test_connection(self):
+        """Ping the cloud hub's /health over the configured CLOUD_SYNC_URL."""
+        self.server.ensure_django()
+        from base.services.sync import transport
+        from base.services.sync.config import get_cloud_url
+        url = get_cloud_url()
+        if not url:
+            return {'ok': False, 'error': 'CLOUD_SYNC_URL not set (Configuration tab)'}
+        ok = transport.check_health()
+        return {'ok': ok, 'reachable': ok, 'url': url,
+                'message': 'reachable' if ok else 'unreachable'}
+
+    @_safe
+    def cloud_make_test_category(self, name=None):
+        """Create a local Category so there's a real record to push up."""
+        self.server.ensure_django()
+        from base.models import Category
+        from django.conf import settings
+        branch = getattr(settings, 'BRANCH_ID', 'main') or 'main'
+        nm = name or 'Desktop sync test'
+        cat = Category.objects.create(name=nm, branch_id=branch)
+        return {'ok': True, 'uuid': str(cat.uuid), 'name': nm, 'branch_id': branch}
+
+    @_safe
+    def cloud_push(self):
+        """Push all unsynced local records up to the cloud hub."""
+        self.server.ensure_django()
+        from base.services.sync.service import SyncService
+        return {'ok': True, 'result': SyncService.push()}
+
+    @_safe
+    def cloud_pull(self):
+        """Pull changes from the cloud hub down into this branch."""
+        self.server.ensure_django()
+        from base.services.sync.service import SyncService
+        return {'ok': True, 'result': SyncService.pull_from_cloud()}
+
     # -- telegram / notifications -------------------------------------------
     @_safe
     def telegram_test(self):

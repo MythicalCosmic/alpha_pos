@@ -1,3 +1,4 @@
+import json
 import os
 import warnings
 from pathlib import Path
@@ -215,8 +216,8 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = int(
 )
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 
-BRANCH_ID = 'main'
-DEPLOYMENT_MODE = 'local'
+BRANCH_ID = os.environ.get('BRANCH_ID', 'main')
+DEPLOYMENT_MODE = os.environ.get('DEPLOYMENT_MODE', 'local')
 SYNC_ON_SAVE = False
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
@@ -280,19 +281,31 @@ if (not DEBUG
 
 SESSION_CACHE_TTL = 300
 
-SYNC_ENABLED = False
-CLOUD_SYNC_URL = ''
-CLOUD_SYNC_TOKEN = ''
+SYNC_ENABLED = os.environ.get('SYNC_ENABLED', 'False').lower() in ('true', '1', 'yes')
+CLOUD_SYNC_URL = os.environ.get('CLOUD_SYNC_URL', '')
+CLOUD_SYNC_TOKEN = os.environ.get('CLOUD_SYNC_TOKEN', '')
 SYNC_INTERVAL = 30
 SYNC_RETRY_INTERVAL = 60
 SYNC_TIMEOUT = 30
 SYNC_MAX_RETRIES = 5
 SYNC_BATCH_SIZE = 500
-ALLOWED_BRANCH_TOKENS = []
+# Comma-separated branch tokens (legacy, unbound) and an allowlist of branch
+# ids the cloud will accept from them.
+ALLOWED_BRANCH_TOKENS = [
+    t.strip() for t in os.environ.get('ALLOWED_BRANCH_TOKENS', '').split(',') if t.strip()
+]
+ALLOWED_BRANCH_IDS = [
+    b.strip() for b in os.environ.get('ALLOWED_BRANCH_IDS', '').split(',') if b.strip()
+]
 # Bind sync tokens to a specific branch so X-Branch-ID cannot be spoofed.
-# Format: {"branch_token_string": "branch_id"}. When set, this takes
-# precedence over ALLOWED_BRANCH_TOKENS (which has no per-branch binding).
-BRANCH_TOKEN_MAP = {}
+# Format (env BRANCH_TOKEN_MAP): JSON {"branch_token_string": "branch_id"}.
+# When set, this takes precedence over ALLOWED_BRANCH_TOKENS (no per-branch bind).
+try:
+    BRANCH_TOKEN_MAP = json.loads(os.environ.get('BRANCH_TOKEN_MAP', '') or '{}')
+    if not isinstance(BRANCH_TOKEN_MAP, dict):
+        BRANCH_TOKEN_MAP = {}
+except (ValueError, TypeError):
+    BRANCH_TOKEN_MAP = {}
 SYNC_PULL_ENABLED = True
 
 # Gates the sync management endpoints (status / trigger / queue / report …).
