@@ -156,7 +156,10 @@ class ExpenseService:
             description=description,
             expense_date=expense_date,
             payment_method=payment_method,
-            status=Expense.Status.PENDING,
+            # Expenses are auto-approved on creation — there's no separate
+            # approval step. The creator is recorded as the approver.
+            status=Expense.Status.APPROVED,
+            approved_by_id=created_by_id,
             receipt_number=receipt_number,
             receipt_image_url=receipt_image_url,
             created_by_id=created_by_id,
@@ -180,9 +183,9 @@ class ExpenseService:
                 f"Expense with id {expense_id} not found"
             )
 
-        if expense.status != Expense.Status.PENDING:
+        if expense.status == Expense.Status.PAID:
             return ServiceResponse.error(
-                "Can only update expenses in PENDING status"
+                "Cannot update a PAID expense"
             )
 
         if "category_id" in kwargs and kwargs["category_id"]:
@@ -221,9 +224,9 @@ class ExpenseService:
                 f"Expense with id {expense_id} not found"
             )
 
-        if expense.status != Expense.Status.PENDING:
+        if expense.status == Expense.Status.PAID:
             return ServiceResponse.error(
-                "Can only delete expenses in PENDING status"
+                "Cannot delete a PAID expense"
             )
 
         expense.is_deleted = True
