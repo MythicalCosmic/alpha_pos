@@ -254,6 +254,18 @@
           <span class="result" id="cfg-result"></span>
         </div>
       </div>
+
+      <div class="card" style="border:1px solid #b91c1c;margin-top:18px">
+        <h1 style="color:#ef4444;font-size:18px;margin:0 0 4px">⚠️ Danger zone</h1>
+        <div class="sub">Permanently delete EVERYTHING — database, all settings,
+          login, logs and uploads — so you can start over with a clean install.
+          This cannot be undone.</div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" style="background:#b91c1c;border-color:#b91c1c"
+                  onclick="factoryReset()">🗑️ Delete all data &amp; reset</button>
+          <span class="result" id="reset-result"></span>
+        </div>
+      </div>
     </section>
 
     <!-- TESTS -->
@@ -492,6 +504,27 @@ async function saveConfig(){
   const res=document.getElementById('cfg-result');
   if(r.ok){ res.className='result ok'; res.textContent='Saved'+(r.restart_required?' — restart the server to apply':''); toast('Configuration saved'); refreshAll(); }
   else { res.className='result err'; res.textContent=r.error||'Failed'; }
+}
+
+// Danger zone: wipe everything for a fresh install. Double-gated — a confirm
+// then typed DELETE — because it's irreversible and leaves nothing behind.
+async function factoryReset(){
+  const el=document.getElementById('reset-result');
+  if(!confirm('Delete ALL Alpha POS data — database, settings, login, logs and uploads?\n\nThis cannot be undone.')) return;
+  const typed = prompt('This is permanent. Type DELETE to confirm:');
+  if((typed||'').trim().toUpperCase() !== 'DELETE'){ el.className='result'; el.textContent='Cancelled.'; return; }
+  el.className='result'; el.textContent='Deleting…';
+  try{
+    const r = await api.factory_reset(true);
+    if(r.ok){
+      el.className='result ok';
+      el.textContent = r.message || 'All data deleted. Close and reopen the app.';
+      alert((r.message || 'All data deleted.') + '\n\nThe app will close now — reopen it to set up fresh.');
+      try{ window.close(); }catch(e){}
+    } else {
+      el.className='result err'; el.textContent = r.error || 'Reset failed';
+    }
+  }catch(e){ el.className='result err'; el.textContent=String(e); }
 }
 
 // generic test runner

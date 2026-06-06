@@ -36,6 +36,9 @@ SECRET_FILE = DATA_DIR / '.secret_key'
 FERNET_FILE = DATA_DIR / '.license_fernet_key'
 STATE_FILE = DATA_DIR / 'desktop_state.json'
 CREDS_FILE = DATA_DIR / 'admin_credentials.json'
+# Marker written by a factory reset so a leftover (locked) DB is wiped on the
+# next launch, before Django opens it.
+RESET_FLAG = DATA_DIR / '.reset_pending'
 
 # The fields the control-panel config form manages, with sensible defaults.
 # Grouped only for the UI; stored flat in .env.
@@ -134,9 +137,60 @@ def write_config(values: dict) -> None:
     _write_protected(ENV_FILE, '\n'.join(lines) + '\n')
 
 
+def _wipe_data() -> list:
+    """Delete ALL local data — DB, generated secrets, saved config/state, logs,
+    static and media — so the next launch is a clean first install. Returns the
+    paths actually removed. Best-effort: a file locked by a live DB connection
+    is skipped here and finished by consume_reset_pending() on the next launch.
+    """
+    import shutil
+    targets = [
+        DATA_DIR / 'db.sqlite3', DATA_DIR / 'db.sqlite3-wal', DATA_DIR / 'db.sqlite3-shm',
+        ENV_FILE, SECRET_FILE, FERNET_FILE, STATE_FILE, CREDS_FILE,
+        DATA_DIR / 'logs', DATA_DIR / 'staticfiles', DATA_DIR / 'private_media',
+    ]
+    removed = []
+    for p in targets:
+        try:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+                removed.append(str(p))
+            elif p.exists():
+                p.unlink()
+                removed.append(str(p))
+        except OSError:
+            pass  # locked (live DB) — consume_reset_pending() retries next launch
+    return removed
+
+
+def factory_reset() -> dict:
+    """Wipe everything now and arm a pending-reset marker so any file still
+    locked by the running process is removed on the next launch."""
+    removed = _wipe_data()
+    try:
+        RESET_FLAG.write_text('1', encoding='utf-8')
+    except OSError:
+        pass
+    return {'removed': removed}
+
+
+def consume_reset_pending() -> None:
+    """If a reset was armed, finish it before Django touches the DB. Runs at the
+    very start of apply_env_to_process so the wipe happens in a fresh process
+    where nothing holds the sqlite file open."""
+    try:
+        if RESET_FLAG.exists():
+            _wipe_data()
+            RESET_FLAG.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def apply_env_to_process() -> None:
     """Load .env + the generated secrets into os.environ. MUST run before
     django.setup() so settings.py sees them."""
+    # Finish any armed factory reset first — before secrets are regenerated.
+    consume_reset_pending()
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alpha_pos.settings')
     # Tell settings.py where to keep the DB / logs / media (persistent).
     os.environ.setdefault('ALPHA_POS_DATA_DIR', str(DATA_DIR))

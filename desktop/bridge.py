@@ -119,6 +119,38 @@ class Api:
         return {'ok': True, **self.server.stop()}
 
     @_safe
+    def factory_reset(self, confirm=False):
+        """Delete the entire install — database, settings, secrets, logs, media
+        — so the operator can start over with a clean first install. Requires
+        an explicit confirm flag from the UI dialog."""
+        if confirm is not True:
+            return {'ok': False, 'error': 'Confirmation required'}
+        # Guard: in a source checkout DATA_DIR is the project root, so the wipe
+        # would delete the repo. Only allow it in the packaged (frozen) app.
+        import sys
+        if not getattr(sys, 'frozen', False):
+            return {'ok': False,
+                    'error': 'Factory reset only runs in the installed app.'}
+        # Stop the POS server and drop DB connections so the sqlite file isn't
+        # locked when we delete it.
+        try:
+            self.server.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception('stop during factory reset failed')
+        try:
+            from django.db import connections
+            connections.close_all()
+        except Exception:  # noqa: BLE001
+            pass
+        result = config_store.factory_reset()
+        return {
+            'ok': True,
+            'removed': result.get('removed', []),
+            'message': 'All data deleted. Close and reopen Alpha POS to set it '
+                       'up fresh.',
+        }
+
+    @_safe
     def server_status(self):
         return {'ok': True, **self.server.status()}
 
