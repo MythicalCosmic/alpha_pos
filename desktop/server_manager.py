@@ -93,6 +93,13 @@ class ServerManager:
                 call_command('bootstrap_admin', verbosity=0)
         except Exception as exc:  # noqa: BLE001
             log(f'  (bootstrap_admin skipped: {exc})')
+        log('Seeding notification templates…')
+        try:
+            # Idempotent (get_or_create) — without this the templates table is
+            # empty and automatic Telegram notifications silently no-op.
+            call_command('seed_templates', verbosity=0)
+        except Exception as exc:  # noqa: BLE001
+            log(f'  (seed_templates skipped: {exc})')
         log('Collecting static files…')
         try:
             call_command('collectstatic', '--noinput', verbosity=0)
