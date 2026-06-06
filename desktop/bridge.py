@@ -80,6 +80,17 @@ class Api:
                     ns.chat_ids = [c.strip() for c in str(chat_raw)
                                    .replace(' ', ',').split(',') if c.strip()]
                 ns.save()
+            # Sync settings are read from `settings` at call time, so apply them
+            # to the live settings object — no app restart needed to test sync.
+            from django.conf import settings as _dj
+            for key in ('CLOUD_SYNC_URL', 'CLOUD_SYNC_TOKEN', 'BRANCH_ID', 'DEPLOYMENT_MODE'):
+                if key in clean and clean[key] is not None:
+                    setattr(_dj, key, clean[key])
+            if 'SYNC_ENABLED' in clean:
+                from base.services.sync.config import SyncConfig
+                en = str(clean['SYNC_ENABLED']).lower() in ('true', '1', 'yes')
+                _dj.SYNC_ENABLED = en
+                SyncConfig.enable() if en else SyncConfig.disable()
         except Exception:  # noqa: BLE001
             logger.exception('live config apply failed')
         return {'ok': True, 'restart_required': self.server.is_running()}

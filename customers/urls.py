@@ -1,7 +1,12 @@
 from django.urls import path
-from customers.views import auth_views, category_views, product_views, order_views
+from customers.views import auth_views, category_views, product_views, order_views, staff_views
 
 urlpatterns = [
+    # Pre-login cashier picker for the monoblock. Public (no session): the
+    # frontend lists cashiers here, then submits email + password to
+    # /auth-login, which verifies the password and auto-starts the shift.
+    path('cashiers', staff_views.list_cashiers),
+
     path('auth-login', auth_views.login),
     path('auth-logout', auth_views.logout),
     path('auth-logout-all', auth_views.logout_all),
