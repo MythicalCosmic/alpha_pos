@@ -19,7 +19,9 @@ class ServerManager:
         self._thread = None
         self._django_ready = False
         self._last_error = ''
-        self.host = '127.0.0.1'
+        # Bind to every interface so the whole LAN (other monoblocks /
+        # cashier terminals) can reach the POS, not just this machine.
+        self.host = '0.0.0.0'
         self.port = 8000
         self._sync_thread = None
         self._sync_stop = False
@@ -160,8 +162,11 @@ class ServerManager:
             self._ensure_sync_worker()  # auto-push/pull when sync is enabled
             self._ensure_heartbeat_worker()  # keep the license verdict fresh
             self._last_error = ''
-            logger.info('POS server started on http://%s:%s', self.host, self.port)
-            return {'running': True, 'url': self.url(), 'message': 'Server started'}
+            logger.info('POS server bound on 0.0.0.0:%s — reachable on the LAN at %s',
+                        self.port, self.url())
+            return {'running': True, 'url': self.url(),
+                    'lan_url': self.url(), 'lan_ip': self.lan_ip(),
+                    'message': 'Server started'}
         except Exception as exc:  # noqa: BLE001
             self._last_error = str(exc)
             logger.exception('server start failed')
@@ -177,13 +182,32 @@ class ServerManager:
         self._thread = None
         return {'running': False, 'message': 'Server stopped'}
 
+    @staticmethod
+    def lan_ip():
+        """This machine's primary LAN IP — the address other devices use to
+        reach the POS. Falls back to 127.0.0.1 if offline."""
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # No packets are actually sent; this just selects the outbound
+            # interface so getsockname() returns the real LAN IP.
+            s.connect(('8.8.8.8', 80))
+            return s.getsockname()[0]
+        except Exception:  # noqa: BLE001
+            return '127.0.0.1'
+        finally:
+            s.close()
+
     def url(self):
-        return f'http://{self.host}:{self.port}'
+        # The address OTHER devices use — the LAN IP, not the 0.0.0.0 bind addr.
+        return f'http://{self.lan_ip()}:{self.port}'
 
     def status(self):
         return {
             'running': self.is_running(),
             'url': self.url(),
+            'lan_ip': self.lan_ip(),
+            'port': self.port,
             'django_ready': self._django_ready,
             'last_error': self._last_error,
         }

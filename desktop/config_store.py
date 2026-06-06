@@ -146,6 +146,14 @@ def apply_env_to_process() -> None:
     os.environ.setdefault('ALLOWED_HOSTS', 'localhost,127.0.0.1')
     for k, v in parse_env_file().items():
         os.environ[k] = v
+    # The desktop binds the POS to the whole LAN (0.0.0.0), so devices reach it
+    # by this machine's LAN IP / hostname. Allow any Host header — this is a
+    # trusted-LAN appliance; auth + licensing are the real boundary, not Host
+    # validation. (Ensures DHCP IP changes never lock the network out.)
+    hosts = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()]
+    if '*' not in hosts:
+        hosts.append('*')
+        os.environ['ALLOWED_HOSTS'] = ','.join(hosts)
 
 
 def read_state() -> dict:
