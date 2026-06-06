@@ -71,7 +71,8 @@ class AuthService:
             return ServiceResponse.forbidden("Admin accounts cannot log in here")
 
         branch_id = getattr(settings, 'BRANCH_ID', '')
-        if branch_id and user.branch_id and user.branch_id != branch_id:
+        if (getattr(settings, 'ENFORCE_BRANCH_LOGIN', False)
+                and branch_id and user.branch_id and user.branch_id != branch_id):
             return ServiceResponse.forbidden("You are not authorized for this branch")
 
         session_key = secrets.token_hex(32)

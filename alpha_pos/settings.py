@@ -227,6 +227,11 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = int(
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 
 BRANCH_ID = os.environ.get('BRANCH_ID', 'main')
+# Whether login refuses a user whose branch_id differs from this instance's
+# BRANCH_ID. OFF by default: users synced from the cloud (branch_id=cloud) would
+# otherwise be locked out of a desktop branch. Operators running true isolated
+# multi-branch can set ENFORCE_BRANCH_LOGIN=True to re-enable the guard.
+ENFORCE_BRANCH_LOGIN = os.environ.get('ENFORCE_BRANCH_LOGIN', 'False').strip().lower() in ('1', 'true', 'yes', 'on')
 DEPLOYMENT_MODE = os.environ.get('DEPLOYMENT_MODE', 'local')
 SYNC_ON_SAVE = False
 
