@@ -66,7 +66,7 @@ def create_order(request):
         return json_response(error)
 
     user = request.user
-    cashier_id = user.id if user.role == 'CASHIER' else None
+    cashier_id = user.id if user.role in ('CASHIER', 'MANAGER') else None
 
     result, status_code = CustomerOrderService.create_order(
         user_id=user.id,
@@ -105,7 +105,7 @@ def add_item(request, order_id):
             "errors": {"quantity": "quantity must be a positive integer"}
         }, 422))
 
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.add_item_to_order(
         order_id, product_id, quantity, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -129,7 +129,7 @@ def update_item(request, order_id, item_id):
             "errors": {"quantity": "quantity must be a positive integer"}
         }, 422))
 
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.update_order_item(
         order_id, item_id, quantity, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -141,7 +141,7 @@ def update_item(request, order_id, item_id):
 @require_http_methods(["DELETE"])
 @login_required
 def remove_item(request, order_id, item_id):
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.remove_item_from_order(
         order_id, item_id, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -166,7 +166,7 @@ def update_status(request, order_id):
             "errors": {"status": "status is required"}
         }, 422))
 
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.update_order_status(
         order_id, status, cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -180,7 +180,7 @@ def update_status(request, order_id):
 @role_required(*STAFF_ROLES)
 @idempotent('orders.pay')
 def pay_order(request, order_id):
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     payment_method = 'CASH'
     payments = None              # split: [{"method","amount"}, ...]
     discount_percent = 0
@@ -204,7 +204,7 @@ def pay_order(request, order_id):
 @login_required
 @role_required(*STAFF_ROLES)
 def mark_ready(request, order_id):
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.mark_order_ready(
         order_id, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -217,7 +217,7 @@ def mark_ready(request, order_id):
 @login_required
 @role_required(*STAFF_ROLES)
 def mark_item_ready(request, order_id, item_id):
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.mark_item_ready(
         order_id, item_id, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -230,7 +230,7 @@ def mark_item_ready(request, order_id, item_id):
 @login_required
 @role_required(*STAFF_ROLES)
 def unmark_item_ready(request, order_id, item_id):
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.unmark_item_ready(
         order_id, item_id, cashier_id=cashier_id,
         user_id=request.user.id, user_role=request.user.role,
@@ -251,7 +251,7 @@ def cancel_order(request, order_id):
         if body:
             reason = (body.get('reason') or '').strip()[:255] or None
 
-    cashier_id = request.user.id if request.user.role == 'CASHIER' else None
+    cashier_id = request.user.id if request.user.role in ('CASHIER', 'MANAGER') else None
     result, status_code = CustomerOrderService.update_order_status(
         order_id, 'CANCELED', cashier_id,
         user_id=request.user.id, user_role=request.user.role,

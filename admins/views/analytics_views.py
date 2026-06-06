@@ -14,7 +14,7 @@ from base.security.permissions import admin_required, manager_required
 
 
 @require_GET
-@admin_required
+@manager_required
 def shift_perf_view(request, shift_id):
     try:
         shift = Shift.objects.select_related('user').get(
@@ -28,7 +28,7 @@ def shift_perf_view(request, shift_id):
 
 
 @require_GET
-@admin_required
+@manager_required
 def menu_engineering_view(request):
     df_str = request.GET.get('from')
     dt_str = request.GET.get('to')

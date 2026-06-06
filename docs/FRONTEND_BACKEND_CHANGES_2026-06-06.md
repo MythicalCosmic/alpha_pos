@@ -411,3 +411,23 @@ ACTIVE  →  (POST /shifts/<id>/end)  →  ENDED  →  (POST /shifts/<id>/reconc
 So a just-ended shift is `ENDED` (not `COMPLETED`), and stats are available
 immediately (`ENDED`/`COMPLETED` use the frozen end-of-shift figures; `ACTIVE`
 computes live per §10). Analytics `by_status` now includes an `ENDED` bucket.
+
+---
+
+## 12. Why shift stats could look empty (fixes)
+
+Shift stats are attributed to a shift by `order.cashier_id` + time window, so an
+order with no `cashier_id` counts toward nobody's shift. Two fixes:
+
+1. **Orders rung up by a MANAGER are now attributed** to that manager
+   (`order.cashier_id`), exactly like a cashier. Previously attribution only
+   happened for `role == 'CASHIER'`, so a manager's orders had `cashier_id =
+   null` and their shift showed zero stats. Applies to create / add-item /
+   status / pay / mark-ready, etc.
+2. **The older analytics endpoints are now manager-accessible**:
+   `GET /api/admins/analytics/shifts/<id>` and `…/menu-engineering` moved from
+   admin-only to `manager_required` (a manager calling them no longer gets 403).
+
+Backend computation itself is verified correct: start shift → cashier/manager
+rings & pays an order → end shift → the shift detail, deep analytics, and
+handover report all show the orders, revenue and cash/card split.

@@ -336,7 +336,7 @@ class CustomerOrderService:
         if not UserRepository.exists(id=user_id):
             return ServiceResponse.not_found('User not found')
 
-        if cashier_id and not UserRepository.exists(id=cashier_id, role='CASHIER'):
+        if cashier_id and not UserRepository.exists(id=cashier_id, role__in=['CASHIER', 'MANAGER']):
             return ServiceResponse.error('Invalid cashier')
 
         if not items:
