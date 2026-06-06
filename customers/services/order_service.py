@@ -895,6 +895,17 @@ class CustomerOrderService:
         order.payment_method = (next(iter(distinct)) if len(distinct) == 1
                                 else Order.PaymentMethod.MIXED)
         order.paid_at = timezone.now()
+
+        # Credit the order to the cashier who collected the payment when it
+        # isn't already attributed. In the restaurant flow a waiter (or the
+        # customer) creates the order with cashier_id=NULL and the cashier only
+        # rings up payment — without this the order stays unattributed and never
+        # appears in that cashier's shift stats / cash reconciliation.
+        cashier_fields = []
+        if cashier_id and not order.cashier_id:
+            order.cashier_id = cashier_id
+            cashier_fields = ['cashier']
+
         if pct > 0:
             # Reflect the pay-time discount in the order totals (keeps the
             # invariant total_amount == subtotal - discount_amount).
@@ -903,9 +914,10 @@ class CustomerOrderService:
                                      + (base_total - effective_total))
             order.total_amount = effective_total
             order.save(update_fields=['is_paid', 'payment_method', 'paid_at',
-                                      'discount_percent', 'discount_amount', 'total_amount'])
+                                      'discount_percent', 'discount_amount',
+                                      'total_amount'] + cashier_fields)
         else:
-            order.save(update_fields=['is_paid', 'payment_method', 'paid_at'])
+            order.save(update_fields=['is_paid', 'payment_method', 'paid_at'] + cashier_fields)
 
         for method, amount in lines:
             OrderPayment.objects.create(order=order, method=method, amount=amount)

@@ -468,3 +468,27 @@ class TestInstantProducts:
         names = [it['product_name'] for it in shown[0]['items']]
         assert 'Juice' not in names  # instant drink hidden from the kitchen
         assert shown[0]['items_total'] == 1  # only the cooked item counts
+
+
+class TestPaymentAttributesCashier:
+    """A waiter/customer-created order (cashier_id NULL) must be credited to
+    the cashier who collects payment, so it shows in that cashier's shift."""
+
+    def test_pay_sets_cashier_when_unattributed(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=None)
+        assert order.cashier_id is None
+        res, st = CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER', payment_method='CASH')
+        assert st == 200
+        order.refresh_from_db()
+        assert order.cashier_id == cashier_user.id
+
+    def test_pay_keeps_existing_cashier(self, order_factory, cashier_user, other_cashier_user, regular_user):
+        # If the order already has a cashier, paying doesn't steal attribution.
+        order = order_factory(user=regular_user, cashier=other_cashier_user)
+        CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id,
+            user_id=cashier_user.id, user_role='CASHIER', payment_method='CASH')
+        order.refresh_from_db()
+        assert order.cashier_id == other_cashier_user.id
