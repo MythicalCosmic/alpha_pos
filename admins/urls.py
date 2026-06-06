@@ -3,10 +3,15 @@ from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
 from admins.views import (
     audit_views, export_views, dashboard_views, forecast_views,
-    analytics_views,
+    analytics_views, role_views,
 )
 
 urlpatterns = [
+    # Roles & permissions editor (Settings -> Roles).
+    path('permissions', role_views.list_permissions),
+    path('roles', role_views.list_roles),
+    path('roles/<str:name>', role_views.role_detail),
+
     path('auth-login', auth_views.login),
     path('auth-logout', auth_views.logout),
     path('auth-logout-all', auth_views.logout_all),

@@ -1,7 +1,7 @@
 import logging
 
 logger = logging.getLogger(__name__)
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.db import transaction
 from django.utils import timezone
 from datetime import timedelta
@@ -67,6 +67,9 @@ def _serialize_order_list(order):
         'status': _to_api_status(order.status),
         'is_paid': order.is_paid,
         'total_amount': str(order.total_amount or 0),
+        'discount_percent': str(order.discount_percent or 0),
+        'payments': [{'method': p.method, 'amount': str(p.amount)}
+                     for p in order.payments.all()],
         'place': {'id': order.place.id, 'name': order.place.name} if order.place else None,
         'table': {'id': order.table.id, 'number': order.table.number} if order.table else None,
         # The list queryset is prefetched with `items__product__category`
@@ -140,6 +143,9 @@ def _serialize_order_detail(order):
         'is_paid': order.is_paid,
         'paid_at': order.paid_at.isoformat() if order.paid_at else None,
         'total_amount': str(order.total_amount),
+        'discount_percent': str(order.discount_percent or 0),
+        'payments': [{'method': p.method, 'amount': str(p.amount)}
+                     for p in order.payments.all()],
         'items': items,
         'items_ready_count': sum(1 for i in items if i['is_ready']),
         'items_total_count': len(items),
@@ -631,13 +637,23 @@ class CustomerOrderService:
         # otherwise the register over-reports balance while stock is
         # reverse-deducted by the handler below. Only cash reverses through
         # the drawer; card/Payme settle externally.
-        if (
-            status == 'CANCELED'
-            and order.is_paid
-            and order.total_amount
-            and (order.payment_method == 'CASH' or order.payment_method is None)
-        ):
-            InkassaService.add_to_register(-order.total_amount)
+        if status == 'CANCELED' and order.is_paid:
+            from base.models import OrderPayment
+            from django.db.models import Sum
+            pay_qs = OrderPayment.objects.filter(order=order)
+            if pay_qs.exists():
+                # Reverse exactly the cash share that hit the drawer = the bill
+                # total minus what settled externally (card/Payme), so a MIXED
+                # order reverses only its cash portion.
+                noncash = pay_qs.exclude(method='CASH').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                cash_in_drawer = Decimal(order.total_amount or 0) - noncash
+            elif order.payment_method in ('CASH', None) and order.total_amount:
+                # Legacy order (paid before per-line payments) — full reversal.
+                cash_in_drawer = Decimal(order.total_amount or 0)
+            else:
+                cash_in_drawer = Decimal('0')
+            if cash_in_drawer > 0:
+                InkassaService.add_to_register(-cash_in_drawer)
 
         if status == 'READY':
             OrderNotification.on_order_ready(order_id)
@@ -773,8 +789,20 @@ class CustomerOrderService:
 
     @staticmethod
     @transaction.atomic
-    def mark_as_paid(order_id, cashier_id, user_id=None, user_role=None, payment_method='CASH'):
-        from base.models import Order
+    def mark_as_paid(order_id, cashier_id, user_id=None, user_role=None,
+                     payment_method='CASH', payments=None, discount_percent=0):
+        """Mark an order paid. Two input shapes:
+
+        - Legacy single: payment_method='CASH'  → one full-amount line.
+        - Split: payments=[{'method','amount'}, ...] + optional discount_percent.
+
+        Money rules: an optional percent discount cuts the bill to
+        effective_total = round(total_amount * (1 - pct/100)); the payment lines
+        must cover it; the only allowed overpayment is cash (the change). Only
+        the cash share (net of change) hits the drawer; card/Payme settle
+        externally.
+        """
+        from base.models import Order, OrderPayment
         # Lock the order row for the duration of payment processing to prevent
         # double-pay races (two concurrent requests both passing is_paid check).
         order = OrderRepository.get_for_update(order_id)
@@ -791,20 +819,81 @@ class CustomerOrderService:
         if order.is_paid:
             return ServiceResponse.error('Order already paid')
 
-        valid_methods = [c[0] for c in Order.PaymentMethod.choices]
-        if payment_method not in valid_methods:
+        # MIXED is a roll-up marker the server sets — never an input method.
+        valid_methods = [c[0] for c in Order.PaymentMethod.choices if c[0] != 'MIXED']
+
+        # -- normalize discount + payment lines ---------------------------------
+        try:
+            pct = Decimal(str(discount_percent or 0))
+        except Exception:  # noqa: BLE001
+            return ServiceResponse.validation_error(errors={'discount_percent': 'Must be a number'})
+        if pct < 0 or pct > 100:
+            return ServiceResponse.validation_error(errors={'discount_percent': 'Must be 0..100'})
+
+        base_total = Decimal(order.total_amount or 0)
+        effective_total = (base_total * (Decimal('1') - pct / Decimal('100'))).quantize(
+            Decimal('1'), rounding=ROUND_HALF_UP)
+
+        if payments:
+            lines = []
+            for p in payments:
+                method = str((p or {}).get('method', '')).upper()
+                if method not in valid_methods:
+                    return ServiceResponse.validation_error(
+                        errors={'payments': f'method must be one of {valid_methods}'})
+                try:
+                    amount = Decimal(str((p or {}).get('amount')))
+                except Exception:  # noqa: BLE001
+                    return ServiceResponse.validation_error(errors={'payments': 'amount must be a number'})
+                if amount <= 0:
+                    return ServiceResponse.validation_error(errors={'payments': 'amount must be > 0'})
+                lines.append((method, amount))
+        else:
+            if payment_method not in valid_methods:
+                return ServiceResponse.validation_error(
+                    errors={'payment_method': f'Must be one of {valid_methods}'})
+            lines = [(payment_method, effective_total)]
+
+        paid_sum = sum((amt for _, amt in lines), Decimal('0'))
+        cash_sum = sum((amt for m, amt in lines if m == 'CASH'), Decimal('0'))
+        noncash_sum = paid_sum - cash_sum
+
+        if paid_sum < effective_total:
             return ServiceResponse.validation_error(
-                errors={'payment_method': f'Must be one of {valid_methods}'},
-            )
+                errors={'payments': 'Payments do not cover the total'},
+                message=f'Short by {effective_total - paid_sum}')
+        # Overpayment is only the customer's cash change. Non-cash must never
+        # exceed the bill (no "overpay by card").
+        if noncash_sum > effective_total:
+            return ServiceResponse.validation_error(
+                errors={'payments': 'Non-cash overpayment is not allowed'})
 
+        # -- persist ------------------------------------------------------------
+        distinct = {m for m, _ in lines}
         order.is_paid = True
-        order.payment_method = payment_method
+        order.payment_method = (next(iter(distinct)) if len(distinct) == 1
+                                else Order.PaymentMethod.MIXED)
         order.paid_at = timezone.now()
-        order.save(update_fields=['is_paid', 'payment_method', 'paid_at'])
+        if pct > 0:
+            # Reflect the pay-time discount in the order totals (keeps the
+            # invariant total_amount == subtotal - discount_amount).
+            order.discount_percent = pct
+            order.discount_amount = (Decimal(order.discount_amount or 0)
+                                     + (base_total - effective_total))
+            order.total_amount = effective_total
+            order.save(update_fields=['is_paid', 'payment_method', 'paid_at',
+                                      'discount_percent', 'discount_amount', 'total_amount'])
+        else:
+            order.save(update_fields=['is_paid', 'payment_method', 'paid_at'])
 
-        # Cash drawer only tracks physical cash. Card/Payme settle externally.
-        if payment_method == 'CASH':
-            InkassaService.add_to_register(order.total_amount)
+        for method, amount in lines:
+            OrderPayment.objects.create(order=order, method=method, amount=amount)
+
+        # Cash drawer only tracks physical cash kept (net of change). The cash
+        # share of the bill = effective_total - non-cash settled externally.
+        cash_to_drawer = effective_total - noncash_sum
+        if cash_to_drawer > 0:
+            InkassaService.add_to_register(cash_to_drawer)
         OrderNotification.on_order_paid(order_id)
 
         # Fiscalize the sale (Soliq). No-op unless fiscalization is enabled.

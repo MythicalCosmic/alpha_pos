@@ -294,3 +294,60 @@ class TestOrderLifecycleContract:
         assert status == 200
         assert result['success'] is True
         assert result['data']['status'] == 'READY'
+
+
+class TestSplitPayment:
+    """Multi-line payments + pay-time percent discount (money math)."""
+
+    def test_split_exact_only_cash_hits_drawer(self, order_factory, cashier_user, regular_user):
+        from decimal import Decimal
+        from base.models import CashRegister, OrderPayment
+        CashRegister.objects.create(current_balance=Decimal('0'))
+        order = order_factory(user=regular_user, cashier=cashier_user)  # total 10.00
+        result, status = CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id, user_id=cashier_user.id, user_role='CASHIER',
+            payments=[{'method': 'HUMO', 'amount': 6}, {'method': 'CASH', 'amount': 4}],
+        )
+        assert status == 200, result
+        order.refresh_from_db()
+        assert order.is_paid and order.payment_method == 'MIXED'
+        assert OrderPayment.objects.filter(order=order).count() == 2
+        assert CashRegister.objects.first().current_balance == Decimal('4.00')
+
+    def test_discount_with_cash_change(self, order_factory, cashier_user, regular_user):
+        from decimal import Decimal
+        from base.models import CashRegister
+        CashRegister.objects.create(current_balance=Decimal('0'))
+        order = order_factory(user=regular_user, cashier=cashier_user)  # total 10.00
+        # 10% off -> effective 9; pay 5 HUMO + 10 CASH (6 of the cash is change)
+        result, status = CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id, user_id=cashier_user.id, user_role='CASHIER',
+            discount_percent=10,
+            payments=[{'method': 'HUMO', 'amount': 5}, {'method': 'CASH', 'amount': 10}],
+        )
+        assert status == 200, result
+        order.refresh_from_db()
+        assert order.total_amount == Decimal('9.00')
+        assert order.discount_percent == Decimal('10.00')
+        # cash share of the bill = effective(9) - noncash(5) = 4 (net of change)
+        assert CashRegister.objects.first().current_balance == Decimal('4.00')
+
+    def test_shortfall_rejected(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user)
+        result, status = CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id, user_id=cashier_user.id, user_role='CASHIER',
+            payments=[{'method': 'CASH', 'amount': 7}],
+        )
+        assert status == 422
+        order.refresh_from_db()
+        assert not order.is_paid
+
+    def test_noncash_overpay_rejected(self, order_factory, cashier_user, regular_user):
+        order = order_factory(user=regular_user, cashier=cashier_user)
+        result, status = CustomerOrderService.mark_as_paid(
+            order.id, cashier_id=cashier_user.id, user_id=cashier_user.id, user_role='CASHIER',
+            payments=[{'method': 'HUMO', 'amount': 12}],
+        )
+        assert status == 422
+        order.refresh_from_db()
+        assert not order.is_paid

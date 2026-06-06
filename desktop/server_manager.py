@@ -23,6 +23,39 @@ class ServerManager:
         self.port = 8000
         self._sync_thread = None
         self._sync_stop = False
+        self._hb_thread = None
+        self._hb_stop = False
+
+    # -- Automatic license heartbeat ----------------------------------------
+    def _ensure_heartbeat_worker(self):
+        """Phone home to the control center every LICENSE_HEARTBEAT_INTERVAL so
+        the license/billing verdict (active/suspended/expired) stays fresh
+        without the operator clicking. Self-gates: do_heartbeat() is a no-op
+        when no control-center URL is configured (offline-activated installs)."""
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            return
+        self._hb_stop = False
+        self._hb_thread = threading.Thread(
+            target=self._heartbeat_loop, name='license-heartbeat', daemon=True)
+        self._hb_thread.start()
+        logger.info('heartbeat worker started')
+
+    def _heartbeat_loop(self):
+        from django.conf import settings as dj
+        first = True
+        while not self._hb_stop:
+            delay = 20 if first else max(
+                60, int(getattr(dj, 'LICENSE_HEARTBEAT_INTERVAL', 300) or 300))
+            first = False
+            for _ in range(delay):
+                if self._hb_stop:
+                    return
+                time.sleep(1)
+            try:
+                from licensing.services.heartbeat import do_heartbeat
+                do_heartbeat()  # no-op without LICENSE_CONTROL_CENTER_URL
+            except Exception:  # noqa: BLE001 — never let the worker die
+                logger.exception('heartbeat worker iteration failed')
 
     # -- Automatic background sync ------------------------------------------
     def _ensure_sync_worker(self):
@@ -125,6 +158,7 @@ class ServerManager:
             )
             self._thread.start()
             self._ensure_sync_worker()  # auto-push/pull when sync is enabled
+            self._ensure_heartbeat_worker()  # keep the license verdict fresh
             self._last_error = ''
             logger.info('POS server started on http://%s:%s', self.host, self.port)
             return {'running': True, 'url': self.url(), 'message': 'Server started'}

@@ -725,6 +725,9 @@ class Order(SyncMixin, models.Model):
         UZCARD = "UZCARD", "Uzcard"
         HUMO = "HUMO", "Humo"
         PAYME = "PAYME", "Payme"
+        # Set on the Order when a single sale is split across >1 distinct method.
+        # The per-line breakdown lives in OrderPayment rows.
+        MIXED = "MIXED", "Mixed"
 
     is_paid = models.BooleanField(default=False, db_index=True)
     payment_method = models.CharField(
@@ -736,6 +739,9 @@ class Order(SyncMixin, models.Model):
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Pay-time percent discount (0..100) applied to total_amount at checkout.
+    # The amount due the cashier collects is total_amount * (1 - pct/100).
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     # Indexed: dashboard/today, forecast/tomorrow, menu-engineering,
     # shift_performance, 1C export, and the Telegram /status command all
     # filter by created_at range; without the index every analytics call
@@ -753,7 +759,7 @@ class Order(SyncMixin, models.Model):
     # (status transitions, item changes) still syncs normally.
     SYNC_WRITE_DENYLIST = frozenset({
         'is_paid', 'payment_method', 'total_amount', 'subtotal',
-        'discount_amount', 'paid_at',
+        'discount_amount', 'discount_percent', 'paid_at',
     })
 
     def to_sync_dict(self):
@@ -1362,3 +1368,71 @@ class SequenceCounter(models.Model):
 
     def __str__(self):
         return f"SequenceCounter<{self.scope}={self.value}>"
+
+
+class OrderPayment(SyncMixin, models.Model):
+    """One line of a (possibly split) order payment. A single sale can carry
+    several rows — e.g. 60 000 Humo + 40 000 Cash, or two CASH lines. The
+    Order keeps the rolled-up `payment_method` (a single method, or MIXED)."""
+    order = models.ForeignKey(
+        'base.Order', on_delete=models.CASCADE, related_name='payments',
+    )
+    method = models.CharField(max_length=10, choices=Order.PaymentMethod.choices)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = SyncManager()
+
+    # The cloud is the collector of money rows; a peer cannot invent payments.
+    SYNC_WRITE_DENYLIST = frozenset({'amount', 'method'})
+
+    class Meta:
+        db_table = 'order_payment'
+        indexes = [models.Index(fields=['order', 'method'])]
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['order_uuid'] = str(self.order.uuid) if self.order else None
+        return data
+
+    def __str__(self):
+        return f"OrderPayment<{self.method} {self.amount} on #{self.order_id}>"
+
+
+class PaymentMethodConfig(models.Model):
+    """Branding/catalog for the cashier payment screen: which methods show,
+    their label, inline SVG icon and accent color. Seeded with the four
+    built-ins; vendor-editable in admin. Plain (non-synced) per-install config
+    — the frontend caches it per-PC after login."""
+    code = models.CharField(
+        max_length=10, unique=True, choices=Order.PaymentMethod.choices,
+    )
+    label = models.CharField(max_length=40)
+    icon = models.TextField(blank=True, default='', help_text='Inline SVG (24x24, currentColor)')
+    color = models.CharField(max_length=9, default='#3b82f6')
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payment_method_config'
+        ordering = ['sort_order', 'code']
+
+    def __str__(self):
+        return f"PaymentMethodConfig<{self.code}>"
+
+
+class RolePermission(models.Model):
+    """Per-role default permission set, edited by Settings → Roles. Enforcement
+    is per-user (User.permissions); this is the role template the editor manages
+    and new users inherit. Plain (non-synced) config."""
+    role = models.CharField(max_length=20, unique=True, choices=User.RoleChoices.choices)
+    permissions = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'role_permission'
+
+    def __str__(self):
+        return f"RolePermission<{self.role}>"

@@ -7,7 +7,7 @@ CACHE_PREFIX = 'sync'
 SYNC_ORDER = [
     # Base models (synced first - other models depend on these)
     'user', 'category', 'deliveryperson', 'place', 'table', 'product',
-    'order', 'orderitem', 'cashregister', 'inkassa',
+    'order', 'orderitem', 'orderpayment', 'cashregister', 'inkassa',
     'shifttemplate', 'shift', 'cashreconciliation',
     # Stock models (synced after base, respecting FK dependencies)
     'stocklocation', 'stockunit', 'stockcategory', 'stockitem',
@@ -44,6 +44,7 @@ MODEL_MAP = {
     'product': 'base.Product',
     'order': 'base.Order',
     'orderitem': 'base.OrderItem',
+    'orderpayment': 'base.OrderPayment',
     'cashregister': 'base.CashRegister',
     'inkassa': 'base.Inkassa',
     'place': 'base.Place',

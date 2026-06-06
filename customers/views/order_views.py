@@ -182,14 +182,19 @@ def update_status(request, order_id):
 def pay_order(request, order_id):
     cashier_id = request.user.id if request.user.role == 'CASHIER' else None
     payment_method = 'CASH'
+    payments = None              # split: [{"method","amount"}, ...]
+    discount_percent = 0
     if request.body:
         body, _ = parse_json_body(request)
         if body:
             payment_method = body.get('payment_method', 'CASH')
+            payments = body.get('payments')
+            discount_percent = body.get('discount_percent', 0)
     result, status_code = CustomerOrderService.mark_as_paid(
         order_id, cashier_id,
         user_id=request.user.id, user_role=request.user.role,
-        payment_method=payment_method,
+        payment_method=payment_method, payments=payments,
+        discount_percent=discount_percent,
     )
     return JsonResponse(result, status=status_code)
 
