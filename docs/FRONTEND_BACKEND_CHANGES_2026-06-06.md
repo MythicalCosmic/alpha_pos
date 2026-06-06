@@ -370,3 +370,22 @@ manager the full picture in one call.
 `shift.money.payment_mix`. Averages → `shift.money.avg_order_value`; peak hours
 → `distribution.by_hour` / `peak_hour`; all receipts → `receipts[]`; what/how
 many sold → `products[]`.
+
+---
+
+## 10. Shift stats now show before the shift is finalized (bug fix)
+
+A shift's `total_orders` / `total_revenue` / `cash_collected` used to be written
+only when `end_shift` runs, so an in-progress (`ACTIVE`) shift serialized as
+all-zero — "no stats". Now `_serialize_shift` (used by `GET /shifts`,
+`/shifts/active`, `/shifts/<id>`) computes those **live** for `ACTIVE` shifts
+(clock running to now), so stats appear immediately. `COMPLETED`/`ABANDONED`
+shifts keep their frozen end-of-shift numbers. New field on every shift:
+
+```jsonc
+{ "status": "ACTIVE", "total_orders": 12, "total_revenue": "1850000.00",
+  "cash_collected": "1200000.00", "is_live_stats": true }
+```
+`is_live_stats: true` ⇒ figures are live (not yet finalized). The deep
+analytics and the handover report (§7/§9) already compute live and are
+available at any stage (active → ended → confirmed).

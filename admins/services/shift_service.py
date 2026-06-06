@@ -290,11 +290,51 @@ class ShiftService:
         return ServiceResponse.success(data=data)
 
     @staticmethod
+    def _live_totals(shift, end):
+        """Compute a shift's totals on the fly (same attribution end_shift uses).
+
+        total_orders by created_at; revenue/cash by paid_at, cash bundling
+        legacy NULL payment_method with CASH."""
+        start = shift.start_time
+        orders_taken = Order.objects.filter(
+            is_deleted=False, cashier_id=shift.user_id,
+            created_at__gte=start, created_at__lte=end,
+        ).aggregate(total_orders=Count('id'))
+        money = Order.objects.filter(
+            is_deleted=False, cashier_id=shift.user_id, is_paid=True,
+            paid_at__gte=start, paid_at__lte=end,
+        ).aggregate(
+            total_revenue=Coalesce(Sum('total_amount'), Decimal('0.00'), output_field=DecimalField()),
+            cash_collected=Coalesce(
+                Sum('total_amount', filter=Q(payment_method='CASH') | Q(payment_method__isnull=True)),
+                Decimal('0.00'), output_field=DecimalField()),
+        )
+        return (
+            orders_taken['total_orders'] or 0,
+            money['total_revenue'],
+            money['cash_collected'],
+        )
+
+    @staticmethod
     def _serialize_shift(shift):
+        # A shift's stored totals are only written when end_shift runs, so an
+        # in-progress (ACTIVE) shift would otherwise serialize as all-zero
+        # "no stats". Compute them live for ACTIVE shifts (clock running to
+        # now); COMPLETED/ABANDONED shifts keep their frozen end-of-shift
+        # numbers. This is why stats now show before the shift is finalized.
+        is_live = shift.status == 'ACTIVE' and not shift.end_time
+        effective_end = shift.end_time or timezone.now()
+        if is_live:
+            total_orders, total_revenue, cash_collected = ShiftService._live_totals(
+                shift, effective_end)
+        else:
+            total_orders = shift.total_orders
+            total_revenue = shift.total_revenue
+            cash_collected = shift.cash_collected
+
         duration_minutes = None
-        if shift.start_time and shift.end_time:
-            delta = shift.end_time - shift.start_time
-            duration_minutes = int(delta.total_seconds() / 60)
+        if shift.start_time and effective_end:
+            duration_minutes = int((effective_end - shift.start_time).total_seconds() / 60)
 
         reconciliation = None
         try:
@@ -331,9 +371,11 @@ class ShiftService:
             'start_time': shift.start_time.isoformat() if shift.start_time else None,
             'end_time': shift.end_time.isoformat() if shift.end_time else None,
             'status': shift.status,
-            'total_orders': shift.total_orders,
-            'total_revenue': str(shift.total_revenue),
-            'cash_collected': str(shift.cash_collected),
+            'total_orders': total_orders,
+            'total_revenue': str(total_revenue),
+            'cash_collected': str(cash_collected),
+            # True ⇒ figures are live (shift still running), not finalized.
+            'is_live_stats': is_live,
             'duration_minutes': duration_minutes,
             'reconciliation': reconciliation,
         }
