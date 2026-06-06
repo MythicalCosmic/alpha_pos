@@ -3,19 +3,25 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
-from base.security.permissions import admin_required
+from base.security.permissions import admin_required, pos_staff_required
 from hr.services import ExpenseCategoryService, ExpenseService
 
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@pos_staff_required
 def expense_categories(request):
     if request.method == "GET":
+        # Cashiers need to read categories to file an expense.
         page = safe_page(request)
         per_page = safe_per_page(request, 20)
         result, status = ExpenseCategoryService.list(page=page, per_page=per_page)
         return JsonResponse(result, status=status)
+
+    # Creating categories stays a manager/admin job.
+    if request.user.role not in ('ADMIN', 'MANAGER'):
+        return JsonResponse(
+            {"success": False, "message": "Manager access required"}, status=403)
 
     data, error = parse_json_body(request)
     if error:
@@ -47,8 +53,10 @@ def expense_category_detail(request, category_id):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@pos_staff_required
 def expenses(request):
+    # Cashiers, managers and admins can file (POST) and view (GET) expenses.
+    # Created expenses are PENDING; approving/paying them stays admin-only below.
     if request.method == "GET":
         page = safe_page(request)
         per_page = safe_per_page(request, 20)

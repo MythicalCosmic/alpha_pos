@@ -431,3 +431,19 @@ order with no `cashier_id` counts toward nobody's shift. Two fixes:
 Backend computation itself is verified correct: start shift → cashier/manager
 rings & pays an order → end shift → the shift detail, deep analytics, and
 handover report all show the orders, revenue and cash/card split.
+
+---
+
+## 13. Expenses open to cashiers (both expense systems)
+
+Cashiers can now **file expenses**, not just admins:
+
+- **Treasury expense** `POST /api/admins/treasury/expense` — `pos_staff_required`
+  (CASHIER/MANAGER/ADMIN). Spends straight from SAFE/BANK.
+- **HR expense** `GET/POST /api/admins/hr/expenses/` — now `pos_staff_required`;
+  cashiers can create (status starts `PENDING`) and view. Reading
+  `GET /api/admins/hr/expense-categories/` is open to cashiers too so they can
+  pick a category.
+
+Still restricted (manager/admin): creating expense **categories**, and
+**approving / rejecting / paying** HR expenses, and editing/deleting expenses.
