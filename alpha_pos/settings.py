@@ -568,8 +568,13 @@ CORS_ALLOW_CREDENTIALS = bool(CORS_ALLOWED_ORIGINS)
 if DEBUG and not CORS_ALLOWED_ORIGINS:
     CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOW_CREDENTIALS = False
-# Trusted-LAN appliance: accept every origin (clients use bearer tokens, not
-# cookies, so credentialed CORS stays off — the safe allow-all combination).
-if OPEN_LAN:
+# Open CORS to EVERY origin. Two independent triggers:
+#   * OPEN_LAN — the desktop/LAN appliance (also drops CSRF + secure cookies).
+#   * CORS_ALLOW_ALL — a standalone switch for the HTTPS server that opens CORS
+#     ONLY, leaving CSRF enforcement and secure cookies intact.
+# Clients authenticate with bearer tokens (not cookies), so credentialed CORS
+# stays off — the browser-safe allow-all combination.
+CORS_ALLOW_ALL = os.environ.get('CORS_ALLOW_ALL', 'False').strip().lower() in ('1', 'true', 'yes', 'on')
+if OPEN_LAN or CORS_ALLOW_ALL:
     CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOW_CREDENTIALS = False
