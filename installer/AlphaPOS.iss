@@ -62,6 +62,9 @@ Source: "..\dist\AlphaPOS\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 Name: "{group}\Alpha POS"; Filename: "{app}\{#AppExeName}"
 Name: "{group}\Uninstall Alpha POS"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Alpha POS"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+; Auto-launch at every logon/boot (all users). The app then auto-starts and
+; supervises the backend server itself, so the POS is always up after a reboot.
+Name: "{commonstartup}\Alpha POS"; Filename: "{app}\{#AppExeName}"
 
 [Run]
 ; Open the POS port (TCP 8000) on the Windows Firewall so other devices on the

@@ -102,6 +102,41 @@ def _run_edge(url: str) -> bool:
     return True
 
 
+def _autostart_backend():
+    """Bring the POS server up automatically on launch and keep it up.
+
+    Runs in the background so the panel appears immediately. Does the (idempotent)
+    first-run install, starts the server, and supervises it forever — retrying
+    with backoff if a start fails and restarting it if it dies. This is what
+    makes every boot/login come up serving with no button press.
+    """
+    api = control_server._API
+    try:
+        api.run_setup()  # migrate + bootstrap admin + collectstatic (idempotent)
+    except Exception:  # noqa: BLE001 — still try to start with whatever exists
+        logger.exception('autostart: first-run setup failed')
+
+    backoff = 3
+    while True:
+        try:
+            if not api.server.is_running():
+                res = api.start_server()
+                if res.get('running'):
+                    logger.info('autostart: POS server up — LAN %s', api.server.url())
+                    backoff = 3
+                else:
+                    logger.error('autostart: start failed: %s', res.get('error'))
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    continue
+        except Exception:  # noqa: BLE001 — never let the supervisor die
+            logger.exception('autostart: start raised')
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
+        time.sleep(5)  # watchdog poll — restart promptly if the server stops
+
+
 def main():
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alpha_pos.settings')
 
@@ -121,6 +156,10 @@ def main():
 
     threading.Thread(target=httpd.serve_forever, name='control', daemon=True).start()
     time.sleep(0.4)  # let the socket bind
+
+    # Auto-start + supervise the POS backend so every launch comes up serving
+    # on the LAN by itself, with retries — no operator button press needed.
+    threading.Thread(target=_autostart_backend, name='autostart', daemon=True).start()
 
     # Show the panel. Prefer the native window; fall back so it ALWAYS appears.
     forced_browser = '--browser' in sys.argv
