@@ -63,3 +63,5 @@ desktop_state.json
 installer/Output/
 desktop/AlphaPOS.ico
 desktop/__pycache__/
+inno-output/
+DELIVERABLES/
