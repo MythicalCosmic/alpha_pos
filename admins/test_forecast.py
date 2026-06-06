@@ -90,7 +90,7 @@ class TestForecastTomorrow:
         assert data['predictions'] == []
         assert data['reason'] == 'no_history'
 
-    def test_calls_gemini_and_parses_response(
+    def test_calls_llm_and_parses_response(
         self, monkeypatch, regular_user,
     ):
         p = _make_product()
@@ -104,7 +104,7 @@ class TestForecastTomorrow:
             ],
         })
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
+            forecast_service, '_call_llm',
             lambda prompt: (fake_response, None),
         )
         data, err = forecast_service.forecast_tomorrow()
@@ -116,7 +116,7 @@ class TestForecastTomorrow:
         _add_history(regular_user, p, 1, hours_ago=1)
         fake = '```json\n{"predictions": [{"product_id": 1, "suggested_qty": 3, "product_name": "X", "reason": "y"}]}\n```'
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
+            forecast_service, '_call_llm',
             lambda prompt: (fake, None),
         )
         data, err = forecast_service.forecast_tomorrow()
@@ -129,21 +129,21 @@ class TestForecastTomorrow:
         p = _make_product()
         _add_history(regular_user, p, 1, hours_ago=1)
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
+            forecast_service, '_call_llm',
             lambda prompt: ('not json at all', None),
         )
         data, err = forecast_service.forecast_tomorrow()
         assert err == 'parse_error'
 
-    def test_gemini_error_propagated(self, monkeypatch, regular_user):
+    def test_llm_error_propagated(self, monkeypatch, regular_user):
         p = _make_product()
         _add_history(regular_user, p, 1, hours_ago=1)
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
-            lambda prompt: (None, 'gemini_key_missing'),
+            forecast_service, '_call_llm',
+            lambda prompt: (None, 'llm_key_missing'),
         )
         data, err = forecast_service.forecast_tomorrow()
-        assert err == 'gemini_key_missing'
+        assert err == 'llm_key_missing'
 
 
 @pytest.fixture
@@ -168,14 +168,14 @@ class TestForecastEndpoint:
         data = resp.json()['data']
         assert data['predictions'] == []
 
-    def test_gemini_key_missing_returns_503(
+    def test_llm_key_missing_returns_503(
         self, monkeypatch, admin_session, regular_user,
     ):
         p = _make_product()
         _add_history(regular_user, p, 1, hours_ago=1)
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
-            lambda prompt: (None, 'gemini_key_missing'),
+            forecast_service, '_call_llm',
+            lambda prompt: (None, 'llm_key_missing'),
         )
         client = Client()
         resp = client.get(
@@ -190,7 +190,7 @@ class TestForecastEndpoint:
         p = _make_product()
         _add_history(regular_user, p, 1, hours_ago=1)
         monkeypatch.setattr(
-            forecast_service, '_call_gemini',
+            forecast_service, '_call_llm',
             lambda prompt: ('garbage', None),
         )
         client = Client()

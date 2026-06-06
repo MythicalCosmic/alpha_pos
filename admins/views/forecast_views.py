@@ -20,6 +20,6 @@ def tomorrow_view(request):
             {'success': True, 'data': {'predictions': [], 'reason': 'no_history'}},
         )
     if err:
-        status = 503 if err in ('gemini_sdk_missing', 'gemini_key_missing') else 502
+        status = 503 if err in ('llm_sdk_missing', 'llm_key_missing') else 502
         return JsonResponse({'success': False, 'message': err}, status=status)
     return JsonResponse({'success': True, 'data': data})

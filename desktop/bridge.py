@@ -84,9 +84,15 @@ class Api:
             # to the live settings object — no app restart needed to test sync.
             from django.conf import settings as _dj
             for key in ('CLOUD_SYNC_URL', 'CLOUD_SYNC_TOKEN', 'BRANCH_ID',
-                        'DEPLOYMENT_MODE', 'LICENSE_CONTROL_CENTER_URL'):
+                        'DEPLOYMENT_MODE', 'LICENSE_CONTROL_CENTER_URL',
+                        'ANTHROPIC_MODEL'):
                 if key in clean and clean[key] is not None:
                     setattr(_dj, key, clean[key])
+            # AI key is a SECRET_KEY (masked) — only apply a real entered value,
+            # not the •••• placeholder, so saving the form doesn't wipe it.
+            ak = clean.get('ANTHROPIC_API_KEY')
+            if ak and ak != '••••••••':
+                _dj.ANTHROPIC_API_KEY = ak.strip()
             if 'SYNC_ENABLED' in clean:
                 from base.services.sync.config import SyncConfig
                 en = str(clean['SYNC_ENABLED']).lower() in ('true', '1', 'yes')

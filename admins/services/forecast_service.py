@@ -1,12 +1,12 @@
-"""Demand forecasting via Gemini.
+"""Demand forecasting via Claude.
 
 Pulls the last 30 days of order history aggregated by product × weekday ×
-hour, hands it to Gemini, and asks for a prep-quantity recommendation for
-tomorrow. Reuses the existing GEMINI_API_KEY wiring from the stock AI
-assistant.
+hour, hands it to Claude, and asks for a prep-quantity recommendation for
+tomorrow. Reuses the shared `base.services.llm` wiring (ANTHROPIC_API_KEY /
+ANTHROPIC_MODEL) from the stock AI assistant.
 
-The Gemini call is isolated in `_call_gemini` so tests can monkeypatch
-it without configuring an API key.
+The model call is isolated in `_call_llm` so tests can monkeypatch it
+without configuring an API key.
 """
 import json
 import logging
@@ -125,34 +125,14 @@ DATA:
 """
 
 
-def _call_gemini(prompt_text):
+def _call_llm(prompt_text):
     """Isolated so tests can monkeypatch without configuring an API key.
 
-    Uses the modern `google-genai` SDK (the `google-generativeai` package is
-    end-of-life as of late 2025). The wire-level model name / generation
-    config stays identical, so any prompt previously tuned against the old
-    SDK behaves the same here."""
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        return None, 'gemini_sdk_missing'
-    api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
-    if not api_key:
-        return None, 'gemini_key_missing'
-    client = genai.Client(api_key=api_key)
-    try:
-        resp = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt_text,
-            config=types.GenerateContentConfig(
-                temperature=0.2, max_output_tokens=2048,
-            ),
-        )
-        return resp.text, None
-    except Exception as e:
-        logger.exception('gemini forecast call failed')
-        return None, str(e)
+    Delegates to the shared Claude wrapper. Returns (text, error) where error
+    is None on success, 'llm_sdk_missing' / 'llm_key_missing' when unconfigured,
+    or a raw error string otherwise."""
+    from base.services.llm import call_claude
+    return call_claude(prompt_text, max_tokens=2048)
 
 
 def forecast_tomorrow():
@@ -172,11 +152,11 @@ def forecast_tomorrow():
         data_json=json.dumps(history, ensure_ascii=False),
     )
 
-    raw, err = _call_gemini(prompt)
+    raw, err = _call_llm(prompt)
     if err:
         return None, err
 
-    # Gemini sometimes wraps JSON in ``` fences despite instructions.
+    # The model sometimes wraps JSON in ``` fences despite instructions.
     text = raw.strip()
     if text.startswith('```'):
         text = text.strip('`')
@@ -187,6 +167,6 @@ def forecast_tomorrow():
     try:
         parsed = json.loads(text)
     except ValueError:
-        logger.warning('gemini returned non-JSON forecast: %s', raw[:200])
+        logger.warning('llm returned non-JSON forecast: %s', raw[:200])
         return None, 'parse_error'
     return parsed, None

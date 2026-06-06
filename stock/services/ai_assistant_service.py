@@ -1,9 +1,3 @@
-try:
-    from google import genai
-    from google.genai import types as genai_types
-except ImportError:
-    genai = None
-    genai_types = None
 from typing import Dict, Any, List
 from datetime import timedelta
 import math
@@ -121,30 +115,8 @@ You will receive real-time database data in JSON format including pre-computed a
 
 class AIStockAssistant:
 
-    # Modern `google-genai` SDK keeps the model name + config per-call rather
-    # than per-object — we cache the Client and the GenerateContentConfig and
-    # spread them across calls. Model name kept in one constant so a future
-    # bump (gemini-3-flash, etc.) is one line.
-    _client = None
-    _config = None
-    _MODEL_NAME = "gemini-2.5-flash"
-
-    @classmethod
-    def _get_client(cls):
-        if cls._client is None:
-            if genai is None:
-                raise ImportError(
-                    "google-genai is not installed. "
-                    "Run: pip install google-genai"
-                )
-            api_key = getattr(settings, 'GEMINI_API_KEY', '')
-            if not api_key:
-                raise ValueError("GEMINI_API_KEY not set in settings or environment")
-            cls._client = genai.Client(api_key=api_key)
-            cls._config = genai_types.GenerateContentConfig(
-                temperature=0.1, max_output_tokens=2048,
-            )
-        return cls._client
+    # The model + key live in base.services.llm (ANTHROPIC_MODEL /
+    # ANTHROPIC_API_KEY), so a model bump is one env var, not a code change.
 
     @classmethod
     def _get_sales_data(cls) -> Dict:
@@ -1178,40 +1150,49 @@ CURRENT DATABASE STATE:
 
 Respond to the user's query based on this data. Follow all language and formatting rules from your instructions."""
 
-            client = cls._get_client()
-            response = client.models.generate_content(
-                model=cls._MODEL_NAME,
-                contents=SYSTEM_PROMPT + "\n\n" + prompt,
-                config=cls._config,
-            )
-
-            return {
-                "success": True,
-                "response": response.text,
-                "suggestions": cls._get_suggestions(query)
-            }
-
-        except Exception as e:
-            import logging
-            error_str = str(e)
-            logging.getLogger(__name__).exception('AI assistant query failed')
-
-            if "429" in error_str or "quota" in error_str.lower():
-                return {
-                    "success": False,
-                    "error": "quota_exceeded",
-                    "response": "API quota exceeded. Please enable billing at https://ai.google.dev or wait for quota reset.",
-                    "suggestions": ["Check API billing", "Try again later"]
-                }
-
-            if "API_KEY" in error_str or "not set" in error_str:
+            from base.services.llm import call_claude
+            text, err = call_claude(prompt, system=SYSTEM_PROMPT, max_tokens=2048)
+            if err == 'llm_key_missing':
                 return {
                     "success": False,
                     "error": "no_api_key",
-                    "response": "GEMINI_API_KEY not configured in Django settings.",
-                    "suggestions": ["Add GEMINI_API_KEY to settings.py"]
+                    "response": "ANTHROPIC_API_KEY not configured. Add it in the desktop panel (AI section).",
+                    "suggestions": ["Add ANTHROPIC_API_KEY"],
+                }
+            if err == 'llm_sdk_missing':
+                return {
+                    "success": False,
+                    "error": "internal_error",
+                    "response": "The AI assistant is temporarily unavailable.",
+                    "suggestions": ["Try again"],
+                }
+            if err:
+                low = err.lower()
+                if "429" in err or "rate_limit" in low or "overloaded" in low:
+                    return {
+                        "success": False,
+                        "error": "quota_exceeded",
+                        "response": "AI rate limit reached. Please wait a moment and try again.",
+                        "suggestions": ["Try again later"],
+                    }
+                # Don't echo raw exception text — it leaks internals. Full trace
+                # is logged inside call_claude().
+                return {
+                    "success": False,
+                    "error": "internal_error",
+                    "response": "The AI assistant is temporarily unavailable.",
+                    "suggestions": ["Try again", "Stock overview"],
                 }
 
+            return {
+                "success": True,
+                "response": text,
+                "suggestions": cls._get_suggestions(query)
+            }
+
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('AI assistant query failed')
             # Don't echo raw exception text — it leaks ORM model names, file
             # paths, and SDK-internal details to the client. The full trace
             # is in the server log via the .exception() call above.

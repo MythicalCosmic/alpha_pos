@@ -36,7 +36,7 @@ for app in APPS:
 # at runtime (e.g. whitenoise.middleware, corsheaders.middleware).
 hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
-            'dateutil', 'requests'):
+            'dateutil', 'requests', 'anthropic'):
     hiddenimports += collect_submodules(lib)
 # Native GUI: pywebview + pythonnet/CLR (WebView2). The hook-webview/hook-clr/
 # hook-clr_loader hooks pull the .NET runtime + WebView2 DLLs; we add the

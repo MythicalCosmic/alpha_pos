@@ -25,7 +25,7 @@ for app in APPS:
     hiddenimports += collect_submodules(app)
 hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
-            'dateutil', 'requests'):
+            'dateutil', 'requests', 'anthropic'):
     hiddenimports += collect_submodules(lib)
 hiddenimports += collect_submodules('webview') + collect_submodules('clr_loader')
 hiddenimports += ['clr', 'pythonnet']
