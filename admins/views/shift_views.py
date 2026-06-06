@@ -5,7 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
-from base.security.permissions import admin_required
+from base.security.permissions import manager_required, pos_staff_required
 from base.security.audit import audit
 from base.models import AuditLog
 from admins.services.shift_service import ShiftTemplateService, ShiftService
@@ -13,7 +13,7 @@ from admins.services.shift_service import ShiftTemplateService, ShiftService
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@manager_required
 def shift_templates(request):
     if request.method == "GET":
         result, status_code = ShiftTemplateService.list()
@@ -38,7 +38,7 @@ def shift_templates(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "DELETE"])
-@admin_required
+@manager_required
 def shift_template_detail(request, template_id):
     if request.method == "GET":
         result, status_code = ShiftTemplateService.get(template_id)
@@ -64,7 +64,7 @@ def shift_template_detail(request, template_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def shifts(request):
     page = safe_page(request)
     per_page = safe_per_page(request, 20)
@@ -86,7 +86,7 @@ def shifts(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def shift_detail(request, shift_id):
     result, status_code = ShiftService.get(shift_id)
     return JsonResponse(result, status=status_code)
@@ -94,7 +94,7 @@ def shift_detail(request, shift_id):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@pos_staff_required
 def shift_start(request):
     data, error = parse_json_body(request)
     if error:
@@ -116,7 +116,7 @@ def shift_start(request):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@pos_staff_required
 def shift_end(request, shift_id):
     data, error = parse_json_body(request)
     if error:
@@ -132,7 +132,7 @@ def shift_end(request, shift_id):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@manager_required
 def shift_reconcile(request, shift_id):
     data, error = parse_json_body(request)
     if error:
@@ -169,7 +169,7 @@ def shift_reconcile(request, shift_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def active_shifts(request):
     result, status_code = ShiftService.get_active_shifts()
     return JsonResponse(result, status=status_code)

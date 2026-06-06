@@ -48,8 +48,15 @@ class AuthService:
         return session, user
 
     @staticmethod
-    def login(email, password, ip_address, user_agent):
-        user = UserRepository.get_by_email(email)
+    def login(email=None, password=None, ip_address=None, user_agent=None, user_id=None):
+        # Monoblock picker logs in by user_id (+ PIN); email login still works.
+        if user_id:
+            try:
+                user = User.objects.get(pk=user_id, is_deleted=False)
+            except (User.DoesNotExist, ValueError, TypeError):
+                user = None
+        else:
+            user = UserRepository.get_by_email(email)
         if not user:
             verify_password_dummy(password)
             return ServiceResponse.unauthorized("Invalid credentials")

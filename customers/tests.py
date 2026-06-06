@@ -27,15 +27,17 @@ class TestCashierOwnershipIDOR:
         )
         assert result is None
 
-    def test_cashier_blocked_when_other_cashier_owns_order(
+    def test_cashier_can_modify_other_cashiers_order(
         self, order_factory, cashier_user, other_cashier_user, regular_user,
     ):
+        # Shared monoblock: any cashier on the till acts on any order, even
+        # one another cashier opened (mark-ready / pay / status / items).
         order = order_factory(user=regular_user, cashier=other_cashier_user)
         result = _check_cashier_ownership(
             order, cashier_id=cashier_user.id,
             user_id=cashier_user.id, user_role='CASHIER',
         )
-        assert result is not None
+        assert result is None
 
     def test_cashier_can_claim_unowned_order(
         self, order_factory, cashier_user, regular_user,
@@ -416,3 +418,52 @@ class TestCashierShiftSelfService:
         active = ShiftRepository.get_active_for_user(cashier_user.id)
         assert active is not None
         assert active.status == 'ACTIVE'
+
+
+class TestInstantProducts:
+    """is_instant products (drinks etc.) are born ready and never hit the
+    kitchen / chef display."""
+
+    def _instant_product(self, category, name='Cola'):
+        from base.models import Product
+        return Product.objects.create(
+            name=name, price='5.00', category=category, is_instant=True,
+        )
+
+    def test_all_instant_order_is_ready_immediately(self, cashier_user, category):
+        product = self._instant_product(category)
+        res, st = CustomerOrderService.create_order(
+            user_id=cashier_user.id,
+            items=[{'product_id': product.id, 'quantity': 2}],
+            cashier_id=cashier_user.id,
+        )
+        assert st == 201
+        from base.models import Order, OrderItem
+        order = Order.objects.get(id=res['data']['order_id'])
+        assert order.status == 'READY'
+        assert order.ready_at is not None
+        assert OrderItem.objects.filter(order=order, ready_at__isnull=True).count() == 0
+
+    def test_instant_items_excluded_from_chef_display(self, cashier_user, category, product):
+        # Mixed order: one cooked item (fixture product, not instant) + one drink.
+        instant = self._instant_product(category, name='Juice')
+        res, st = CustomerOrderService.create_order(
+            user_id=cashier_user.id,
+            items=[
+                {'product_id': product.id, 'quantity': 1},
+                {'product_id': instant.id, 'quantity': 1},
+            ],
+            cashier_id=cashier_user.id,
+        )
+        assert st == 201
+        # Order still needs the kitchen for the cooked item.
+        from base.models import Order
+        order = Order.objects.get(id=res['data']['order_id'])
+        assert order.status == 'PREPARING'
+
+        disp, _ = CustomerOrderService.get_chef_display_orders()
+        shown = [o for o in disp['data']['orders'] if o['id'] == order.id]
+        assert len(shown) == 1
+        names = [it['product_name'] for it in shown[0]['items']]
+        assert 'Juice' not in names  # instant drink hidden from the kitchen
+        assert shown[0]['items_total'] == 1  # only the cooked item counts

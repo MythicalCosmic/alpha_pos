@@ -4,7 +4,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
-from base.security.permissions import admin_required, permission_required
+from base.security.permissions import manager_required, permission_required
 from admins.services.category_service import AdminCategoryService
 from admins.requests.category_requests import (
     create_category_request,
@@ -28,7 +28,7 @@ def _check_permission(request, perm):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@manager_required
 def categories(request):
     if request.method == "GET":
         page = safe_page(request)
@@ -69,7 +69,7 @@ def categories(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "PATCH", "DELETE"])
-@admin_required
+@manager_required
 def category_detail(request, category_id):
     if request.method == "GET":
         include_deleted = request.GET.get('include_deleted', '').lower() == 'true'
@@ -98,7 +98,7 @@ def category_detail(request, category_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def active_categories(request):
     result, status_code = AdminCategoryService.get_active_categories()
     return JsonResponse(result, status=status_code)
@@ -106,7 +106,7 @@ def active_categories(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def deleted_categories(request):
     page = safe_page(request)
     per_page = safe_per_page(request, 20)
@@ -116,7 +116,7 @@ def deleted_categories(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def category_stats(request):
     result, status_code = AdminCategoryService.get_category_stats()
     return JsonResponse(result, status=status_code)
@@ -124,7 +124,7 @@ def category_stats(request):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
-@admin_required
+@manager_required
 @permission_required('category.update')
 def update_category_status(request, category_id):
     data, error = update_status_request(request)
@@ -138,7 +138,7 @@ def update_category_status(request, category_id):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@manager_required
 @permission_required('category.update')
 def toggle_category_status(request, category_id):
     result, status_code = AdminCategoryService.toggle_category_status(category_id)
@@ -147,7 +147,7 @@ def toggle_category_status(request, category_id):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@manager_required
 @permission_required('category.update')
 def restore_category(request, category_id):
     result, status_code = AdminCategoryService.restore_category(category_id)
@@ -157,7 +157,7 @@ def restore_category(request, category_id):
 @csrf_exempt
 @require_POST
 @rate_limit('admin_reorder', 20, 60)
-@admin_required
+@manager_required
 @permission_required('category.update')
 def reorder_categories(request):
     data, error = reorder_request(request)
@@ -170,7 +170,7 @@ def reorder_categories(request):
 @csrf_exempt
 @require_POST
 @rate_limit('admin_bulk_delete', 10, 60)
-@admin_required
+@manager_required
 @permission_required('category.delete')
 def bulk_delete_categories(request):
     data, error = bulk_ids_request(request)
@@ -183,7 +183,7 @@ def bulk_delete_categories(request):
 @csrf_exempt
 @require_POST
 @rate_limit('admin_bulk_restore', 10, 60)
-@admin_required
+@manager_required
 @permission_required('category.update')
 def bulk_restore_categories(request):
     data, error = bulk_ids_request(request)
@@ -195,7 +195,7 @@ def bulk_restore_categories(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def category_by_slug(request, slug):
     result, status_code = AdminCategoryService.get_category_by_slug(slug)
     return JsonResponse(result, status=status_code)

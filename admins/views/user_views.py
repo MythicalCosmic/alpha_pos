@@ -4,7 +4,7 @@ from django.views.decorators.http import require_http_methods
 
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.permissions import admin_required
+from base.security.permissions import manager_required
 from base.security.audit import audit
 from base.models import AuditLog
 from admins.services.user_service import AdminUserService
@@ -12,7 +12,7 @@ from admins.services.user_service import AdminUserService
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@manager_required
 def users(request):
     if request.method == "GET":
         page, per_page = validate_pagination(request)
@@ -54,7 +54,7 @@ def users(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "PATCH", "DELETE"])
-@admin_required
+@manager_required
 def user_detail(request, user_id):
     if request.method == "GET":
         result, status_code = AdminUserService.get_user(user_id)

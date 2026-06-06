@@ -4,7 +4,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
 from base.helpers.response import json_response
 from base.security.rate_limit import rate_limit
-from base.security.permissions import admin_required, permission_required
+from base.security.permissions import manager_required, permission_required
 from base.security.audit import audit
 from base.models import AuditLog, Product
 from admins.services.product_service import AdminProductService
@@ -25,7 +25,7 @@ def _check_permission(request, perm):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
-@admin_required
+@manager_required
 def products(request):
     if request.method == "GET":
         page = safe_page(request)
@@ -59,13 +59,14 @@ def products(request):
         price=data['price'],
         category_id=data['category_id'],
         colors=data.get('colors'),
+        is_instant=data.get('is_instant', False),
     )
     return JsonResponse(result, status=status_code)
 
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "PATCH", "DELETE"])
-@admin_required
+@manager_required
 def product_detail(request, product_id):
     if request.method == "GET":
         include_deleted = request.GET.get('include_deleted', '').lower() == 'true'
@@ -115,7 +116,7 @@ def product_detail(request, product_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def products_by_category(request, category_id):
     result, status_code = AdminProductService.get_products_by_category(category_id)
     return JsonResponse(result, status=status_code)
@@ -123,7 +124,7 @@ def products_by_category(request, category_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def product_stats(request):
     result, status_code = AdminProductService.get_product_stats()
     return JsonResponse(result, status=status_code)
@@ -131,7 +132,7 @@ def product_stats(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def deleted_products(request):
     page = safe_page(request)
     per_page = safe_per_page(request, 20)
@@ -141,7 +142,7 @@ def deleted_products(request):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@manager_required
 @permission_required('product.update')
 def restore_product(request, product_id):
     result, status_code = AdminProductService.restore_product(product_id)
@@ -151,7 +152,7 @@ def restore_product(request, product_id):
 @csrf_exempt
 @require_POST
 @rate_limit('admin_bulk_delete_products', 10, 60)
-@admin_required
+@manager_required
 @permission_required('product.delete')
 def bulk_delete_products(request):
     data, error = bulk_ids_request(request)
@@ -164,7 +165,7 @@ def bulk_delete_products(request):
 @csrf_exempt
 @require_POST
 @rate_limit('admin_bulk_restore_products', 10, 60)
-@admin_required
+@manager_required
 @permission_required('product.update')
 def bulk_restore_products(request):
     data, error = bulk_ids_request(request)

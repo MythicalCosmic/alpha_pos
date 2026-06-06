@@ -75,6 +75,16 @@ class AdminUserService:
                 message='Invalid role',
             )
 
+        # Managers sign in by email (they're the back-office-adjacent tier), so
+        # the email is required for them. Every other role (CASHIER, etc.) logs
+        # in via the monoblock picker by id + PIN, so email is optional and we
+        # derive a stable placeholder below.
+        if role == User.RoleChoices.MANAGER and not email:
+            return ServiceResponse.validation_error(
+                errors={'email': 'email is required for managers'},
+                message='Validation failed',
+            )
+
         if not email:
             base = f"{first_name.lower().strip()}.{last_name.lower().strip()}"
             email = f"{base}@local"

@@ -34,7 +34,8 @@ def login(request):
         return json_response(error)
 
     result, status = AuthService.login(
-        email=data['email'],
+        email=data.get('email'),
+        user_id=data.get('user_id'),
         password=data['password'],
         ip_address=get_client_ip(request),
         user_agent=get_user_agent(request),

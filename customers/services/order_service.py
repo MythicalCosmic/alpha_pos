@@ -158,14 +158,13 @@ def _serialize_order_detail(order):
 
 
 def _check_cashier_ownership(order, cashier_id, user_id=None, user_role=None):
-    # ADMIN bypass kept for support flows; USER must own; CASHIER must match if order is claimed.
-    if user_role == 'ADMIN':
-        return None
-    if user_role == 'CASHIER':
-        if order.cashier_id and order.cashier_id != cashier_id:
-            return ServiceResponse.forbidden(
-                f'You do not have permission to modify this order. Order #{order.display_id} was created by another cashier.'
-            )
+    # Shared-monoblock model: ANY POS staff may act on ANY order. Multiple
+    # cashiers share one till and the kitchen (KDS) marks orders ready, so
+    # blocking a cashier from an order another cashier opened breaks the
+    # normal flow (mark-ready / pay / status / items). Ownership therefore
+    # only constrains self-service customers (USER), who must own the order
+    # they touch.
+    if user_role in ('ADMIN', 'MANAGER', 'CASHIER'):
         return None
     # USER (or any other role): require ownership of the order itself.
     if user_id is not None and order.user_id != user_id:
@@ -417,16 +416,32 @@ class CustomerOrderService:
         )
 
         from base.models import OrderItem
-        OrderItem.objects.bulk_create([
-            OrderItem(
+        now = timezone.now()
+        # Instant items (drinks, packaged goods) need no kitchen prep, so they
+        # are born ready and never hit the chef display. Non-instant items are
+        # created unready for the kitchen to work through.
+        any_kitchen_item = False
+        new_items = []
+        for d in order_items_data:
+            instant = d['product'].is_instant
+            if not instant:
+                any_kitchen_item = True
+            new_items.append(OrderItem(
                 order=order,
                 product=d['product'],
                 detail=d['detail'],
                 quantity=d['quantity'],
                 price=d['price'],
-                ready_at=None,
-            ) for d in order_items_data
-        ])
+                ready_at=now if instant else None,
+            ))
+        OrderItem.objects.bulk_create(new_items)
+
+        # An order made up entirely of instant items has nothing to cook —
+        # it's ready the moment it's placed.
+        if not any_kitchen_item:
+            order.status = 'READY'
+            order.ready_at = now
+            order.save(update_fields=['status', 'ready_at'])
 
         fresh = OrderRepository.get_by_id_with_relations(order.id)
         if fresh:
@@ -486,19 +501,25 @@ class CustomerOrderService:
                 message='Quantity must be greater than 0',
             )
 
+        is_instant = product.is_instant
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
-        if existing:
+        if existing and not is_instant:
             # Increment in SQL so concurrent add-item calls cannot lose updates.
             from django.db.models import F
             OrderItemRepository.model.objects.filter(pk=existing.pk).update(
                 quantity=F('quantity') + quantity,
             )
         else:
+            # Instant items are born ready and never need the kitchen.
             OrderItemRepository.create(
-                order=order, product=product, quantity=quantity, price=product.price
+                order=order, product=product, quantity=quantity,
+                price=product.price,
+                ready_at=timezone.now() if is_instant else None,
             )
 
-        if order.ready_at:
+        # Only adding a real (non-instant) item reopens a ready order for the
+        # kitchen; tacking on a drink must not send the order back to PREPARING.
+        if not is_instant and order.ready_at:
             order.ready_at = None
             order.status = 'PREPARING'
             order.save(update_fields=['ready_at', 'status'])
@@ -1052,6 +1073,10 @@ class CustomerOrderService:
             items = []
             ready_count = 0
             for item in order.items.all():
+                # Instant items (drinks etc.) need no kitchen work — keep them
+                # off the chef display entirely.
+                if item.product.is_instant:
+                    continue
                 is_ready = item.ready_at is not None
                 if is_ready:
                     ready_count += 1
@@ -1068,6 +1093,9 @@ class CustomerOrderService:
                 })
 
             total_items = len(items)
+            # Nothing for the kitchen (all-instant order) — don't show it.
+            if total_items == 0:
+                continue
             orders_list.append({
                 'id': order.id,
                 'display_id': order.display_id,

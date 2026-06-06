@@ -6,8 +6,11 @@ from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_GET
 
 from admins.services.analytics_service import menu_engineering, shift_performance
+from admins.services.shift_analytics_service import (
+    cashier_shift_analytics, kitchen_shift_analytics,
+)
 from base.models import Shift
-from base.security.permissions import admin_required
+from base.security.permissions import admin_required, manager_required
 
 
 @require_GET
@@ -62,3 +65,55 @@ def menu_engineering_view(request):
     return JsonResponse(
         {'success': True, 'data': menu_engineering(df, dt, **kwargs)},
     )
+
+
+def _parse_range(request):
+    """(date_from, date_to, error_response). Defaults `to` = `from` for a
+    single-day query; both default to today when omitted."""
+    from django.utils import timezone
+    df_str = request.GET.get('from')
+    dt_str = request.GET.get('to')
+    today = timezone.localdate()
+    df = parse_date(df_str) if df_str else today
+    dt = parse_date(dt_str) if dt_str else (df or today)
+    if df is None or dt is None:
+        return None, None, JsonResponse(
+            {'success': False, 'message': 'from/to must be YYYY-MM-DD'}, status=422)
+    if df > dt:
+        return None, None, JsonResponse(
+            {'success': False, 'message': 'from must be on or before to'}, status=422)
+    return df, dt, None
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@require_GET
+@manager_required
+def cashier_shift_analytics_view(request):
+    df, dt, err = _parse_range(request)
+    if err:
+        return err
+    user_id = _int_or_none(request.GET.get('user_id'))
+    data = cashier_shift_analytics(df, dt, user_id=user_id)
+    return JsonResponse({'success': True, 'data': data})
+
+
+@require_GET
+@manager_required
+def kitchen_shift_analytics_view(request):
+    df, dt, err = _parse_range(request)
+    if err:
+        return err
+    user_id = _int_or_none(request.GET.get('user_id'))
+    role = (request.GET.get('role') or 'WAITER').upper()
+    target_min = _int_or_none(request.GET.get('target_prep_minutes'))
+    kwargs = {'user_id': user_id, 'role': role}
+    if target_min and target_min > 0:
+        kwargs['target_prep_seconds'] = target_min * 60
+    data = kitchen_shift_analytics(df, dt, **kwargs)
+    return JsonResponse({'success': True, 'data': data})

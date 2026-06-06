@@ -17,6 +17,7 @@ def _serialize_product(product):
         'description': product.description,
         'price': str(product.price),
         'colors': product.colors,
+        'is_instant': product.is_instant,
         'category_id': product.category_id,
         'category': {
             'id': product.category.id,
@@ -36,6 +37,7 @@ def _serialize_product_short(product):
         'description': product.description,
         'price': str(product.price),
         'colors': product.colors,
+        'is_instant': product.is_instant,
         'category_id': product.category_id,
     }
 
@@ -118,7 +120,7 @@ class AdminProductService:
         return ServiceResponse.success(data={'product': _serialize_product(product)})
 
     @staticmethod
-    def create_product(name, description, price, category_id, colors=None):
+    def create_product(name, description, price, category_id, colors=None, is_instant=False):
         name = name.strip()
 
         price, error = _parse_price(price)
@@ -141,6 +143,7 @@ class AdminProductService:
             price=price,
             category=category,
             colors=colors or [],
+            is_instant=bool(is_instant),
         )
 
         ProductRepository.invalidate_cache()
@@ -180,7 +183,10 @@ class AdminProductService:
                     return ServiceResponse.error("Product with this name already exists in this category")
             kwargs['name'] = new_name
 
-        allowed_fields = {'name', 'description', 'price', 'category', 'colors'}
+        if 'is_instant' in kwargs and kwargs['is_instant'] is not None:
+            kwargs['is_instant'] = bool(kwargs['is_instant'])
+
+        allowed_fields = {'name', 'description', 'price', 'category', 'colors', 'is_instant'}
         for key, value in kwargs.items():
             if key in allowed_fields and hasattr(product, key):
                 setattr(product, key, value)

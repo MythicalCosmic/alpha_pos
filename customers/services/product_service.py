@@ -9,6 +9,7 @@ def _serialize_product(product):
         'description': product.description,
         'price': str(product.price),
         'colors': product.colors,
+        'is_instant': product.is_instant,
         'category_id': product.category_id,
         'category': {
             'id': product.category.id,

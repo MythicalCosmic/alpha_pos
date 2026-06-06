@@ -1,0 +1,264 @@
+# Backend changes for the frontend — 2026-06-06
+
+Branch: `prelaunch-fixes`. Everything below is live in the `alpha_pos` backend.
+Base URLs: the monoblock/POS endpoints are mounted at the **root** (`/...`),
+the management endpoints under **`/api/admins/...`**.
+
+Response envelope everywhere: `{ "success": bool, "message": str, "data": {...} }`
+(HTTP status mirrors success). `data` is what the examples below show.
+
+---
+
+## 1. Roles — new `MANAGER` tier
+
+`User.role` is now one of: `USER, ADMIN, CASHIER, MANAGER, WAITER`.
+
+- **CASHIER** — logs in on the monoblock; operates the till.
+- **MANAGER** — logs in on the monoblock **next to cashiers** (NOT the admin
+  dashboard), and additionally may use Settings / management screens.
+- **ADMIN** — back-office/dashboard; cannot log into the monoblock.
+- **WAITER** — own app; treated as kitchen/chef staff for analytics.
+
+Who can call the management endpoints now:
+
+| Endpoint group (`/api/admins/...`) | Allowed roles |
+|---|---|
+| categories, products, users, inkassa, app-settings | `ADMIN`, `MANAGER` |
+| shifts: list/detail/active/templates/**reconcile** | `ADMIN`, `MANAGER` |
+| shifts: **start**, **end** | `ADMIN`, `MANAGER`, `CASHIER` |
+| **roles / permissions editor** | `ADMIN` only (managers must NOT see it) |
+| analytics (incl. new shift analytics) | `ADMIN`, `MANAGER` |
+
+A 403 from these now reads `"Manager access required"` / `"Staff access required"`.
+
+---
+
+## 2. Monoblock login — by `user_id` + PIN (no email needed)
+
+`POST /auth-login`
+
+The cashier/manager picker logs people in by **id + 4-digit PIN**. Email login
+still works (managers have a real email; cashiers have an auto-generated
+placeholder you should not show).
+
+```jsonc
+// Body — send EITHER user_id OR email, plus password (the 4-digit PIN)
+{ "user_id": 12, "password": "4821" }
+// or
+{ "email": "manager@store.uz", "password": "4821" }
+```
+On success: `data: { token, user: { id, role, permissions, ... } }`. Set the
+token as the session (cookie is set automatically; bearer also accepted).
+Login is blocked for `ADMIN`/`WAITER` here (each has its own app).
+
+---
+
+## 3. Staff picker
+
+`GET /cashiers` — **public** (shown before login), rate-limited.
+
+Returns active **cashiers + managers**:
+
+```jsonc
+{
+  "total": 2,
+  "cashiers": [
+    {
+      "id": 12, "uuid": "…",
+      "first_name": "Ali", "last_name": "Karimov", "name": "Ali Karimov",
+      "email": "ali.karimov@local",   // placeholder for cashiers — don't display
+      "role": "CASHIER",
+      "is_manager": false,             // true ⇒ show Settings access in the UI
+      "permissions": [],               // manager permission list ('*' never granted here)
+      "on_shift": false,               // already has an ACTIVE shift ⇒ resume, don't double-start
+      "last_login_at": "2026-06-06T08:12:00Z"
+    }
+  ]
+}
+```
+Flow: `GET /cashiers` → tap a card → enter PIN → `POST /auth-login {user_id, password}`.
+
+---
+
+## 4. Creating users — 4-digit PIN, email optional
+
+`POST /api/admins/users` (manager/admin)
+
+- `password` must be **exactly 4 digits** (the PIN). Error otherwise:
+  `422 { errors: { password: "PIN must be exactly 4 digits" } }`.
+- `email` is **required only when `role == "MANAGER"`**
+  (`422 { errors: { email: "email is required for managers" } }`).
+  For every other role email is optional — backend derives a placeholder.
+
+```jsonc
+// Cashier (minimal): first + last + PIN
+{ "first_name": "Ali", "last_name": "Karimov", "role": "CASHIER", "password": "4821" }
+// Manager: email required
+{ "first_name": "Dana", "last_name": "S", "role": "MANAGER", "email": "dana@store.uz", "password": "1234" }
+```
+
+---
+
+## 5. Shared-till order ownership (relaxed)
+
+Any POS staff (`CASHIER`/`MANAGER`/`ADMIN`) can now act on **any** order —
+mark-ready, pay, change status, add/edit items — regardless of which cashier
+opened it. The old *"created by another cashier"* 403 is gone for staff. (Only
+self-service customers, role `USER`, are still restricted to their own orders.)
+
+No request changes — calls that previously 403'd now succeed.
+
+---
+
+## 6. Instant products (drinks etc.) — `is_instant`
+
+Products have a boolean **`is_instant`**. Instant items need no kitchen prep:
+they're served immediately and never appear on the chef/kitchen display.
+
+**Product create/update** (`POST`/`PUT /api/admins/products[/<id>]`): accept
+optional `is_instant` (bool, default `false`). It's returned in every product
+serialization (admin **and** customer/menu), so the menu can badge them.
+
+```jsonc
+{ "name": "Cola", "price": "12000", "category_id": 3, "is_instant": true }
+```
+
+**Behavior on orders (automatic, backend-side):**
+- An order made up **entirely of instant items** is created already `READY`
+  (its `ready_at` is set immediately) — it skips the kitchen.
+- In a **mixed** order, instant items are pre-marked ready; only the cooked
+  items go to the kitchen. The order becomes `READY` once the cooked items are.
+- **`GET /orders/chef-display`** excludes instant items, and fully-instant
+  orders don't appear there at all. `items_total`/progress count only cooked items.
+
+The KDS/chef screen therefore only ever shows real kitchen work.
+
+---
+
+## 7. Deep shift analytics (NEW)
+
+Two read endpoints (manager/admin), for any date window. `from`/`to` are
+`YYYY-MM-DD` and both default to **today** if omitted (single-day query).
+
+### `GET /api/admins/analytics/shifts/cashiers?from=&to=&user_id=`
+
+`user_id` optional (filter to one cashier). Returns:
+
+```jsonc
+{
+  "scope": "cashier",
+  "date_from": "2026-05-07", "date_to": "2026-06-06",
+  "filtered_user_id": null,
+  "summary": {
+    "shift_count": 42, "distinct_cashiers": 5,
+    "by_status": { "ACTIVE": 1, "COMPLETED": 40, "ABANDONED": 1 },
+    "total_hours": 318.5, "avg_shift_minutes": 455.0,
+    "orders": { "total": 1290, "paid": 1250, "cancelled": 22,
+                "cancel_rate_pct": 1.71, "avg_per_shift": 30.71, "units_sold": 4310 },
+    "money": {
+      "revenue": "184500000.00", "cash": "120300000.00", "card": "64200000.00",
+      "avg_per_shift": "4392857.14", "avg_order_value": "147600.00",
+      "revenue_per_hour": "579277.00",
+      "payment_mix":     { "CASH": "...", "UZCARD": "...", "HUMO": "...", "PAYME": "...", "MIXED": "..." },
+      "payment_mix_pct": { "CASH": 65.2, "UZCARD": 20.1, "HUMO": 8.0, "PAYME": 5.0, "MIXED": 1.7 }
+    },
+    "discounts": { "total_given": "...", "discounted_orders": 80, "discount_rate_pct": 6.2 },
+    "speed": { "avg_prep_seconds": 540, "fastest_shift_avg_seconds": 300, "slowest_shift_avg_seconds": 900 },
+    "punctuality": {
+      "on_time_shifts": 35, "late_shifts": 5, "punctuality_rate_pct": 87.5,
+      "avg_late_minutes": 12.4, "max_late_minutes": 41,
+      "late_arrivals": [ { "shift_id": 88, "user_id": 12, "user_name": "Ali Karimov",
+                           "late_minutes": 41, "start_time": "…" } ]   // who was late, sorted worst-first
+    },
+    "cash_accuracy": {
+      "shifts_reconciled": 38, "shifts_unreconciled": 4,
+      "short_count": 6, "over_count": 3, "exact_count": 29,
+      "net_variance": "-42000.00", "total_abs_variance": "180000.00", "avg_abs_variance": "4736.84",
+      "worst_shortage": { "shift_id": 71, "user_name": "…", "difference": "-50000.00" },
+      "biggest_overage": { "shift_id": 64, "user_name": "…", "difference": "30000.00" }
+    }
+  },
+  "leaderboard": [   // per-cashier rollup, ranked by revenue
+    { "user_id": 12, "user_name": "Ali Karimov", "shifts": 10, "orders": 320,
+      "revenue": "…", "cash": "…", "avg_order_value": "…",
+      "cancelled": 4, "cancel_rate_pct": 1.25,
+      "late_shifts": 2, "late_minutes_total": 53, "cash_variance": "-12000.00",
+      "avg_prep_seconds": 512, "revenue_rank": 1 }
+  ],
+  "distribution": {
+    "by_hour": [ { "hour": 0, "orders": 0, "revenue": "0.00" }, … 24 buckets ],
+    "by_date": [ { "date": "2026-06-06", "orders": 73, "revenue": "…" }, … ],
+    "peak_hour": 13
+  },
+  "shifts": [ /* full per-shift breakdown — see below */ ]
+}
+```
+
+Each entry in `shifts[]` (per cashier shift):
+```jsonc
+{
+  "shift_id": 88, "user_id": 12, "user_name": "Ali Karimov", "status": "COMPLETED",
+  "start_time": "…", "end_time": "…", "duration_minutes": 480,
+  "orders": { "total", "completed", "cancelled", "open", "preparing", "ready", "paid",
+              "cancel_rate_pct", "by_type": { "hall", "delivery", "pickup" } },
+  "items": { "units_sold", "line_items" },
+  "money": { "revenue", "cash", "card", "avg_order_value",
+             "payment_mix": { CASH, UZCARD, HUMO, PAYME, MIXED } },
+  "discounts": { "total_given", "discounted_orders", "discount_rate_pct", "avg_discount_pct" },
+  "speed": { "avg_prep_seconds", "orders_per_hour", "revenue_per_hour" },
+  "punctuality": { "actual_start", "scheduled_start", "late_minutes", "is_late",
+                   "attendance": { status, check_in, check_out, work_hours, overtime_hours } | null },
+  "reconciliation": { "expected_cash", "actual_cash", "difference", "is_short", "is_over",
+                      "notes", "reconciled_by", "reconciled_at" } | null
+}
+```
+
+### `GET /api/admins/analytics/shifts/kitchen?from=&to=&user_id=&role=&target_prep_minutes=`
+
+Kitchen/chef shifts. `role` selects which staff count as kitchen (default
+`WAITER` — there's no dedicated chef role yet). `target_prep_minutes` sets the
+"slow order" threshold (default 15). Prep metrics are **window-based** (the
+kitchen output while that person was on shift) — per-item chef attribution
+isn't tracked in the data model.
+
+```jsonc
+{
+  "scope": "kitchen", "date_from": "…", "date_to": "…", "filtered_user_id": null,
+  "summary": {
+    "shift_count": 20, "distinct_staff": 3, "role": "WAITER",
+    "by_status": { … }, "total_hours": 150.0, "avg_shift_minutes": 450.0,
+    "orders_in_window": 880, "orders_readied": 860, "orders_pending": 20,
+    "completion_rate_pct": 97.7,
+    "items_prepared": 2600, "items_per_hour": 17.3,
+    "prep_time": { "avg_seconds": 520, "best_shift_avg_seconds": 300,
+                   "worst_shift_avg_seconds": 1100, "slow_orders": 64,
+                   "slow_rate_pct": 7.4, "target_seconds": 900 },
+    "punctuality": { same shape as cashier (on_time/late/late_arrivals…) }
+  },
+  "distribution": { by_hour, by_date, peak_hour },
+  "shifts": [
+    { "shift_id", "user_id", "user_name", "status", "start_time", "end_time", "duration_minutes",
+      "orders_in_window", "orders_readied", "orders_pending", "completion_rate_pct",
+      "items_prepared": { "units", "line_items" },
+      "prep_time": { "avg_seconds", "median_seconds", "fastest_seconds", "slowest_seconds",
+                     "slow_orders", "slow_rate_pct", "target_seconds" },
+      "throughput": { "orders_per_hour", "items_per_hour" },
+      "punctuality": { … } }
+  ]
+}
+```
+
+**Notes / caveats**
+- All money values are strings (avoid float rounding). Seconds are integers.
+- `late_minutes`/`is_late` are `null` when a shift has no `shift_template`
+  attached (no schedule to compare against). `attendance` is `null` when the HR
+  module has no record for that person/day.
+- Existing analytics endpoints are unchanged:
+  `GET /api/admins/analytics/shifts/<shift_id>` and `…/menu-engineering`.
+
+---
+
+## Migrations
+
+This drop ships migrations (`MANAGER` role, `Product.is_instant`). They run
+automatically on container start (`entrypoint.sh` → `migrate`). No FE action.

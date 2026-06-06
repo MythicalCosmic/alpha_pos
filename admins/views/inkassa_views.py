@@ -4,7 +4,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.permissions import admin_required
+from base.security.permissions import manager_required
 from base.security.auth import login_required
 from base.security.audit import audit
 from base.security.idempotency import idempotent
@@ -30,7 +30,7 @@ def inkassa_stats(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def inkassa_history(request):
     page, per_page = validate_pagination(request)
     result, status_code = AdminInkassaService.get_history(page=page, per_page=per_page)
@@ -39,7 +39,7 @@ def inkassa_history(request):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@manager_required
 def inkassa_detail(request, inkassa_id):
     result, status_code = AdminInkassaService.get_detail(inkassa_id)
     return JsonResponse(result, status=status_code)
@@ -47,7 +47,7 @@ def inkassa_detail(request, inkassa_id):
 
 @csrf_exempt
 @require_POST
-@admin_required
+@manager_required
 @idempotent('inkassa.perform')
 def inkassa_perform(request):
     data, error = parse_json_body(request)

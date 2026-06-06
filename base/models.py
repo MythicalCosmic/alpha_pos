@@ -491,6 +491,10 @@ class Product(SyncMixin, models.Model):
     # Required by the OFD for live fiscalization; blank is tolerated in
     # mock/sandbox so the catalog can be coded gradually.
     ikpu_code = models.CharField(max_length=17, blank=True, default='')
+    # Instant items (drinks, packaged goods) need no kitchen preparation:
+    # their order items are auto-readied the moment the order is created and
+    # they're excluded from the kitchen / chef display.
+    is_instant = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
