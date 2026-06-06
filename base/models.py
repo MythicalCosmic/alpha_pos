@@ -333,6 +333,10 @@ class User(SyncMixin, models.Model):
         USER = "USER", "User"
         ADMIN = "ADMIN", "Admin"
         CASHIER = "CASHIER", "Cashier"
+        # Monoblock-level manager: logs in on the POS next to cashiers (NOT in
+        # the admin dashboard like ADMIN), but with elevated in-app access
+        # (settings, etc.). Gated server-side via role_required('MANAGER').
+        MANAGER = "MANAGER", "Manager"
         WAITER = "WAITER", "Waiter"
 
     class UserStatus(models.TextChoices):

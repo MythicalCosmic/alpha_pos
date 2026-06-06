@@ -14,7 +14,7 @@ from base.models import AuditLog
 # discount at the till. USER (the customer-facing role) must never do these,
 # otherwise a customer with their own order can self-issue a CASH receipt
 # (and inflate the cash register) or skip the kitchen workflow.
-STAFF_ROLES = ('ADMIN', 'CASHIER', 'WAITER')
+STAFF_ROLES = ('ADMIN', 'CASHIER', 'MANAGER', 'WAITER')
 from customers.services.order_service import CustomerOrderService
 from customers.requests.order_requests import create_order_request
 

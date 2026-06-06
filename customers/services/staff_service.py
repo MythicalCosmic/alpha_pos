@@ -13,6 +13,10 @@ def _serialize_staff(user, on_shift=False):
         # list has to carry the email the frontend will log in with.
         'email': user.email,
         'role': user.role,
+        # Managers share the cashier login tier but unlock settings in the UI.
+        # The frontend gates the settings menu on this flag / on role/permissions.
+        'is_manager': user.role == 'MANAGER',
+        'permissions': user.permissions or [],
         # Lets the monoblock show "on shift" and offer resume vs. start.
         'on_shift': on_shift,
         'last_login_at': user.last_login_at.isoformat() if user.last_login_at else None,
@@ -22,14 +26,16 @@ def _serialize_staff(user, on_shift=False):
 class StaffService:
     @staticmethod
     def list_cashiers():
-        """Active cashiers for the monoblock login screen (pre-auth).
+        """Active POS staff (cashiers + managers) for the monoblock login screen.
 
-        Returns only the fields the picker needs — never the password hash.
-        Flags who already has an ACTIVE shift so the frontend can resume
-        instead of starting a duplicate one (login auto-starts a shift).
+        Pre-auth: shown before anyone logs in. Returns only the fields the
+        picker needs — never the password hash. Flags who already has an
+        ACTIVE shift so the frontend can resume instead of starting a
+        duplicate one (login auto-starts a shift), and flags managers so the
+        UI can surface their settings access.
         """
         cashiers = list(
-            UserRepository.get_cashiers().order_by('first_name', 'last_name')
+            UserRepository.get_pos_staff().order_by('first_name', 'last_name')
         )
 
         # Single query for the active-shift user ids instead of one per row.
