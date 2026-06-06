@@ -64,6 +64,10 @@ WEB_PORT=127.0.0.1:8001
 # This is the central hub (not a branch): timestamp records it originates so
 # they distribute to branches via /changes, and don't try to push to itself.
 DEPLOYMENT_MODE=cloud
+# The hub needs its OWN branch id, distinct from every branch (branch1, ...),
+# or /changes would treat hub-created records as the branch's own and skip them
+# on pull.
+BRANCH_ID=cloud
 
 DB_ENGINE=django.db.backends.postgresql
 DB_NAME=alpha_pos
