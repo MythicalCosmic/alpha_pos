@@ -86,8 +86,9 @@ def shifts(request):
 
 @csrf_exempt
 @require_GET
-@manager_required
+@pos_staff_required
 def shift_detail(request, shift_id):
+    # pos_staff so a cashier can see their own shift's stats, not just managers.
     result, status_code = ShiftService.get(shift_id)
     return JsonResponse(result, status=status_code)
 

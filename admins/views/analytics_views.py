@@ -10,11 +10,11 @@ from admins.services.shift_analytics_service import (
     cashier_shift_analytics, kitchen_shift_analytics, shift_handover_report,
 )
 from base.models import Shift
-from base.security.permissions import admin_required, manager_required
+from base.security.permissions import manager_required, pos_staff_required
 
 
 @require_GET
-@manager_required
+@pos_staff_required
 def shift_perf_view(request, shift_id):
     try:
         shift = Shift.objects.select_related('user').get(
@@ -104,7 +104,7 @@ def cashier_shift_analytics_view(request):
 
 
 @require_GET
-@manager_required
+@pos_staff_required
 def shift_report_view(request, shift_id):
     try:
         shift = Shift.objects.select_related('user', 'shift_template', 'reconciliation').get(
