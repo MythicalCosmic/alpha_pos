@@ -363,6 +363,17 @@ if not DEBUG:
     if os.environ.get('TRUST_FORWARDED_PROTO', '').lower() in ('true', '1', 'yes'):
         SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# OPEN_LAN is the desktop/LAN appliance, which serves plain HTTP — so secure-only
+# cookies are NEVER stored by the browser and a correct login silently bounces
+# back to the login page (the session cookie is dropped). Allow cookies over
+# HTTP and disable HSTS/SSL-redirect in this mode. Runs after the production
+# block above so it wins regardless of DEBUG.
+if OPEN_LAN:
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_SSL_REDIRECT = False
+
 # X-Forwarded-For trust toggle, separate from the proto toggle so an operator
 # can opt in to one without the other. Off by default — without a proxy in
 # front of the app, the header is attacker-controlled and would break IP-based
