@@ -73,11 +73,17 @@ def expenses(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "DELETE"])
-@admin_required
+@pos_staff_required
 def expense_detail(request, expense_id):
     if request.method == "GET":
+        # Cashiers can view an expense they filed.
         result, status = ExpenseService.get(expense_id)
         return JsonResponse(result, status=status)
+
+    # Editing/deleting an expense stays a manager/admin job.
+    if request.user.role not in ('ADMIN', 'MANAGER'):
+        return JsonResponse(
+            {"success": False, "message": "Manager access required"}, status=403)
 
     if request.method == "DELETE":
         result, status = ExpenseService.delete(expense_id)

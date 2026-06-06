@@ -14,16 +14,19 @@ from base.services.treasury_service import TreasuryService
 
 @csrf_exempt
 @require_GET
-@manager_required
+@pos_staff_required
 def treasury_accounts(request):
+    # Read-only balances — cashiers see SAFE/BANK so they know what they spend from.
     result, status_code = TreasuryService.get_accounts()
     return JsonResponse(result, status=status_code)
 
 
 @csrf_exempt
 @require_GET
-@manager_required
+@pos_staff_required
 def treasury_history(request):
+    # Cashiers can view the ledger (incl. the expenses they file); only
+    # transfers (below) stay manager-only.
     page, per_page = validate_pagination(request)
     result, status_code = TreasuryService.history(
         account_kind=request.GET.get('account'),
