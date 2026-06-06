@@ -217,7 +217,10 @@ class ShiftService:
         shift = ShiftRepository.update(
             shift,
             end_time=now,
-            status='COMPLETED',
+            # ENDED, not COMPLETED: the cashier has closed the shift (stats are
+            # now frozen and visible) but the manager hasn't confirmed the cash
+            # yet. Reconcile moves it ENDED -> COMPLETED.
+            status='ENDED',
             total_orders=orders_taken['total_orders'],
             total_revenue=money['total_revenue'],
             cash_collected=money['cash_collected'],
@@ -233,8 +236,8 @@ class ShiftService:
         if not shift:
             return ServiceResponse.not_found("Shift not found")
 
-        if shift.status != 'COMPLETED':
-            return ServiceResponse.error("Shift must be completed before reconciling")
+        if shift.status != 'ENDED':
+            return ServiceResponse.error("Shift must be ended before reconciling")
 
         existing = CashReconciliationRepository.get_for_shift(shift_id)
         if existing:
@@ -252,6 +255,9 @@ class ShiftService:
             notes=notes or '',
             reconciled_by_id=reconciled_by_id,
         )
+
+        # Manager confirmed the cash: ENDED -> COMPLETED.
+        ShiftRepository.update(shift, status='COMPLETED')
 
         return ServiceResponse.created(data={
             'id': reconciliation.id,

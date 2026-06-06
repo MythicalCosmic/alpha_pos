@@ -439,7 +439,7 @@ def cashier_shift_analytics(date_from, date_to, user_id=None):
 
     # ── roll up the summary ──
     n = len(rows)
-    status_counts = {'ACTIVE': 0, 'COMPLETED': 0, 'ABANDONED': 0}
+    status_counts = {'ACTIVE': 0, 'ENDED': 0, 'COMPLETED': 0, 'ABANDONED': 0}
     revenue = cash = card = discount_total = Decimal('0')
     mix = {k: Decimal('0') for k in ('CASH', 'UZCARD', 'HUMO', 'PAYME', 'MIXED')}
     orders = cancelled = paid = units = discounted = duration_total = 0
@@ -656,7 +656,7 @@ def kitchen_shift_analytics(date_from, date_to, user_id=None, role='WAITER',
     rows = [_kitchen_shift_row(s, att, target_prep_seconds) for s in shifts]
 
     n = len(rows)
-    status_counts = {'ACTIVE': 0, 'COMPLETED': 0, 'ABANDONED': 0}
+    status_counts = {'ACTIVE': 0, 'ENDED': 0, 'COMPLETED': 0, 'ABANDONED': 0}
     orders_window = readied = pending = units = duration_total = slow = 0
     prep_vals, late_list = [], []
     on_time = late = 0

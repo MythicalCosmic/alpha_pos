@@ -373,7 +373,8 @@ class TestCashierShiftSelfService:
 
         res, st = ShiftService.end_active_for_user(cashier_user.id, notes='closing')
         assert st == 200
-        assert res['data']['status'] == 'COMPLETED'
+        # Ending sets ENDED (awaiting manager reconciliation), not COMPLETED.
+        assert res['data']['status'] == 'ENDED'
 
         # No open shift remains.
         res, st = ShiftService.current_for_user(cashier_user.id)

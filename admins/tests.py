@@ -170,3 +170,32 @@ class TestShiftHandoverReport:
         assert set(['shift', 'receipts', 'products', 'distribution', 'peak_hour']) <= set(rep)
         assert rep['receipt_count'] == 0
         assert 'cash' in rep['shift']['money'] and 'card' in rep['shift']['money']
+
+
+class TestShiftEndReconcileFlow:
+    """end -> ENDED (stats visible, awaiting manager); reconcile -> COMPLETED."""
+
+    def _active_shift(self, user):
+        from datetime import timedelta
+        from django.utils import timezone
+        from base.models import Shift
+        return Shift.objects.create(
+            user=user, start_time=timezone.now() - timedelta(hours=1), status='ACTIVE')
+
+    def test_end_sets_ended_then_reconcile_completes(self, cashier_user, admin_user):
+        from admins.services.shift_service import ShiftService
+        s = self._active_shift(cashier_user)
+        res, st = ShiftService.end_shift(s.id, cashier_user.id, 'done')
+        assert st == 200
+        assert res['data']['status'] == 'ENDED'
+
+        res2, st2 = ShiftService.reconcile(s.id, actual_cash='0', notes='', reconciled_by_id=admin_user.id)
+        assert st2 == 201
+        s.refresh_from_db()
+        assert s.status == 'COMPLETED'
+
+    def test_reconcile_requires_ended(self, cashier_user, admin_user):
+        from admins.services.shift_service import ShiftService
+        s = self._active_shift(cashier_user)  # still ACTIVE
+        _, st = ShiftService.reconcile(s.id, actual_cash='0', notes='', reconciled_by_id=admin_user.id)
+        assert st == 400

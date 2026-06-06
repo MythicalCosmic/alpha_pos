@@ -1191,6 +1191,9 @@ class ShiftTemplate(SyncMixin, models.Model):
 class Shift(SyncMixin, models.Model):
     class Status(models.TextChoices):
         ACTIVE = 'ACTIVE', 'Active'
+        # ENDED = cashier closed the shift; totals frozen, awaiting the
+        # manager's cash reconciliation. COMPLETED = manager confirmed it.
+        ENDED = 'ENDED', 'Ended'
         COMPLETED = 'COMPLETED', 'Completed'
         ABANDONED = 'ABANDONED', 'Abandoned'
 

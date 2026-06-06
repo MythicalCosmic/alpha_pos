@@ -389,3 +389,25 @@ shifts keep their frozen end-of-shift numbers. New field on every shift:
 `is_live_stats: true` ⇒ figures are live (not yet finalized). The deep
 analytics and the handover report (§7/§9) already compute live and are
 available at any stage (active → ended → confirmed).
+
+---
+
+## 11. Shift lifecycle: explicit ENDED state (fix "ended shows confirmed")
+
+`Shift.status` now has a distinct **`ENDED`** between `ACTIVE` and `COMPLETED`:
+
+```
+ACTIVE  →  (POST /shifts/<id>/end)  →  ENDED  →  (POST /shifts/<id>/reconcile)  →  COMPLETED
+```
+
+- **`POST /shifts/<id>/end`** now returns `status: "ENDED"` (was `COMPLETED`).
+  The shift is closed, its totals are frozen and **visible** — this is the
+  state the manager reviews. Map this to your "Ended" label.
+- **`POST /shifts/<id>/reconcile`** now requires the shift to be `ENDED` and,
+  on success, flips it to `COMPLETED` (your "Confirmed" label). It still
+  errors if called before the shift is ended.
+- `ABANDONED` unchanged.
+
+So a just-ended shift is `ENDED` (not `COMPLETED`), and stats are available
+immediately (`ENDED`/`COMPLETED` use the frozen end-of-shift figures; `ACTIVE`
+computes live per §10). Analytics `by_status` now includes an `ENDED` bucket.
