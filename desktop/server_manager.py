@@ -42,7 +42,19 @@ class ServerManager:
         call_command('migrate', '--noinput', verbosity=0)
         log('Creating admin account (if missing)…')
         try:
-            call_command('bootstrap_admin', verbosity=0)
+            from desktop import config_store
+            from base.models import User
+            # On a fresh DB we choose the admin password ourselves and persist it,
+            # so the panel can show it — the GUI exe has no console where
+            # bootstrap_admin's banner would otherwise print it.
+            if not User.objects.exists():
+                email = 'admin@local'
+                password = config_store.generate_password()
+                call_command('bootstrap_admin', email=email, password=password, verbosity=0)
+                config_store.write_admin_creds(email, password)
+                log(f'  Admin created — email: {email}  (password shown in the panel)')
+            else:
+                call_command('bootstrap_admin', verbosity=0)
         except Exception as exc:  # noqa: BLE001
             log(f'  (bootstrap_admin skipped: {exc})')
         log('Collecting static files…')

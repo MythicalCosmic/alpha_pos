@@ -148,6 +148,15 @@
           <div class="kv"><span>Failed</span><span id="fz-failed">—</span></div>
           <div class="kv"><span>Provider</span><span id="fz-provider">—</span></div>
         </div>
+        <div class="card">
+          <h3>POS sign-in (this PC)</h3>
+          <div class="kv"><span>Admin email</span><span id="cred-email">—</span></div>
+          <div class="kv"><span>Password</span><span id="cred-pass">—</span></div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn ghost" onclick="toggleCred()">Show / hide</button>
+            <button class="btn ghost" onclick="copyCred()">Copy password</button>
+          </div>
+        </div>
       </div>
       <div class="row" style="margin-top:18px">
         <button class="btn ghost" onclick="refreshAll()">↻ Refresh</button>
@@ -260,7 +269,7 @@
     <!-- FISCAL -->
     <section id="fiscal" class="hidden">
       <h1>Fiscalization (Soliq)</h1>
-      <div class="sub">Toggle the mode. <b>off</b> = none · <b>mock</b> = local test · <b>sandbox/live</b> = real provider.</div>
+      <div class="sub"><b>Off</b> = fully bypassed (no receipts, no Soliq) — the default for this launch. <b>mock</b> = local test · <b>sandbox/live</b> = real provider when you go fiscal.</div>
       <div class="card">
         <h3>Mode</h3>
         <div class="modeseg" id="modeseg">
@@ -319,11 +328,15 @@ const TOS_TEXT = `By installing and using Alpha POS you agree that:
 
 Click "I Agree" to accept on behalf of your business.`;
 
+// Per-launch session token injected by the control server. Sent on every API
+// call so a stray web page in the operator's browser can't drive the bridge.
+const CONTROL_TOKEN = "{{CONTROL_TOKEN}}";
 // The backend is the local control server; each api.method(...args) POSTs to
 // /api/<method> with the args as a JSON array and resolves with the JSON result.
 const api = new Proxy({}, { get: (_, name) => (...args) =>
   fetch('/api/' + name, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Control-Token': CONTROL_TOKEN},
     body: JSON.stringify(args),
   }).then(r => r.json())
 });
@@ -376,6 +389,7 @@ async function refreshServer(){
 
 async function refreshAll(){
   await refreshServer();
+  loadAdminCreds();
   try{ const r=await api.sync_status(); if(r.ok){ const s=r.sync;
     setPill('sync-online', s.is_online); document.getElementById('sync-pending').textContent=s.pending_count??'—';
     document.getElementById('sync-last').textContent=fmt(s.last_sync); document.getElementById('sync-err').textContent=s.last_error||'none'; } }catch(e){}
@@ -401,6 +415,20 @@ async function refreshAll(){
   } }catch(e){}
 }
 
+// admin sign-in credentials (created on first Start, shown here since the
+// packaged app has no console where the bootstrap banner would print)
+let CRED=null, CRED_SHOWN=false;
+async function loadAdminCreds(){ try{ CRED=await api.admin_credentials(); }catch(e){ CRED=null; } renderCred(); }
+function renderCred(){
+  const e=document.getElementById('cred-email'), p=document.getElementById('cred-pass');
+  if(!e||!p) return;
+  if(!CRED||!CRED.set){ e.textContent='— (created on first Start)'; p.textContent='—'; return; }
+  e.textContent=CRED.email||'—';
+  p.textContent=CRED_SHOWN?(CRED.password||'—'):'••••••••';
+}
+function toggleCred(){ CRED_SHOWN=!CRED_SHOWN; renderCred(); }
+function copyCred(){ if(CRED&&CRED.password){ navigator.clipboard.writeText(CRED.password); toast('Password copied'); } else { toast('No password yet — press Start first'); } }
+
 function setPill(id,on){ document.getElementById(id).innerHTML=pill(on,on?'online':'offline'); }
 function pill(on,label){ const c=on?'on':'off'; return `<span class="pill ${c}"><span class="dot"></span>${label}</span>`; }
 function fmt(v){ if(!v) return '—'; try{return new Date(v).toLocaleString();}catch(e){return v;} }
@@ -413,7 +441,7 @@ async function buildConfigForm(){
     'Licensing':['LICENSE_CONTROL_CENTER_URL'],
     'Sync (cloud)':['SYNC_ENABLED','CLOUD_SYNC_URL','CLOUD_SYNC_TOKEN'],
     'Telegram (webhook — bot token/chats are in the Notifications tab)':['TELEGRAM_WEBHOOK_SECRET'],
-    'Fiscalization (your TIN)':['FISCALIZATION_MODE','FISCAL_PROVIDER','FISCAL_TIN','FISCAL_PROVIDER_URL','FISCAL_MERCHANT_ID','FISCAL_SECRET','FISCAL_VAT_PERCENT','FISCAL_BLOCK_ON_FAILURE']};
+    'Fiscalization (your TIN — leave OFF to bypass for v1)':['FISCALIZATION_MODE','FISCAL_PROVIDER','FISCAL_TIN','FISCAL_PROVIDER_URL','FISCAL_MERCHANT_ID','FISCAL_SECRET','FISCAL_VAT_PERCENT']};
   const form=document.getElementById('cfgform'); form.innerHTML='';
   for(const [g,keys] of Object.entries(groups)){
     const t=document.createElement('div'); t.className='group-title'; t.textContent=g; form.appendChild(t);

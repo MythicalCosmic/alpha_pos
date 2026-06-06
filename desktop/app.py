@@ -64,11 +64,24 @@ def main():
     if '--selftest' in sys.argv:
         return _selftest()
 
-    httpd = control_server.serve()
+    url = f'http://{control_server.CONTROL_HOST}:{control_server.CONTROL_PORT}/'
+
+    # Single-instance: if the control port is already bound, another copy is
+    # running — just surface its window and exit instead of crashing on bind.
+    try:
+        httpd = control_server.serve()
+    except OSError:
+        edge = _find_edge()
+        if edge:
+            subprocess.Popen([edge, f'--app={url}', f'--user-data-dir={_profile_dir()}',
+                              '--no-first-run', '--no-default-browser-check'])
+        else:
+            webbrowser.open(url)
+        return
+
     threading.Thread(target=httpd.serve_forever, name='control', daemon=True).start()
     time.sleep(0.4)  # let the socket bind
 
-    url = f'http://{control_server.CONTROL_HOST}:{control_server.CONTROL_PORT}/'
     edge = _find_edge()
     if edge:
         # A dedicated user-data-dir forces a distinct Edge process we can wait

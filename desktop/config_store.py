@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import string
 import sys
 from pathlib import Path
 
@@ -34,6 +35,7 @@ ENV_FILE = DATA_DIR / '.env'
 SECRET_FILE = DATA_DIR / '.secret_key'
 FERNET_FILE = DATA_DIR / '.license_fernet_key'
 STATE_FILE = DATA_DIR / 'desktop_state.json'
+CREDS_FILE = DATA_DIR / 'admin_credentials.json'
 
 # The fields the control-panel config form manages, with sensible defaults.
 # Grouped only for the UI; stored flat in .env.
@@ -151,6 +153,29 @@ def read_state() -> dict:
 
 def write_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding='utf-8')
+
+
+def generate_password(length: int = 14) -> str:
+    """Readable random password (no ambiguous chars) for the bootstrap admin."""
+    alphabet = string.ascii_letters + string.digits
+    for bad in '0O1lI':
+        alphabet = alphabet.replace(bad, '')
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+def read_admin_creds() -> dict:
+    """The first-admin login the desktop app created, so the panel can show it
+    (the GUI exe has no console where the bootstrap banner would appear)."""
+    if CREDS_FILE.exists():
+        try:
+            return json.loads(CREDS_FILE.read_text(encoding='utf-8'))
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def write_admin_creds(email: str, password: str) -> None:
+    _write_protected(CREDS_FILE, json.dumps({'email': email, 'password': password}, indent=2))
 
 
 def tos_accepted() -> bool:

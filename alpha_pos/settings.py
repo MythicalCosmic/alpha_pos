@@ -13,7 +13,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
-SECRET_KEY = os.environ.get('SECRET_KEY', "123213")
+# No fallback on purpose: an unset key must hit the guard below, not silently
+# boot with a publicly-known constant (which would sign admin cookies + QR-order
+# HMAC tokens). The desktop build generates a strong per-install key.
+SECRET_KEY = os.environ.get('SECRET_KEY', '')
 if not SECRET_KEY:
     if DEBUG:
         SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'

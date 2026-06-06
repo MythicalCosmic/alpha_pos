@@ -58,3 +58,8 @@ desktop_state.json
 
 # Misc
 *.bak
+
+# Desktop installer build artifacts
+installer/Output/
+desktop/AlphaPOS.ico
+desktop/__pycache__/

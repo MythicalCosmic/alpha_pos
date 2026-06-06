@@ -277,6 +277,15 @@ class Api:
             return {'ok': False, 'error': str(exc)}
 
     @_safe
+    def admin_credentials(self):
+        """The first-admin login the app created on this PC, so the operator can
+        sign in to the POS / admin panel. Stored locally (the GUI exe has no
+        console where the bootstrap banner would appear)."""
+        creds = config_store.read_admin_creds()
+        return {'ok': True, 'email': creds.get('email', ''),
+                'password': creds.get('password', ''), 'set': bool(creds.get('email'))}
+
+    @_safe
     def admin_url(self):
         """The Django admin — full CRUD over every backend model (products,
         users, stock, loyalty, queue, ...)."""

@@ -6,7 +6,13 @@
 # Django + the apps are pure Python, but their templates/migrations/static and
 # several runtime-imported modules must be collected explicitly.
 import os
+import sys
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+# The spec dir (project root) must be importable so `import alpha_pos.settings`
+# works at build time, regardless of the CWD pyinstaller is invoked from.
+# SPECPATH is injected by PyInstaller when it execs this spec.
+sys.path.insert(0, SPECPATH)
 
 # Configure + load Django at BUILD time so collect_submodules can import each
 # app package (their __init__ chains touch settings/models). Without this,
@@ -44,19 +50,22 @@ for app in APPS:
 block_cipher = None
 
 a = Analysis(
-    ['desktop/app.py'],
-    pathex=['.'],
+    [os.path.join(SPECPATH, 'desktop', 'app.py')],
+    pathex=[SPECPATH],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter'],
+    # tkinter: unused GUI toolkit. PIL/Pillow: only used at BUILD time to make
+    # the icon (make_icon.py) — nothing in the app imports it at runtime (no
+    # ImageField / qrcode), so it's dead weight (~11 MB) in the shipped bundle.
+    excludes=['tkinter', 'PIL', 'PIL._imaging', 'PIL.Image'],
     cipher=block_cipher,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True, name='AlphaPOS',
-    console=False, icon=None,
+    console=False, icon='desktop/AlphaPOS.ico',
 )
 coll = COLLECT(exe, a.binaries, a.zipfiles, a.datas, name='AlphaPOS')
