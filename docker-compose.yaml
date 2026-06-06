@@ -40,7 +40,9 @@ services:
       #   - SECRET_KEY is fail-loud — compose refuses to start without it.
       #   - ALLOWED_HOSTS defaults to localhost; set it for any real hostname.
       DEBUG: ${DEBUG:-False}
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env (generate: python -c "import secrets; print(secrets.token_urlsafe(64))")}
+      # Single-quoted: the ':' in the error message would otherwise make YAML
+      # read it as a nested mapping. Compose still interpolates ${...} after.
+      SECRET_KEY: '${SECRET_KEY:?SECRET_KEY must be set in .env (generate: python -c "import secrets; print(secrets.token_urlsafe(64))")}'
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       DB_ENGINE: ${DB_ENGINE:-django.db.backends.postgresql}
       DB_NAME: ${DB_NAME:-alpha_pos}
