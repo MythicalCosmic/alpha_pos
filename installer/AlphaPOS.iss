@@ -64,7 +64,15 @@ Name: "{group}\Uninstall Alpha POS"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Alpha POS"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
+; Open the POS port (TCP 8000) on the Windows Firewall so other devices on the
+; LAN — monoblocks / cashier terminals — can reach the backend. Delete-then-add
+; keeps it idempotent across reinstalls; `exit /b 0` so a missing rule on the
+; first install doesn't surface an error.
+Filename: "{cmd}"; Parameters: "/C netsh advfirewall firewall delete rule name=""Alpha POS (LAN)"" & netsh advfirewall firewall add rule name=""Alpha POS (LAN)"" dir=in action=allow protocol=TCP localport=8000 profile=any & exit /b 0"; Flags: runhidden; StatusMsg: "Opening the POS port on the network firewall..."
 Filename: "{app}\{#AppExeName}"; Description: "Launch Alpha POS now"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{cmd}"; Parameters: "/C netsh advfirewall firewall delete rule name=""Alpha POS (LAN)"" & exit /b 0"; Flags: runhidden
 
 [Code]
 { On uninstall, offer to remove the per-user business data. Default keeps it
