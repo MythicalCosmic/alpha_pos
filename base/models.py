@@ -48,12 +48,21 @@ class SyncMixin(models.Model):
                 self.branch_id = settings.BRANCH_ID
             if self.pk:
                 self.sync_version += 1
-            if getattr(settings, 'DEPLOYMENT_MODE', 'local') == 'local':
-                update_fields = kwargs.get('update_fields')
-                if update_fields is None or any(
-                    f not in ['synced_at', 'sync_version'] for f in update_fields
-                ):
+            mode = getattr(settings, 'DEPLOYMENT_MODE', 'local')
+            update_fields = kwargs.get('update_fields')
+            content_changed = update_fields is None or any(
+                f not in ['synced_at', 'sync_version'] for f in update_fields
+            )
+            if content_changed:
+                if mode == 'local':
+                    # Branch: mark pending so the push worker sends it to the hub.
                     self.synced_at = None
+                elif mode == 'cloud':
+                    # Hub: publish records it originates with a timestamp so the
+                    # /changes cursor hands them to branches on pull. (Records
+                    # RECEIVED from a branch run with _syncing=True and skip this.)
+                    from django.utils import timezone
+                    self.synced_at = timezone.now()
         super().save(*args, **kwargs)
         if not syncing and self.synced_at is None and self._is_sync_on_save():
             # Defer queueing until the surrounding transaction commits so a

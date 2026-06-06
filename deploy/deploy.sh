@@ -61,6 +61,9 @@ SECRET_KEY=${A_SECRET}
 ALLOWED_HOSTS=${POS_HOST},${IP},localhost,127.0.0.1
 CSRF_TRUSTED_ORIGINS=https://${POS_HOST}
 WEB_PORT=127.0.0.1:8001
+# This is the central hub (not a branch): timestamp records it originates so
+# they distribute to branches via /changes, and don't try to push to itself.
+DEPLOYMENT_MODE=cloud
 
 DB_ENGINE=django.db.backends.postgresql
 DB_NAME=alpha_pos
