@@ -1150,14 +1150,14 @@ CURRENT DATABASE STATE:
 
 Respond to the user's query based on this data. Follow all language and formatting rules from your instructions."""
 
-            from base.services.llm import call_claude
-            text, err = call_claude(prompt, system=SYSTEM_PROMPT, max_tokens=2048)
+            from base.services.llm import call_ai
+            text, err = call_ai(prompt, system=SYSTEM_PROMPT, max_tokens=2048)
             if err == 'llm_key_missing':
                 return {
                     "success": False,
                     "error": "no_api_key",
-                    "response": "ANTHROPIC_API_KEY not configured. Add it in the desktop panel (AI section).",
-                    "suggestions": ["Add ANTHROPIC_API_KEY"],
+                    "response": "AI API key not configured. Add it in the desktop panel (AI section).",
+                    "suggestions": ["Add the AI API key"],
                 }
             if err == 'llm_sdk_missing':
                 return {

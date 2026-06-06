@@ -14,6 +14,7 @@ django-cors-headers==4.9.0
 # Serves collected static files (admin assets) from gunicorn in production;
 # without it DEBUG=False + no nginx 404s every /static/ request.
 whitenoise==6.8.2
-# Claude / Anthropic SDK — powers the stock AI assistant and the demand
-# forecaster (base/services/llm.py). Replaced google-genai for v1.
+# AI providers — the stock assistant + demand forecaster call whichever the
+# operator picks (AI_PROVIDER) via base/services/llm.py.
 anthropic==0.74.0
+google-genai==2.7.0

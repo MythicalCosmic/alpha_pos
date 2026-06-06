@@ -54,9 +54,12 @@ CONFIG_FIELDS = [
     ('TELEGRAM_BOT_TOKEN', ''),
     ('TELEGRAM_CHAT_IDS', ''),
     ('TELEGRAM_WEBHOOK_SECRET', ''),
-    # AI (stock assistant + demand forecast — runs on Claude)
+    # AI (stock assistant + demand forecast). Pick a provider, fill its key.
+    ('AI_PROVIDER', 'claude'),  # 'claude' or 'gemini'
     ('ANTHROPIC_API_KEY', ''),
     ('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
+    ('GEMINI_API_KEY', ''),
+    ('GEMINI_MODEL', 'gemini-2.5-flash'),
     # Fiscalization (this business's OWN identity)
     ('FISCALIZATION_MODE', 'off'),
     ('FISCAL_PROVIDER', 'mock'),
@@ -69,7 +72,7 @@ CONFIG_FIELDS = [
 ]
 
 SECRET_KEYS = {'FISCAL_SECRET', 'CLOUD_SYNC_TOKEN', 'TELEGRAM_BOT_TOKEN',
-               'TELEGRAM_WEBHOOK_SECRET', 'ANTHROPIC_API_KEY'}
+               'TELEGRAM_WEBHOOK_SECRET', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY'}
 
 
 def _write_protected(path: Path, contents: str) -> None:

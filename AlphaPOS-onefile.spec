@@ -27,6 +27,8 @@ hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
             'dateutil', 'requests', 'anthropic'):
     hiddenimports += collect_submodules(lib)
+# Gemini SDK is lazy-imported in base/services/llm.py — collect it explicitly.
+hiddenimports += collect_submodules('google.genai')
 hiddenimports += collect_submodules('webview') + collect_submodules('clr_loader')
 hiddenimports += ['clr', 'pythonnet']
 

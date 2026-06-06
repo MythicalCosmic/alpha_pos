@@ -464,6 +464,7 @@ async function buildConfigForm(){
     'Licensing':['LICENSE_CONTROL_CENTER_URL'],
     'Sync (cloud)':['SYNC_ENABLED','CLOUD_SYNC_URL','CLOUD_SYNC_TOKEN'],
     'Telegram (webhook — bot token/chats are in the Notifications tab)':['TELEGRAM_WEBHOOK_SECRET'],
+    'AI (assistant + forecast — pick a provider, fill its key)':['AI_PROVIDER','ANTHROPIC_API_KEY','ANTHROPIC_MODEL','GEMINI_API_KEY','GEMINI_MODEL'],
     'Fiscalization (your TIN — leave OFF to bypass for v1)':['FISCALIZATION_MODE','FISCAL_PROVIDER','FISCAL_TIN','FISCAL_PROVIDER_URL','FISCAL_MERCHANT_ID','FISCAL_SECRET','FISCAL_VAT_PERCENT']};
   const form=document.getElementById('cfgform'); form.innerHTML='';
   for(const [g,keys] of Object.entries(groups)){
@@ -472,7 +473,8 @@ async function buildConfigForm(){
       const wrap=document.createElement('div'); wrap.className='field'+(k.length>20?' full':'');
       const isSecret=r.secret_keys.includes(k);
       let inp;
-      if(k==='FISCALIZATION_MODE'){ inp=sel(k,['off','mock','sandbox','live']); }
+      if(k==='AI_PROVIDER'){ inp=sel(k,['claude','gemini']); }
+      else if(k==='FISCALIZATION_MODE'){ inp=sel(k,['off','mock','sandbox','live']); }
       else if(k==='FISCAL_PROVIDER'){ inp=sel(k,['mock','multikassa']); }
       else if(k==='SYNC_ENABLED'||k==='FISCAL_BLOCK_ON_FAILURE'){ inp=sel(k,['False','True'].map(x=>k==='FISCAL_BLOCK_ON_FAILURE'?x.toLowerCase():x)); }
       else { inp=document.createElement('input'); inp.type=isSecret?'password':'text'; inp.value=r.config[k]||''; inp.dataset.key=k; }

@@ -38,6 +38,8 @@ hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
             'dateutil', 'requests', 'anthropic'):
     hiddenimports += collect_submodules(lib)
+# Gemini SDK is lazy-imported in base/services/llm.py — collect it explicitly.
+hiddenimports += collect_submodules('google.genai')
 # Native GUI: pywebview + pythonnet/CLR (WebView2). The hook-webview/hook-clr/
 # hook-clr_loader hooks pull the .NET runtime + WebView2 DLLs; we add the
 # submodules + 'clr' so the lazy `import webview` is never missed.

@@ -128,11 +128,11 @@ DATA:
 def _call_llm(prompt_text):
     """Isolated so tests can monkeypatch without configuring an API key.
 
-    Delegates to the shared Claude wrapper. Returns (text, error) where error
-    is None on success, 'llm_sdk_missing' / 'llm_key_missing' when unconfigured,
-    or a raw error string otherwise."""
-    from base.services.llm import call_claude
-    return call_claude(prompt_text, max_tokens=2048)
+    Delegates to the shared AI wrapper (Claude or Gemini per AI_PROVIDER).
+    Returns (text, error) where error is None on success, 'llm_sdk_missing' /
+    'llm_key_missing' when unconfigured, or a raw error string otherwise."""
+    from base.services.llm import call_ai
+    return call_ai(prompt_text, max_tokens=2048)
 
 
 def forecast_tomorrow():

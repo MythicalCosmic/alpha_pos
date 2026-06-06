@@ -220,11 +220,15 @@ BRANCH_ID = os.environ.get('BRANCH_ID', 'main')
 DEPLOYMENT_MODE = os.environ.get('DEPLOYMENT_MODE', 'local')
 SYNC_ON_SAVE = False
 
-# AI assistant + demand forecast run on Claude (base/services/llm.py).
-# Operator sets the key in the desktop panel (AI section) or via env.
+# AI assistant + demand forecast (base/services/llm.py). The operator picks the
+# provider and pastes the matching key in the desktop panel (AI section) / env.
+AI_PROVIDER = os.environ.get('AI_PROVIDER', 'claude')  # 'claude' or 'gemini'
+# Claude (Anthropic). Current Sonnet default; also claude-sonnet-4-5 / claude-opus-4-8.
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-# Current Sonnet by default; set 'claude-sonnet-4-5' or 'claude-opus-4-8' to switch.
 ANTHROPIC_MODEL = os.environ.get('ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+# Gemini (Google).
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
 
 # Secret token Telegram includes as X-Telegram-Bot-Api-Secret-Token on every
 # webhook call, set when registering the webhook URL via setWebhook. Without
