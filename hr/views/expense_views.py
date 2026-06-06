@@ -135,7 +135,8 @@ def expense_pay(request, expense_id):
 
 @csrf_exempt
 @require_GET
-@admin_required
+@pos_staff_required
 def expense_stats(request):
+    # Read-only expense totals — visible to cashiers too.
     result, status = ExpenseService.get_stats()
     return JsonResponse(result, status=status)
