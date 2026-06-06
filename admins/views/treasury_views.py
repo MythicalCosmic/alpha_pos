@@ -5,7 +5,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from base.helpers.request import parse_json_body, validate_pagination
 from base.helpers.response import json_response
-from base.security.permissions import manager_required
+from base.security.permissions import manager_required, pos_staff_required
 from base.security.idempotency import idempotent
 from base.security.audit import audit
 from base.models import AuditLog
@@ -64,7 +64,7 @@ def treasury_transfer(request):
 
 @csrf_exempt
 @require_POST
-@manager_required
+@pos_staff_required
 @idempotent('treasury.expense')
 def treasury_expense(request):
     data, error = parse_json_body(request)

@@ -316,8 +316,8 @@ charge. Send `Idempotency-Key` header to make retries safe.
 ```
 `422` if `from==to`, amount ≤ 0, fee < 0, fee > amount, or insufficient funds.
 
-### `POST /api/admins/treasury/expense` (manager)
-Spend money out of SAFE or BANK.
+### `POST /api/admins/treasury/expense` (cashier / manager / admin)
+Spend money out of SAFE or BANK. Open to cashiers too (not just managers).
 ```jsonc
 { "account": "SAFE", "amount": "150000", "category": "supplies", "description": "napkins" }
 // → SAFE -150,000 ; 201 with { account, transaction }
