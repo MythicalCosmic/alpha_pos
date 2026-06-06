@@ -38,11 +38,17 @@ hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
             'dateutil', 'requests'):
     hiddenimports += collect_submodules(lib)
+# Native GUI: pywebview + pythonnet/CLR (WebView2). The hook-webview/hook-clr/
+# hook-clr_loader hooks pull the .NET runtime + WebView2 DLLs; we add the
+# submodules + 'clr' so the lazy `import webview` is never missed.
+hiddenimports += collect_submodules('webview') + collect_submodules('clr_loader')
+hiddenimports += ['clr', 'pythonnet']
 
 datas = [
     ('desktop/ui', 'desktop/ui'),
     ('desktop/tos.txt', 'desktop'),
 ]
+datas += collect_data_files('webview')  # WebView2 assemblies in webview/lib
 # Ship each app's migrations + templates + static.
 for app in APPS:
     datas += collect_data_files(app, include_py_files=True)

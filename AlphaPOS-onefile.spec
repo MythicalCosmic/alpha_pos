@@ -27,11 +27,14 @@ hiddenimports += collect_submodules('django')
 for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
             'dateutil', 'requests'):
     hiddenimports += collect_submodules(lib)
+hiddenimports += collect_submodules('webview') + collect_submodules('clr_loader')
+hiddenimports += ['clr', 'pythonnet']
 
 datas = [
     ('desktop/ui', 'desktop/ui'),
     ('desktop/tos.txt', 'desktop'),
 ]
+datas += collect_data_files('webview')
 for app in APPS:
     datas += collect_data_files(app, include_py_files=True)
 

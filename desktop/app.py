@@ -3,15 +3,15 @@
     python -m desktop.app          # dev
     (or the packaged AlphaPOS.exe)
 
-Starts the local control server, then opens the panel in a chromeless Edge
-"--app" window (a native-feeling app window, no browser chrome). When the window
-is closed, the POS server is stopped and the process exits.
-
-Edge is pre-installed on Windows 10/11. If it isn't found we fall back to the
-default browser.
+Starts the local control server, then shows the panel in a NATIVE window via
+pywebview (WebView2 — an embedded rendering control, NOT the Edge browser: no
+msedge.exe, no browser chrome). If the native window can't start, it falls back
+to a chromeless Edge "--app" window, then the default browser, so the panel
+always appears. Closing the window stops the POS server and exits.
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -21,6 +21,8 @@ import webbrowser
 from pathlib import Path
 
 from desktop import control_server
+
+logger = logging.getLogger('desktop.app')
 
 
 def _find_edge() -> str | None:
@@ -55,7 +57,49 @@ def _selftest():
     print('mock sync :', api.send_mock_sync().get('read_back'))
     print('fiscal    :', api.fiscal_test().get('fiscal_sign'))
     api.stop_server()
+    try:
+        import webview  # noqa: F401 — confirms the native-GUI backend bundled
+        print('webview   : importable (native window available)')
+    except Exception as exc:  # noqa: BLE001
+        print('webview   : MISSING —', exc)
     print('SELFTEST OK')
+
+
+def _run_pywebview(url: str) -> bool:
+    """Native window via pywebview/WebView2. Returns True if it ran (and the
+    window has since closed), False if the backend is unavailable so the caller
+    can fall back. Blocks until the window is closed."""
+    try:
+        import webview
+    except Exception:  # noqa: BLE001 — not bundled / import error
+        logger.info('pywebview not available; falling back')
+        return False
+    try:
+        webview.create_window('Alpha POS', url, width=1060, height=760,
+                              min_size=(900, 640))
+        # Blocks until the window closes. Raises if WebView2 can't initialize.
+        webview.start()
+        return True
+    except Exception:  # noqa: BLE001 — WebView2 runtime missing / init failed
+        logger.exception('pywebview window failed; falling back to Edge/browser')
+        return False
+
+
+def _run_edge(url: str) -> bool:
+    """Chromeless Edge "--app" window. Returns True if launched (and has since
+    closed), False if Edge isn't present."""
+    edge = _find_edge()
+    if not edge:
+        return False
+    proc = subprocess.Popen([
+        edge, f'--app={url}', f'--user-data-dir={_profile_dir()}',
+        '--no-first-run', '--no-default-browser-check', '--window-size=1040,740',
+    ])
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        pass
+    return True
 
 
 def main():
@@ -71,34 +115,21 @@ def main():
     try:
         httpd = control_server.serve()
     except OSError:
-        edge = _find_edge()
-        if edge:
-            subprocess.Popen([edge, f'--app={url}', f'--user-data-dir={_profile_dir()}',
-                              '--no-first-run', '--no-default-browser-check'])
-        else:
+        if not _run_pywebview(url) and not _run_edge(url):
             webbrowser.open(url)
         return
 
     threading.Thread(target=httpd.serve_forever, name='control', daemon=True).start()
     time.sleep(0.4)  # let the socket bind
 
-    edge = _find_edge()
-    if edge:
-        # A dedicated user-data-dir forces a distinct Edge process we can wait
-        # on, so closing the window exits the app.
-        proc = subprocess.Popen([
-            edge, f'--app={url}', f'--user-data-dir={_profile_dir()}',
-            '--no-first-run', '--no-default-browser-check',
-            '--window-size=1040,740',
-        ])
-        try:
-            proc.wait()
-        except KeyboardInterrupt:
-            pass
-    else:
+    # Show the panel. Prefer the native window; fall back so it ALWAYS appears.
+    forced_browser = '--browser' in sys.argv
+    shown = False
+    if not forced_browser:
+        shown = _run_pywebview(url) or _run_edge(url)
+    if not shown:
         webbrowser.open(url)
-        print(f'Edge not found — opened {url} in the default browser. '
-              'Close this console to exit.')
+        print(f'Opened {url} in the default browser. Close this window to exit.')
         try:
             while True:
                 time.sleep(1)
@@ -108,7 +139,7 @@ def main():
     # Window closed → stop the POS server (if running) and exit.
     try:
         control_server._API.stop_server()
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     httpd.shutdown()
     sys.exit(0)
