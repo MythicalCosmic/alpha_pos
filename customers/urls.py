@@ -1,6 +1,6 @@
 from django.urls import path
 from customers.views import (auth_views, category_views, product_views,
-                            order_views, staff_views, payment_views)
+                            order_views, staff_views, payment_views, shift_views)
 
 urlpatterns = [
     # Pre-login cashier picker for the monoblock. Public (no session): the
@@ -10,6 +10,11 @@ urlpatterns = [
 
     # Payment-method catalog for the cashier payment screen (staff-auth).
     path('payment-methods', payment_views.payment_methods),
+
+    # Cashier-facing shift control (own shift; manual start/end + resume).
+    path('shifts/start', shift_views.start_shift),
+    path('shifts/end', shift_views.end_shift),
+    path('shifts/current', shift_views.current_shift),
 
     path('auth-login', auth_views.login),
     path('auth-logout', auth_views.logout),

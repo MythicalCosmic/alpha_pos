@@ -86,11 +86,9 @@ class AuthService:
             user_name = f'{user.first_name} {user.last_name}'.strip()
             ShiftNotification.on_cashier_login(user.id, user_name)
 
-        try:
-            from admins.services.shift_service import ShiftService
-            ShiftService.start_shift(user.id)
-        except Exception:
-            logger.exception('shift start failed during login (user=%s)', user.id)
+        # Shifts are managed manually via the shift API (POST /shifts/start) —
+        # login no longer auto-opens a shift. The cashier opens/closes their own
+        # shift from the till; an open shift survives logout (resume on relogin).
 
         try:
             from hr.services import AttendanceService
@@ -116,15 +114,9 @@ class AuthService:
         if user and user.role == User.RoleChoices.CASHIER:
             ShiftNotification.on_cashier_logout(user.id)
 
-        if user:
-            try:
-                from admins.services.shift_service import ShiftService
-                from base.models import Shift
-                active = Shift.objects.filter(user=user, status='ACTIVE').first()
-                if active:
-                    ShiftService.end_shift(active.id, user.id, '')
-            except Exception:
-                logger.exception('shift end failed during logout (user=%s)', user.id)
+        # Shifts are manual now: logout no longer auto-ends an open shift. The
+        # cashier ends it explicitly via POST /shifts/end, so a shift left open
+        # at logout stays ACTIVE and can be resumed on the next login.
 
         if user:
             try:

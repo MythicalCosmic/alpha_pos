@@ -351,3 +351,68 @@ class TestSplitPayment:
         assert status == 422
         order.refresh_from_db()
         assert not order.is_paid
+
+
+class TestCashierShiftSelfService:
+    """Shifts are manual now: the cashier opens/closes their own shift via the
+    shift API, login doesn't auto-open one, and logout leaves an open shift open."""
+
+    def test_start_current_end_lifecycle(self, cashier_user):
+        from admins.services.shift_service import ShiftService
+
+        res, st = ShiftService.start_shift(cashier_user.id)
+        assert st == 201
+        assert res['data']['status'] == 'ACTIVE'
+
+        res, st = ShiftService.current_for_user(cashier_user.id)
+        assert st == 200
+        assert res['data'] is not None
+        assert res['data']['status'] == 'ACTIVE'
+
+        res, st = ShiftService.end_active_for_user(cashier_user.id, notes='closing')
+        assert st == 200
+        assert res['data']['status'] == 'COMPLETED'
+
+        # No open shift remains.
+        res, st = ShiftService.current_for_user(cashier_user.id)
+        assert res['data'] is None
+
+    def test_double_start_conflicts(self, cashier_user):
+        from admins.services.shift_service import ShiftService
+
+        _, st = ShiftService.start_shift(cashier_user.id)
+        assert st == 201
+        _, st = ShiftService.start_shift(cashier_user.id)
+        assert st >= 400  # already has an active shift
+
+    def test_end_without_active_is_404(self, cashier_user):
+        from admins.services.shift_service import ShiftService
+
+        _, st = ShiftService.end_active_for_user(cashier_user.id)
+        assert st == 404
+
+    def test_login_does_not_autostart_shift(self, cashier_user):
+        from customers.services.auth_service import AuthService
+        from base.repositories.shift import ShiftRepository
+
+        res, st = AuthService.login(
+            'cashier1@test.local', 'cashierpass', '127.0.0.1', 'pytest')
+        assert st == 200
+        assert ShiftRepository.get_active_for_user(cashier_user.id) is None
+
+    def test_logout_leaves_shift_open(self, cashier_user):
+        from customers.services.auth_service import AuthService
+        from admins.services.shift_service import ShiftService
+        from base.repositories.shift import ShiftRepository
+
+        res, st = AuthService.login(
+            'cashier1@test.local', 'cashierpass', '127.0.0.1', 'pytest')
+        token = res['data']['token']
+        ShiftService.start_shift(cashier_user.id)
+
+        AuthService.logout(token)
+
+        # Shift survives logout — resume on next login.
+        active = ShiftRepository.get_active_for_user(cashier_user.id)
+        assert active is not None
+        assert active.status == 'ACTIVE'

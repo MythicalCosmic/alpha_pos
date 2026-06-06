@@ -265,6 +265,25 @@ class ShiftService:
         })
 
     @staticmethod
+    def current_for_user(user_id):
+        """The caller's own open shift (or None) — for the till's resume check.
+        Builds the body directly so `data` is always present (null when no open
+        shift), since ServiceResponse.success drops a None data key."""
+        shift = ShiftRepository.get_active_for_user(user_id)
+        if shift:
+            shift = ShiftRepository.get_with_relations(shift.id)
+        data = ShiftService._serialize_shift(shift) if shift else None
+        return {"success": True, "message": "Success", "data": data}, 200
+
+    @staticmethod
+    def end_active_for_user(user_id, notes=''):
+        """End the caller's own active shift. 404 if they have none open."""
+        shift = ShiftRepository.get_active_for_user(user_id)
+        if not shift:
+            return ServiceResponse.not_found("No active shift to end")
+        return ShiftService.end_shift(shift.id, user_id, notes)
+
+    @staticmethod
     def get_active_shifts():
         shifts = ShiftRepository.filter_by_status('ACTIVE').select_related('user', 'shift_template')
         data = [ShiftService._serialize_shift(s) for s in shifts]
