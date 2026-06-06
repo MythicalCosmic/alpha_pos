@@ -352,6 +352,32 @@ class Api:
         return {'ok': True, 'url': self.server.url() + '/admin/',
                 'running': self.server.is_running()}
 
+    @_safe
+    def create_django_admin(self, username='admin', password='', email=''):
+        """Create (or reset) the Django /admin/ superuser for this PC so the
+        'Open full admin panel' button has a login. This is the Django auth
+        user (username-based), separate from the POS app admin (email-based)."""
+        if not username or not password:
+            return {'ok': False, 'error': 'username and password are required'}
+        self.server.ensure_django()
+        # Make sure the auth tables exist even if Start was never pressed.
+        try:
+            from django.core.management import call_command
+            call_command('migrate', '--noinput', verbosity=0)
+        except Exception:  # noqa: BLE001
+            logger.exception('migrate before admin create failed')
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        u = User.objects.filter(username=username).first()
+        if u:
+            u.set_password(password)
+            u.is_staff = u.is_superuser = u.is_active = True
+            u.save()
+            return {'ok': True, 'created': False, 'username': username,
+                    'message': 'password reset'}
+        User.objects.create_superuser(username=username, email=email or '', password=password)
+        return {'ok': True, 'created': True, 'username': username}
+
     # -- license / subscription ---------------------------------------------
     @_safe
     def license_register(self, email, plan_id=None):

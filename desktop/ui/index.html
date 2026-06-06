@@ -163,6 +163,16 @@
         <button class="btn" onclick="openAdmin()">🗄️ Open full admin panel</button>
         <span class="result" id="admin-hint"></span>
       </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Web admin (/admin) login</h3>
+        <div class="sub" style="margin:0 0 10px">Create the Django <code>/admin/</code> superuser this PC uses for "Open full admin panel". (Separate from the cashier/POS login.)</div>
+        <div class="row" style="align-items:flex-end;gap:12px">
+          <div class="field"><label>Username</label><input id="da-user" value="admin"></div>
+          <div class="field"><label>Password</label><input id="da-pass" type="password" placeholder="set a password"></div>
+          <button class="btn" onclick="createDjangoAdmin()">Create / reset login</button>
+          <span class="result" id="da-res"></span>
+        </div>
+      </div>
     </section>
 
     <!-- LICENSE -->
@@ -529,6 +539,18 @@ async function openAdmin(){
   window.open(r.url, '_blank');
   document.getElementById('admin-hint').className='result';
   document.getElementById('admin-hint').textContent='Opened '+r.url+' (login with your admin account)';
+}
+
+async function createDjangoAdmin(){
+  const el=document.getElementById('da-res'); el.className='result';
+  const u=document.getElementById('da-user').value.trim();
+  const p=document.getElementById('da-pass').value;
+  if(!u||!p){ el.className='result err'; el.textContent='username + password required'; return; }
+  el.textContent='Creating…';
+  const r=await api.create_django_admin(u,p);
+  el.className='result '+(r.ok?'ok':'err');
+  el.textContent = r.ok ? ((r.created?'Created':'Updated')+' — open the admin panel and log in as "'+u+'"') : (r.error||'failed');
+  if(r.ok) toast('Admin login ready: '+u);
 }
 
 // ---- License & Subscription ----
