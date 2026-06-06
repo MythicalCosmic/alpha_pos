@@ -262,3 +262,111 @@ isn't tracked in the data model.
 
 This drop ships migrations (`MANAGER` role, `Product.is_instant`). They run
 automatically on container start (`entrypoint.sh` → `migrate`). No FE action.
+
+---
+
+## 8. Treasury — SAFE + BANK (NEW) & inkassa bug fix
+
+Two money pots sit above the till drawer (`CashRegister`):
+- **SAFE** — physical cash moved out of the registers by inkassa.
+- **BANK** — electronic money (card / Payme), never in the drawer.
+
+### Inkassa fix
+`POST /api/admins/inkassa/perform` — **bug fixed**: the register holds only
+cash, so now **only the CASH amount leaves the register** (previously card
+amounts were wrongly subtracted from the cash drawer and could trip the
+"insufficient balance" check). On a successful inkassa the money is routed:
+**cash → SAFE, all card amounts → BANK** automatically.
+
+Body unchanged (`{ "cash": "...", "uzcard": "...", "humo": "...", "payme": "...", "notes": "" }`).
+New response fields:
+```jsonc
+{
+  "amount_removed": "400.00",      // cash that actually left the register
+  "total_collected": "800.00",
+  "cash_to_safe": "400.00",
+  "card_to_bank": "400.00",
+  "balance_before": "1000.00",     // register (cash) before
+  "balance_after": "600.00",       // register (cash) after — only cash removed
+  "inkassas": [ … ]
+}
+```
+
+### `GET /api/admins/treasury/accounts` (manager)
+```jsonc
+{ "accounts": {
+    "SAFE": { "kind": "SAFE", "balance": "995000.00", "last_updated": "…" },
+    "BANK": { "kind": "BANK", "balance": "320000.00", "last_updated": "…" } } }
+```
+
+### `POST /api/admins/treasury/transfer` (manager)
+Move money between accounts with a transaction fee. Convention: source loses
+`amount`; destination is credited `amount - fee`; `fee` is the bank/processor
+charge. Send `Idempotency-Key` header to make retries safe.
+```jsonc
+// Body — e.g. withdraw cash from the bank
+{ "from": "BANK", "to": "SAFE", "amount": "1000000", "fee": "5000", "description": "ATM withdrawal" }
+// → BANK -1,000,000, SAFE +995,000
+```
+```jsonc
+// data
+{ "amount": "1000000.00", "fee": "5000.00", "credited": "995000.00",
+  "from": { "kind": "BANK", "balance": "…" }, "to": { "kind": "SAFE", "balance": "…" },
+  "transactions": [ {TRANSFER_OUT…}, {TRANSFER_IN…} ] }
+```
+`422` if `from==to`, amount ≤ 0, fee < 0, fee > amount, or insufficient funds.
+
+### `POST /api/admins/treasury/expense` (manager)
+Spend money out of SAFE or BANK.
+```jsonc
+{ "account": "SAFE", "amount": "150000", "category": "supplies", "description": "napkins" }
+// → SAFE -150,000 ; 201 with { account, transaction }
+```
+`422` on bad account / amount ≤ 0 / insufficient funds.
+
+### `GET /api/admins/treasury/history?account=&type=&page=&per_page=` (manager)
+Append-only ledger. Filter by `account` (SAFE/BANK) and `type`
+(`INKASSA, TRANSFER_IN, TRANSFER_OUT, FEE, EXPENSE, ADJUSTMENT`). Each row:
+```jsonc
+{ "id", "account", "type", "delta", "fee", "balance_before", "balance_after",
+  "counterparty", "category", "description", "reference_type", "reference_id",
+  "performed_by", "created_at" }
+```
+
+---
+
+## 9. Shift handover report (NEW)
+
+When a cashier ends a shift and hands over to the manager, this gives the
+manager the full picture in one call.
+
+`GET /api/admins/analytics/shifts/<shift_id>/report` (manager)
+
+```jsonc
+{
+  "cashier": { "id": 12, "name": "Ali Karimov" },
+  "shift": { /* the full per-shift KPIs from §7: orders breakdown, money
+               (cash vs card + payment_mix), discounts, avg order value,
+               speed, punctuality, cash reconciliation */ },
+  "receipt_count": 84,
+  "receipts": [   // every receipt taken during the shift
+    { "order_id": 501, "display_id": 14, "status": "COMPLETED", "order_type": "HALL",
+      "is_paid": true, "payment_method": "CASH", "total_amount": "120000.00",
+      "discount_amount": "0.00", "discount_percent": "0",
+      "line_items": 3, "units": 5, "created_at": "…", "paid_at": "…" }
+  ],
+  "products": [   // what sold, sorted by quantity
+    { "product_id": 7, "name": "Lavash", "units_sold": 40,
+      "times_sold": 31,        // distinct orders it appeared in
+      "revenue": "1600000.00" }
+  ],
+  "best_seller": { … first product … },
+  "distribution": { "by_hour": [ {hour, orders, revenue} … 24 ], "by_date": [...], "peak_hour": 13 },
+  "peak_hour": 13
+}
+```
+
+"How much money the cashier has" → `shift.money.cash`, `shift.money.card`, and
+`shift.money.payment_mix`. Averages → `shift.money.avg_order_value`; peak hours
+→ `distribution.by_hour` / `peak_hour`; all receipts → `receipts[]`; what/how
+many sold → `products[]`.

@@ -7,7 +7,7 @@ from django.views.decorators.http import require_GET
 
 from admins.services.analytics_service import menu_engineering, shift_performance
 from admins.services.shift_analytics_service import (
-    cashier_shift_analytics, kitchen_shift_analytics,
+    cashier_shift_analytics, kitchen_shift_analytics, shift_handover_report,
 )
 from base.models import Shift
 from base.security.permissions import admin_required, manager_required
@@ -101,6 +101,18 @@ def cashier_shift_analytics_view(request):
     user_id = _int_or_none(request.GET.get('user_id'))
     data = cashier_shift_analytics(df, dt, user_id=user_id)
     return JsonResponse({'success': True, 'data': data})
+
+
+@require_GET
+@manager_required
+def shift_report_view(request, shift_id):
+    try:
+        shift = Shift.objects.select_related('user', 'shift_template', 'reconciliation').get(
+            id=shift_id, is_deleted=False,
+        )
+    except Shift.DoesNotExist:
+        return JsonResponse({'success': False, 'message': 'Shift not found'}, status=404)
+    return JsonResponse({'success': True, 'data': shift_handover_report(shift)})
 
 
 @require_GET

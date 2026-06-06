@@ -1065,6 +1065,76 @@ class Inkassa(SyncMixin, models.Model):
         return f"Inkassa #{self.id} - {self.amount} on {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
 
+class TreasuryAccount(SyncMixin, models.Model):
+    """A money pot the business holds outside the till drawer.
+
+    SAFE = physical cash moved out of the registers by inkassa.
+    BANK = electronic money (card / Payme settlements).
+    One (soft-undeleted) row per kind; read/created via get_or_create.
+    """
+    class Kind(models.TextChoices):
+        SAFE = 'SAFE', 'Safe (cash)'
+        BANK = 'BANK', 'Bank (cards)'
+
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    last_updated = models.DateTimeField(auto_now=True)
+
+    objects = SyncManager()
+
+    # Balance is only ever mutated locally inside TreasuryService under a row
+    # lock; a peer push must never dictate it.
+    SYNC_WRITE_DENYLIST = frozenset({'balance'})
+
+    def __str__(self):
+        return f"{self.kind}: {self.balance}"
+
+
+class TreasuryTransaction(SyncMixin, models.Model):
+    """Append-only ledger of every SAFE / BANK movement."""
+    class Type(models.TextChoices):
+        INKASSA = 'INKASSA', 'Inkassa deposit'
+        TRANSFER_IN = 'TRANSFER_IN', 'Transfer in'
+        TRANSFER_OUT = 'TRANSFER_OUT', 'Transfer out'
+        FEE = 'FEE', 'Transfer fee'
+        EXPENSE = 'EXPENSE', 'Expense'
+        ADJUSTMENT = 'ADJUSTMENT', 'Adjustment'
+
+    account = models.ForeignKey(
+        TreasuryAccount, on_delete=models.CASCADE, related_name='transactions',
+    )
+    type = models.CharField(max_length=15, choices=Type.choices)
+    # Signed change applied to the account balance (+ in / - out).
+    delta = models.DecimalField(max_digits=14, decimal_places=2)
+    fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    balance_before = models.DecimalField(max_digits=14, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=14, decimal_places=2)
+    # The other side of a transfer (null for inkassa / expense).
+    counterparty = models.ForeignKey(
+        TreasuryAccount, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='counterparty_transactions',
+    )
+    category = models.CharField(max_length=50, blank=True, default='')
+    description = models.TextField(blank=True, default='')
+    reference_type = models.CharField(max_length=50, blank=True, default='')
+    reference_id = models.PositiveIntegerField(null=True, blank=True)
+    performed_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True,
+        related_name='treasury_transactions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = SyncManager()
+
+    SYNC_WRITE_DENYLIST = frozenset({'delta', 'fee', 'balance_before', 'balance_after'})
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.type} {self.delta} ({self.account_id})"
+
+
 class AppSettings(models.Model):
     hr_enabled = models.BooleanField(default=False)
     waiter_enabled = models.BooleanField(default=False)
@@ -1233,6 +1303,8 @@ class AuditLog(SyncMixin, models.Model):
         DISCOUNT_UPDATE = "DISCOUNT_UPDATE", "Discount updated"
         DISCOUNT_DELETE = "DISCOUNT_DELETE", "Discount deleted"
         LOYALTY_REDEEM = "LOYALTY_REDEEM", "Loyalty stamps redeemed"
+        TREASURY_TRANSFER = "TREASURY_TRANSFER", "Treasury transfer"
+        TREASURY_EXPENSE = "TREASURY_EXPENSE", "Treasury expense"
 
     actor = models.ForeignKey(
         User,

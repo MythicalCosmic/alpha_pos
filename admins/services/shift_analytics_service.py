@@ -557,6 +557,92 @@ def cashier_shift_analytics(date_from, date_to, user_id=None):
     }
 
 
+def shift_handover_report(shift):
+    """Everything a manager needs when a cashier ends a shift and hands over.
+
+    The full per-shift KPIs (money cash/card, payment mix, discounts, averages,
+    speed, punctuality, cash reconciliation) PLUS every receipt, a what-sold
+    product breakdown, and the shift's peak hours.
+    """
+    from base.models import Order, OrderItem
+
+    start = shift.start_time
+    end = shift.end_time or timezone.now()
+    att = _attendance_map(
+        {shift.user_id},
+        timezone.localtime(start).date(),
+        timezone.localtime(end).date(),
+    )
+    row = _cashier_shift_row(shift, att)
+
+    base_qs = Order.objects.filter(
+        is_deleted=False, cashier_id=shift.user_id,
+        created_at__gte=start, created_at__lte=end,
+    )
+
+    # Every receipt taken during the shift.
+    receipts = []
+    for o in (
+        base_qs.annotate(
+            line_items=Count('items', distinct=True),
+            units=Coalesce(Sum('items__quantity'), 0),
+        ).order_by('created_at')
+    ):
+        receipts.append({
+            'order_id': o.id,
+            'display_id': o.display_id,
+            'status': o.status,
+            'order_type': o.order_type,
+            'is_paid': o.is_paid,
+            'payment_method': o.payment_method,
+            'total_amount': _money(o.total_amount),
+            'discount_amount': _money(o.discount_amount),
+            'discount_percent': str(o.discount_percent or 0),
+            'line_items': o.line_items,
+            'units': o.units or 0,
+            'created_at': o.created_at.isoformat() if o.created_at else None,
+            'paid_at': o.paid_at.isoformat() if o.paid_at else None,
+        })
+
+    # What sold: per-product quantity, how many orders it appeared in, revenue.
+    line_total = ExpressionWrapper(F('price') * F('quantity'), output_field=_DEC)
+    product_rows = (
+        OrderItem.objects.filter(
+            is_deleted=False, order__in=base_qs,
+        ).exclude(order__status='CANCELED')
+        .values('product_id', 'product__name')
+        .annotate(
+            units_sold=Coalesce(Sum('quantity'), 0),
+            times_sold=Count('order', distinct=True),
+            revenue=Coalesce(Sum(line_total), Decimal('0'), output_field=_DEC),
+        )
+        .order_by('-units_sold')
+    )
+    products = [
+        {
+            'product_id': r['product_id'],
+            'name': r['product__name'],
+            'units_sold': r['units_sold'] or 0,
+            'times_sold': r['times_sold'] or 0,        # distinct orders it was in
+            'revenue': _money(r['revenue']),
+        }
+        for r in product_rows
+    ]
+
+    distribution = _hourly_daily([shift])  # by_hour / peak_hour for this shift
+
+    return {
+        'shift': row,                 # full KPIs incl. money.cash / money.card / payment_mix
+        'cashier': {'id': shift.user_id, 'name': _user_name(shift.user)},
+        'receipts': receipts,
+        'receipt_count': len(receipts),
+        'products': products,
+        'best_seller': products[0] if products else None,
+        'distribution': distribution,
+        'peak_hour': distribution.get('peak_hour'),
+    }
+
+
 def kitchen_shift_analytics(date_from, date_to, user_id=None, role='WAITER',
                             target_prep_seconds=DEFAULT_TARGET_PREP_SECONDS):
     """Everything about kitchen/chef shifts over [date_from, date_to].

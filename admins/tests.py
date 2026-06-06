@@ -96,3 +96,77 @@ class TestInkassaFloor:
         assert status == 200
         register = CashRegister.objects.first()
         assert register.current_balance == Decimal('700')
+
+
+class TestInkassaTreasuryRouting:
+    """Inkassa: only cash leaves the register; cash -> SAFE, cards -> BANK."""
+
+    def test_cash_to_safe_card_to_bank(self, admin_user):
+        from base.models import CashRegister, TreasuryAccount
+        CashRegister.objects.create(current_balance=Decimal('1000'))
+        result, status = AdminInkassaService.perform(
+            admin_user, {'cash': '400', 'uzcard': '300', 'humo': '100'})
+        assert status == 200
+        # Only the 400 cash left the drawer (bug fix: cards never were in it).
+        assert CashRegister.objects.first().current_balance == Decimal('600')
+        assert TreasuryAccount.objects.get(kind='SAFE').balance == Decimal('400')
+        assert TreasuryAccount.objects.get(kind='BANK').balance == Decimal('400')
+        assert Decimal(result['data']['cash_to_safe']) == Decimal('400')
+        assert Decimal(result['data']['card_to_bank']) == Decimal('400')
+
+    def test_card_only_inkassa_ignores_empty_register(self, admin_user):
+        from base.models import CashRegister, TreasuryAccount
+        CashRegister.objects.create(current_balance=Decimal('0'))
+        result, status = AdminInkassaService.perform(admin_user, {'payme': '500'})
+        assert status == 200  # card inkassa not bounded by cash drawer
+        assert CashRegister.objects.first().current_balance == Decimal('0')
+        assert TreasuryAccount.objects.get(kind='BANK').balance == Decimal('500')
+
+
+class TestTreasury:
+    def test_transfer_bank_to_safe_with_fee(self, admin_user):
+        from base.models import TreasuryAccount
+        from base.services.treasury_service import TreasuryService
+        TreasuryAccount.objects.create(kind='BANK', balance=Decimal('1000'))
+        TreasuryAccount.objects.create(kind='SAFE', balance=Decimal('0'))
+        res, st = TreasuryService.transfer('BANK', 'SAFE', '1000', fee='5', performed_by=admin_user)
+        assert st == 200
+        assert TreasuryAccount.objects.get(kind='BANK').balance == Decimal('0')
+        assert TreasuryAccount.objects.get(kind='SAFE').balance == Decimal('995')
+
+    def test_transfer_insufficient_rejected(self, admin_user):
+        from base.models import TreasuryAccount
+        from base.services.treasury_service import TreasuryService
+        TreasuryAccount.objects.create(kind='SAFE', balance=Decimal('100'))
+        _, st = TreasuryService.transfer('SAFE', 'BANK', '500', performed_by=admin_user)
+        assert st == 422
+
+    def test_expense_from_safe(self, admin_user):
+        from base.models import TreasuryAccount
+        from base.services.treasury_service import TreasuryService
+        TreasuryAccount.objects.create(kind='SAFE', balance=Decimal('300'))
+        res, st = TreasuryService.record_expense('SAFE', '120', category='supplies', performed_by=admin_user)
+        assert st == 201
+        assert TreasuryAccount.objects.get(kind='SAFE').balance == Decimal('180')
+
+    def test_expense_insufficient_rejected(self, admin_user):
+        from base.models import TreasuryAccount
+        from base.services.treasury_service import TreasuryService
+        TreasuryAccount.objects.create(kind='BANK', balance=Decimal('50'))
+        _, st = TreasuryService.record_expense('BANK', '100', performed_by=admin_user)
+        assert st == 422
+
+
+class TestShiftHandoverReport:
+    def test_report_smoke(self, cashier_user):
+        from datetime import timedelta
+        from django.utils import timezone
+        from base.models import Shift
+        from admins.services.shift_analytics_service import shift_handover_report
+        s = Shift.objects.create(
+            user=cashier_user, start_time=timezone.now() - timedelta(hours=2),
+            status='ACTIVE')
+        rep = shift_handover_report(s)
+        assert set(['shift', 'receipts', 'products', 'distribution', 'peak_hour']) <= set(rep)
+        assert rep['receipt_count'] == 0
+        assert 'cash' in rep['shift']['money'] and 'card' in rep['shift']['money']

@@ -3,7 +3,7 @@ from admins.views import auth_views, category_views, product_views, order_views
 from admins.views import place_views, app_settings_views, shift_views, user_views, inkassa_views
 from admins.views import (
     audit_views, export_views, dashboard_views, forecast_views,
-    analytics_views, role_views,
+    analytics_views, role_views, treasury_views,
 )
 
 urlpatterns = [
@@ -87,6 +87,12 @@ urlpatterns = [
     path('inkassa/perform', inkassa_views.inkassa_perform, name='inkassa_perform'),
     path('inkassa/<int:inkassa_id>', inkassa_views.inkassa_detail, name='inkassa_detail'),
 
+    # SAFE / BANK treasury: balances, transfers (with fee), expenses, ledger.
+    path('treasury/accounts', treasury_views.treasury_accounts, name='treasury_accounts'),
+    path('treasury/transfer', treasury_views.treasury_transfer, name='treasury_transfer'),
+    path('treasury/expense', treasury_views.treasury_expense, name='treasury_expense'),
+    path('treasury/history', treasury_views.treasury_history, name='treasury_history'),
+
     path('app-settings', app_settings_views.app_settings),
 
     path('shift-templates', shift_views.shift_templates),
@@ -112,4 +118,6 @@ urlpatterns = [
     # matches integers, so these string paths don't collide with it.
     path('analytics/shifts/cashiers', analytics_views.cashier_shift_analytics_view, name='analytics_shifts_cashiers'),
     path('analytics/shifts/kitchen', analytics_views.kitchen_shift_analytics_view, name='analytics_shifts_kitchen'),
+    # Shift handover report (manager view when a cashier ends their shift).
+    path('analytics/shifts/<int:shift_id>/report', analytics_views.shift_report_view, name='analytics_shift_report'),
 ]

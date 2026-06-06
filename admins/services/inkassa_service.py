@@ -154,9 +154,18 @@ class AdminInkassaService:
                 message='No amounts provided',
             )
 
-        if total_removed > balance_before:
+        # The register drawer holds ONLY physical cash. Card sales (UZCARD /
+        # HUMO / PAYME) settle to the bank and were never added to it, so the
+        # register is bounded by — and only reduced by — the CASH portion.
+        # (Bug fix: previously the whole cash+card total was checked against
+        # and subtracted from the register, depleting cash that was never
+        # there and rejecting valid collections.)
+        cash_amount = method_amounts.get('CASH', Decimal('0'))
+        card_amount = total_removed - cash_amount
+
+        if cash_amount > balance_before:
             return ServiceResponse.validation_error(
-                errors={'amount': f'Total {total_removed} exceeds register balance {balance_before}'},
+                errors={'cash': f'Cash {cash_amount} exceeds register balance {balance_before}'},
                 message='Insufficient register balance',
             )
 
@@ -180,29 +189,47 @@ class AdminInkassaService:
         )
 
         created_inkassas = []
-        running_removed = Decimal('0')
+        running_balance = balance_before
         for method, amount in method_amounts.items():
+            row_before = running_balance
+            # Only cash leaves the drawer; card rows don't move the register.
+            if method == 'CASH':
+                running_balance = running_balance - amount
             inkassa = Inkassa.objects.create(
                 cashier=user,
                 amount=amount,
                 inkass_type=method,
-                balance_before=balance_before,
-                balance_after=balance_before - running_removed - amount,
+                balance_before=row_before,
+                balance_after=running_balance,
                 period_start=period_start,
                 period_end=now,
                 total_orders=today_agg['order_count'] or 0,
                 total_revenue=today_agg['total_revenue'] or 0,
                 notes=amounts.get('notes', ''),
             )
-            running_removed += amount
             created_inkassas.append(inkassa)
 
-        register.current_balance -= total_removed
-        register.save(update_fields=['current_balance', 'last_updated'])
+        # Remove only the cash from the register, then route the whole
+        # collection into the treasury: cash → SAFE, cards → BANK. synced_at /
+        # sync_version are reset so the new balance propagates to the cloud.
+        register.current_balance -= cash_amount
+        register.save(update_fields=['current_balance', 'last_updated',
+                                     'synced_at', 'sync_version'])
+
+        from base.services.treasury_service import TreasuryService
+        TreasuryService.deposit_inkassa(
+            cash_amount=cash_amount, card_amount=card_amount,
+            performed_by=user,
+            reference_id=created_inkassas[0].id if created_inkassas else None,
+        )
 
         return ServiceResponse.success(
             data={
-                'amount_removed': str(total_removed),
+                # amount_removed = what actually left the register (cash only).
+                'amount_removed': str(cash_amount),
+                'total_collected': str(total_removed),
+                'cash_to_safe': str(cash_amount),
+                'card_to_bank': str(card_amount),
                 'balance_before': str(balance_before),
                 'balance_after': str(register.current_balance),
                 'inkassas': [_serialize_inkassa(i) for i in created_inkassas],
