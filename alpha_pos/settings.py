@@ -80,6 +80,16 @@ MIDDLEWARE = [
     'base.middlewares.force_json_middleware.JSONOnlyMiddleware'
 ]
 
+# Trusted-LAN appliance mode: the desktop exposes the POS to the whole network,
+# so requests come from arbitrary device IPs/origins. OPEN_LAN drops CSRF
+# origin/host enforcement and opens CORS to every origin so nothing is left
+# out. Auth (sessions/tokens) and the licensing kill-switch still apply. The
+# desktop turns this on by default; server deployments leave it off.
+OPEN_LAN = os.environ.get('OPEN_LAN', 'False').strip().lower() in ('1', 'true', 'yes', 'on')
+if OPEN_LAN:
+    _csrf_i = MIDDLEWARE.index('django.middleware.csrf.CsrfViewMiddleware')
+    MIDDLEWARE.insert(_csrf_i, 'base.middlewares.disable_csrf.DisableCSRFMiddleware')
+
 ROOT_URLCONF = 'alpha_pos.urls'
 
 TEMPLATES = [
@@ -545,5 +555,10 @@ CORS_ALLOWED_ORIGINS = [
 # refuse it without specific origins.
 CORS_ALLOW_CREDENTIALS = bool(CORS_ALLOWED_ORIGINS)
 if DEBUG and not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = False
+# Trusted-LAN appliance: accept every origin (clients use bearer tokens, not
+# cookies, so credentialed CORS stays off — the safe allow-all combination).
+if OPEN_LAN:
     CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOW_CREDENTIALS = False

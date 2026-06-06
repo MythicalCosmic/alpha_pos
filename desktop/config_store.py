@@ -144,6 +144,9 @@ def apply_env_to_process() -> None:
     os.environ.setdefault('LICENSE_FERNET_KEY', load_or_generate_fernet())
     os.environ.setdefault('DEBUG', 'False')
     os.environ.setdefault('ALLOWED_HOSTS', 'localhost,127.0.0.1')
+    # Trusted-LAN appliance: the POS is exposed to the whole network, so open
+    # CSRF + CORS to any origin/device by default (auth + licensing still apply).
+    os.environ.setdefault('OPEN_LAN', 'True')
     for k, v in parse_env_file().items():
         os.environ[k] = v
     # The desktop binds the POS to the whole LAN (0.0.0.0), so devices reach it
