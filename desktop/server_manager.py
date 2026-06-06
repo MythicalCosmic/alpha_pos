@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 logger = logging.getLogger('desktop.server')
 
@@ -20,6 +21,41 @@ class ServerManager:
         self._last_error = ''
         self.host = '127.0.0.1'
         self.port = 8000
+        self._sync_thread = None
+        self._sync_stop = False
+
+    # -- Automatic background sync ------------------------------------------
+    def _ensure_sync_worker(self):
+        """Start a daemon that pushes (and pulls) every SYNC_INTERVAL whenever
+        sync is enabled, so records reach the cloud hands-free — no button
+        press. Idempotent; the loop self-gates when sync is off."""
+        if self._sync_thread is not None and self._sync_thread.is_alive():
+            return
+        self._sync_stop = False
+        self._sync_thread = threading.Thread(
+            target=self._sync_loop, name='sync-worker', daemon=True)
+        self._sync_thread.start()
+        logger.info('sync worker started')
+
+    def _sync_loop(self):
+        from base.services.sync.config import (
+            SyncConfig, get_sync_interval, is_local_mode, get_pull_enabled,
+            get_cloud_url,
+        )
+        from base.services.sync.service import SyncService
+        while not self._sync_stop:
+            interval = max(10, get_sync_interval())
+            for _ in range(interval):  # responsive to stop without long sleeps
+                if self._sync_stop:
+                    return
+                time.sleep(1)
+            try:
+                if SyncConfig.is_enabled() and is_local_mode() and get_cloud_url():
+                    SyncService.push()
+                    if get_pull_enabled():
+                        SyncService.pull_from_cloud()
+            except Exception:  # noqa: BLE001 — never let the worker die
+                logger.exception('sync worker iteration failed')
 
     # -- Django bootstrap (idempotent) --------------------------------------
     def ensure_django(self):
@@ -81,6 +117,7 @@ class ServerManager:
                 target=self._server.run, name='waitress', daemon=True,
             )
             self._thread.start()
+            self._ensure_sync_worker()  # auto-push/pull when sync is enabled
             self._last_error = ''
             logger.info('POS server started on http://%s:%s', self.host, self.port)
             return {'running': True, 'url': self.url(), 'message': 'Server started'}

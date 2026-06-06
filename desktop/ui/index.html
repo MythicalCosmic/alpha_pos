@@ -276,10 +276,12 @@
       </div>
 
       <h3 style="margin:22px 0 10px;font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:.6px">Cloud sync</h3>
-      <div class="sub" style="margin:0 0 12px">Set <code>CLOUD_SYNC_URL</code>, <code>CLOUD_SYNC_TOKEN</code>, <code>BRANCH_ID</code> and <code>SYNC_ENABLED</code> in Configuration first, then save.</div>
+      <div class="sub" style="margin:0 0 12px">Set <code>CLOUD_SYNC_URL</code>, <code>CLOUD_SYNC_TOKEN</code>, <code>BRANCH_ID</code> and <code>SYNC_ENABLED</code> in Configuration first, then save. While the server is running and sync is enabled, the app <b>auto-syncs every ~30s</b> — use "Sync now" to push immediately.</div>
       <div class="test-list">
         <div class="test"><div class="meta"><b>Test cloud connection</b><small>Ping the cloud hub /health over HTTPS</small></div>
           <button class="btn ghost" onclick="run('cloud_test_connection','c1')">Run</button><span class="result" id="c1"></span></div>
+        <div class="test"><div class="meta"><b>Sync now (push + pull)</b><small>Send pending records up and pull changes down immediately</small></div>
+          <button class="btn" onclick="cloudSyncNow()">Run</button><span class="result" id="c4"></span></div>
         <div class="test"><div class="meta"><b>Create + push test data</b><small>Make a local category and push it to the cloud</small></div>
           <button class="btn ghost" onclick="cloudPushTest()">Run</button><span class="result" id="c2"></span></div>
         <div class="test"><div class="meta"><b>Pull from cloud</b><small>Fetch changes down from the hub</small></div>
@@ -511,6 +513,19 @@ function summarize(m,r){
   if(m==='cloud_test_connection') return r.reachable?'reachable ✓':'unreachable';
   if(m==='cloud_pull'){ const x=r.result||{}; return x.success===false?(x.message||'failed'):('pulled — '+(x.applied!=null?(x.applied+' applied'):(x.message||'ok'))); }
   return 'OK';
+}
+
+async function cloudSyncNow(){
+  const el=document.getElementById('c4'); el.className='result'; el.textContent='Syncing…';
+  try{
+    const r=await api.cloud_sync_now();
+    const p=r.push||{}, q=r.pull||{};
+    const pushed = p.synced!=null?p.synced:(p.message||(p.success===false?'failed':'ok'));
+    const pulled = q.applied!=null?q.applied:(q.message||(q.success===false?'failed':'ok'));
+    const ok = p.success!==false;
+    el.className='result '+(ok?'ok':'err');
+    el.textContent='push: '+pushed+'  ·  pull: '+pulled;
+  }catch(e){ el.className='result err'; el.textContent=String(e); }
 }
 
 async function cloudPushTest(){

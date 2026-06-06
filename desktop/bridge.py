@@ -226,6 +226,17 @@ class Api:
         from base.services.sync.service import SyncService
         return {'ok': True, 'result': SyncService.pull_from_cloud()}
 
+    @_safe
+    def cloud_sync_now(self):
+        """Push pending local records + pull cloud changes right now — the same
+        thing the background worker does every interval, on demand."""
+        self.server.ensure_django()
+        from base.services.sync.service import SyncService
+        from base.services.sync.config import get_pull_enabled
+        push = SyncService.push()
+        pull = SyncService.pull_from_cloud() if get_pull_enabled() else {'skipped': True}
+        return {'ok': True, 'push': push, 'pull': pull}
+
     # -- telegram / notifications -------------------------------------------
     @_safe
     def telegram_test(self):
