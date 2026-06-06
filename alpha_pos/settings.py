@@ -304,6 +304,13 @@ SYNC_MANAGEMENT_TOKEN = os.environ.get('SYNC_MANAGEMENT_TOKEN', '')
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
 
+# Origins Django trusts for CSRF when admin/browser POSTs arrive over HTTPS
+# through a reverse proxy (it checks Origin/Referer against this list). Set e.g.
+# CSRF_TRUSTED_ORIGINS=https://pos.1-2-3-4.nip.io for an IP/nip.io deployment.
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()
+]
+
 # Security settings for production
 if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000

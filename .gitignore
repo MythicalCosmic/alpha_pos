@@ -65,3 +65,7 @@ desktop/AlphaPOS.ico
 desktop/__pycache__/
 inno-output/
 DELIVERABLES/
+
+# Server deploy: generated on the server, not committed
+docker-compose.edge.yml
+deploy/caddy/Caddyfile
