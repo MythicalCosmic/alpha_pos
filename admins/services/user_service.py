@@ -1,5 +1,6 @@
 import logging
 
+from django.db import IntegrityError
 from django.db.models import Q
 
 from base.models import User
@@ -85,25 +86,34 @@ class AdminUserService:
                 message='Validation failed',
             )
 
+        # email is UNIQUE at the DB level regardless of is_deleted, so these
+        # checks must look at ALL users — a soft-deleted user still owns its
+        # email. Filtering is_deleted=False here missed those rows and the
+        # INSERT then hit "UNIQUE constraint failed: base_user.email" (a 500).
         if not email:
             base = f"{first_name.lower().strip()}.{last_name.lower().strip()}"
             email = f"{base}@local"
             counter = 1
-            while User.objects.filter(email=email, is_deleted=False).exists():
+            while User.objects.filter(email=email).exists():
                 email = f"{base}{counter}@local"
                 counter += 1
 
-        if User.objects.filter(email=email, is_deleted=False).exists():
+        if User.objects.filter(email=email).exists():
             return ServiceResponse.error(f"User with email {email} already exists")
 
-        user = User.objects.create(
-            first_name=first_name.strip(),
-            last_name=last_name.strip(),
-            email=email,
-            password=hash_password(str(password)),
-            role=role,
-            status='ACTIVE',
-        )
+        # Defensive: a concurrent create or any other unique collision returns a
+        # clean 400 instead of a 500.
+        try:
+            user = User.objects.create(
+                first_name=first_name.strip(),
+                last_name=last_name.strip(),
+                email=email,
+                password=hash_password(str(password)),
+                role=role,
+                status='ACTIVE',
+            )
+        except IntegrityError:
+            return ServiceResponse.error(f"User with email {email} already exists")
 
         return ServiceResponse.created(
             data={'user': _serialize_user(user)},
