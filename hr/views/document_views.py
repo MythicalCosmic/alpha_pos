@@ -42,7 +42,16 @@ def secure_download(request, kind, obj_id):
     if not file_field or not file_field.name:
         raise Http404('No file attached')
 
-    return FileResponse(file_field.open('rb'), as_attachment=True,
+    try:
+        handle = file_field.open('rb')
+    except (FileNotFoundError, OSError):
+        # The DB row references a file that isn't on this server's disk — e.g.
+        # the database was synced/restored to a machine that doesn't have the
+        # media, or MEDIA_ROOT differs across machines. Return 404 instead of a
+        # 500 traceback.
+        raise Http404('File not available on this server')
+
+    return FileResponse(handle, as_attachment=True,
                         filename=file_field.name.rsplit('/', 1)[-1])
 
 

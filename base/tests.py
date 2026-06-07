@@ -101,18 +101,19 @@ class TestSyncConflictTiebreaker:
         assert local.first_name == 'Local'
 
 
-class TestSyncWriteDenylist:
-    """Pre-fix: User.password/role/permissions/status were guarded only on the
-    receive path; the pull path (from_sync_dict) silently set them. A
-    compromised cloud could promote any user to ADMIN. Now: SYNC_WRITE_DENYLIST
-    is honored by both ingest paths."""
+class TestUserCredentialSync:
+    """Central user management: the owner creates/edits users on the cloud hub
+    and they must work on every terminal. So sync propagates the password HASH
+    (PBKDF2, portable across machines), role, permissions and status — single-
+    tenant deployment, the cloud and branches are one operator's. (This
+    deliberately reverses the earlier denylist; see User.SYNC_WRITE_DENYLIST.)"""
 
-    def test_pull_cannot_promote_role(self):
+    def test_pull_propagates_credentials_and_role(self):
         from base.models import User
 
         local = User.objects.create(
             first_name='Local', last_name='Name', email='u@test.local',
-            password='hashed', role='USER', sync_version=2,
+            password='old-hash', role='USER', sync_version=2,
         )
         User.from_sync_dict({
             'uuid': str(local.uuid),
@@ -121,16 +122,46 @@ class TestSyncWriteDenylist:
             'first_name': 'Local',
             'last_name': 'Name',
             'email': 'u@test.local',
-            'password': 'attacker-hash',
+            'password': 'new-hash',
             'role': 'ADMIN',
-            'status': 'SUSPENDED',
-            'permissions': ['*'],
+            'status': 'ACTIVE',
+            'permissions': ['stock.view'],
         })
         local.refresh_from_db()
-        assert local.role == 'USER'
-        assert local.status == 'ACTIVE'
-        assert local.password == 'hashed'
-        assert local.permissions == []
+        assert local.role == 'ADMIN'
+        assert local.password == 'new-hash'
+        assert local.permissions == ['stock.view']
+
+    def test_pull_reconciles_email_collision_instead_of_dropping(self):
+        # A server-created user whose email matches an existing local row (e.g.
+        # a bootstrap admin) must reconcile onto that row, not raise an
+        # IntegrityError that silently drops it. The local row converges on the
+        # incoming uuid.
+        from base.models import User
+        import uuid as uuid_module
+
+        local = User.objects.create(
+            first_name='Boot', last_name='Admin', email='admin@test.local',
+            password='boot-hash', role='ADMIN', sync_version=1,
+        )
+        incoming_uuid = str(uuid_module.uuid4())
+        instance, action = User.from_sync_dict({
+            'uuid': incoming_uuid,
+            'sync_version': 5,
+            'is_deleted': False,
+            'first_name': 'Server',
+            'last_name': 'Admin',
+            'email': 'admin@test.local',
+            'password': 'server-hash',
+            'role': 'ADMIN',
+            'status': 'ACTIVE',
+        })
+        assert action == 'updated'
+        assert User.objects.filter(email='admin@test.local').count() == 1
+        reconciled = User.objects.get(email='admin@test.local')
+        assert str(reconciled.uuid) == incoming_uuid
+        assert reconciled.first_name == 'Server'
+        assert reconciled.password == 'server-hash'
 
     def test_receive_ignores_spoofed_branch_id(self):
         from base.models import User

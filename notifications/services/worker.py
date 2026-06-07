@@ -55,6 +55,7 @@ def _worker_loop():
         django_settings, 'NOTIF_MIN_CHAT_INTERVAL', DEFAULT_MIN_CHAT_INTERVAL
     )
 
+    from django.db import close_old_connections
     while True:
         try:
             item = _queue.get()
@@ -65,6 +66,12 @@ def _worker_loop():
         except Exception:
             logger.exception('notification worker dispatch failed')
         finally:
+            # This daemon thread runs ORM queries (NotificationSettings.load,
+            # NotificationLog.create) outside the request cycle, so nothing
+            # releases its DB connection. Close it after each item so it doesn't
+            # pin a connection (Postgres "too many clients" / SQLite WAL slot)
+            # while idle between bursts.
+            close_old_connections()
             _queue.task_done()
 
 

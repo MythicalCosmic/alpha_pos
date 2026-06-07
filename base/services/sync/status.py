@@ -34,8 +34,16 @@ class SyncStatus:
 
     @classmethod
     def set_last_pull(cls, created=0, updated=0, errors=None):
+        # IMPORTANT: do NOT write `last_pull` here. `last_pull` is the durable
+        # pull CURSOR — a cloud-clock `synced_at` frontier that pull_from_cloud
+        # advances page by page and sends back as the `since` filter. Stamping
+        # it with the terminal's local `now()` (this used to) clobbers that
+        # cursor: with any clock skew between terminal and cloud, records the
+        # cloud created between the true frontier and the terminal's clock are
+        # silently skipped forever (a server-created user never arrives). This
+        # field is a separate "when did we last finish a pull" status value.
         cls.update(
-            last_pull=timezone.now().isoformat(),
+            last_pull_at=timezone.now().isoformat(),
             last_pull_created=created,
             last_pull_updated=updated,
             last_pull_error=errors[0] if errors else None,

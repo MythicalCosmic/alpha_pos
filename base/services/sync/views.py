@@ -301,11 +301,22 @@ def changes(request):
 
         window = list(qs[:per_page + 1])
         if len(window) > per_page:
-            window = window[:per_page]
             has_more = True
-            frontier = window[-1].synced_at
-            if frontier is not None and (next_since is None or frontier < next_since):
-                next_since = frontier
+            frontier = window[per_page - 1].synced_at
+            if frontier is not None:
+                # Re-fetch the whole page up to AND INCLUDING the full frontier
+                # timestamp group. The naive `window[:per_page]` can split a set
+                # of rows that share one exact `synced_at` across the page
+                # boundary; the client then resumes with the strict
+                # `synced_at__gt=frontier` filter and the siblings left past the
+                # cap are skipped forever (silent permanent loss). Bounded:
+                # rows strictly before the frontier are < per_page, and a single
+                # timestamp group is tiny in practice.
+                window = list(qs.filter(synced_at__lte=frontier))
+                if next_since is None or frontier < next_since:
+                    next_since = frontier
+            else:
+                window = window[:per_page]
 
         records = [obj.to_sync_dict() for obj in window]
         if records:

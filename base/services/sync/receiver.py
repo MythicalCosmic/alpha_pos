@@ -65,24 +65,13 @@ def _clean_field_value(field, value):
     return value
 
 
-# Per-model write denylist for incoming sync records. Without this, any
-# branch-token holder can POST /api/sync/receive with model=user and
-# arbitrary password / role / permissions, because _create_or_update does
-# setattr() on every cleaned field. Push-side (to_sync_dict on User) strips
-# `password`, but the receive side needs its own filter.
-#
-# Models can opt into per-model rules by setting a SYNC_WRITE_DENYLIST class
-# attribute (preferred — keeps the policy next to the model). The dict below
-# is the fallback list for models that don't declare one, so an attacker who
-# slips a new SyncMixin subclass through review without setting the attribute
-# still has User locked down.
-WRITE_DENYLIST = {
-    # User sync should propagate profile + email but never credentials or
-    # privilege metadata — those are per-deployment policy, not sync state.
-    # `is_deleted` is intentionally NOT blocked: soft deletes are part of
-    # legitimate replication (the whole point of multi-branch sync).
-    'base.User': {'password', 'role', 'permissions', 'status'},
-}
+# Per-model write denylist for incoming sync records. Models opt into rules by
+# setting a SYNC_WRITE_DENYLIST class attribute (preferred — keeps the policy
+# next to the model); the dict below is a fallback for models that don't.
+# Every SyncMixin model declares the attribute (empty by default), so the
+# fallback is rarely consulted. User intentionally syncs fully (credentials +
+# role) for central user management — see User.SYNC_WRITE_DENYLIST.
+WRITE_DENYLIST = {}
 
 
 def _denylist_for(model_class):
@@ -306,6 +295,30 @@ class CloudReceiver:
                 return instance, 'updated'
 
             except model_class.DoesNotExist:
+                incoming_updated = cleaned.pop('updated_at', None)
+
+                # Reconcile onto an existing row that already owns this model's
+                # natural key (e.g. User.email) instead of INSERTing a duplicate
+                # that trips the unique constraint and gets dropped + re-queued
+                # forever. Converge on the incoming uuid.
+                natural = None
+                if hasattr(model_class, '_find_by_natural_key'):
+                    natural = model_class._find_by_natural_key(cleaned)
+                if natural is not None:
+                    instance = natural
+                    instance.uuid = uuid_val
+                    for key, value in cleaned.items():
+                        setattr(instance, key, value)
+                    for fk_field, fk_instance in resolved_fks.items():
+                        setattr(instance, fk_field, fk_instance)
+                    instance.sync_version = sync_version
+                    instance.is_deleted = is_deleted
+                    instance.synced_at = timezone.now()
+                    instance.branch_id = incoming_branch
+                    instance.save(_syncing=True)
+                    _preserve_updated_at(model_class, instance, incoming_updated)
+                    return instance, 'updated'
+
                 instance = model_class(
                     uuid=uuid_val,
                     sync_version=sync_version,
@@ -313,8 +326,6 @@ class CloudReceiver:
                     branch_id=incoming_branch,
                     synced_at=timezone.now(),
                 )
-
-                incoming_updated = cleaned.pop('updated_at', None)
 
                 for key, value in cleaned.items():
                     setattr(instance, key, value)

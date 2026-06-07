@@ -62,6 +62,7 @@ def _ensure_worker():
 
 
 def _worker_loop():
+    from django.db import close_old_connections
     while True:
         try:
             update = _queue.get()
@@ -77,4 +78,6 @@ def _worker_loop():
                 update.get('update_id') if isinstance(update, dict) else '?',
             )
         finally:
+            # Release this thread's DB connection each update — see worker.py.
+            close_old_connections()
             _queue.task_done()

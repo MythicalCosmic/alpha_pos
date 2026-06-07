@@ -82,3 +82,25 @@ class TestPushKeepsRejectedRecordsQueued:
         assert bad_row.attempts >= 1
         assert result['failed'] == 1
         assert result['success'] is False
+
+
+class TestPullCursorNotClobbered:
+    """Regression: set_last_pull() used to stamp `last_pull` (the durable pull
+    CURSOR) with the terminal's local now(), overwriting the cloud-clock
+    frontier that the paging loop persists. With any terminal/cloud clock skew
+    this silently skipped cloud-created records (a server-created user never
+    arrived). set_last_pull now writes last_pull_at and leaves the cursor."""
+
+    def test_set_last_pull_does_not_touch_cursor(self):
+        from base.services.sync.status import SyncStatus
+
+        SyncStatus.clear()
+        # The paging loop persists a cloud-frontier cursor here.
+        SyncStatus.update(last_pull='2026-06-07T10:00:00+00:00')
+        # The end-of-pull status write must NOT overwrite that cursor.
+        SyncStatus.set_last_pull(created=3, updated=1)
+
+        data = SyncStatus.get()
+        assert data['last_pull'] == '2026-06-07T10:00:00+00:00'
+        assert data['last_pull_created'] == 3
+        assert 'last_pull_at' in data

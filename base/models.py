@@ -145,10 +145,31 @@ class SyncMixin(models.Model):
         return data
 
     # Class-level deny-list for fields that must never be written by the sync
-    # ingestion paths (push or pull). Per-model overrides go on the subclass;
-    # see User.SYNC_WRITE_DENYLIST. Empty by default — only safety-critical
-    # fields belong here.
+    # ingestion paths (push or pull). Per-model overrides go on the subclass.
+    # Empty by default — only safety-critical fields belong here.
     SYNC_WRITE_DENYLIST = frozenset()
+
+    # Natural keys that uniquely identify a record independent of its uuid.
+    # When an incoming sync record's uuid isn't found locally but another row
+    # already owns the same natural-key value (e.g. User.email is unique), we
+    # reconcile onto that row — adopting the incoming uuid — instead of blindly
+    # INSERTing a duplicate that trips the DB unique constraint and gets
+    # silently dropped by _apply_records (permanent loss of a server-created
+    # user). Empty by default.
+    SYNC_NATURAL_KEYS = ()
+
+    @classmethod
+    def _find_by_natural_key(cls, data):
+        keys = getattr(cls, 'SYNC_NATURAL_KEYS', ())
+        if not keys:
+            return None
+        lookup = {}
+        for k in keys:
+            value = data.get(k)
+            if value in (None, ''):
+                return None
+            lookup[k] = value
+        return cls.objects.filter(**lookup).first()
 
     @classmethod
     def _strip_sync_denied(cls, data):
@@ -276,6 +297,31 @@ class SyncMixin(models.Model):
                 instance.updated_at = incoming_updated
             return instance, 'updated'
         except cls.DoesNotExist:
+            # uuid not present locally. Before INSERTing, check whether a
+            # different local row already owns one of this model's natural keys
+            # (e.g. a server-created user whose email matches an existing local
+            # user). If so, reconcile onto that row — converging on the incoming
+            # uuid — rather than INSERTing a duplicate that would raise
+            # IntegrityError and be silently dropped, never to retry.
+            natural = cls._find_by_natural_key(data)
+            if natural is not None:
+                instance = natural
+                instance.uuid = uuid_val
+                for key, value in data.items():
+                    if hasattr(instance, key):
+                        setattr(instance, key, value)
+                for fk_field, related in resolved_fks.items():
+                    setattr(instance, fk_field, related)
+                instance.sync_version = sync_version
+                instance.is_deleted = is_deleted
+                instance.synced_at = timezone.now()
+                instance.branch_id = incoming_branch or instance.branch_id or ''
+                instance.save(_syncing=True)
+                if incoming_updated and hasattr(instance, 'updated_at'):
+                    cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                    instance.updated_at = incoming_updated
+                return instance, 'updated'
+
             instance = cls(
                 uuid=uuid_val,
                 sync_version=sync_version,
@@ -370,20 +416,24 @@ class User(SyncMixin, models.Model):
     # branch_id comparison that wasn't deterministic for User updates.
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
-    # Credentials and privilege metadata must never be overwritten by sync.
-    # `to_sync_dict` already strips `password` on the push side, but a
-    # compromised cloud or a malicious branch could otherwise still set
-    # `role`/`permissions`/`status` via either receive or pull. Pull bypasses
-    # the receiver's denylist, so this attribute is the single source of
-    # truth honored by both ingest paths.
-    SYNC_WRITE_DENYLIST = frozenset({'password', 'role', 'permissions', 'status'})
+    # Central user management: the owner creates/edits cashiers and admins on
+    # the cloud hub and expects them to work on every terminal. That requires
+    # the password HASH (PBKDF2 — not keyed by SECRET_KEY, so portable across
+    # machines), role, permissions and status to replicate. Nothing is
+    # denylisted. This is a single-tenant deployment where the cloud and all
+    # branches belong to one operator, so the "a compromised peer could promote
+    # a user to ADMIN" threat the previous denylist guarded against would
+    # require the operator's own infrastructure to be compromised — at which
+    # point credentials are already lost. The password is a one-way hash, never
+    # plaintext. See deployment-status memory for the rationale.
+    SYNC_WRITE_DENYLIST = frozenset()
+
+    # Email is unique, so it's the natural key used to reconcile a server-
+    # created user against an existing local row with a different uuid (e.g. a
+    # bootstrap admin) instead of dropping it on an IntegrityError.
+    SYNC_NATURAL_KEYS = ('email',)
 
     objects = SyncManager()
-
-    def to_sync_dict(self):
-        data = super().to_sync_dict()
-        data.pop('password', None)
-        return data
 
     def __str__(self):
         return f"{self.first_name} {self.last_name}"

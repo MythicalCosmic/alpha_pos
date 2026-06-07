@@ -44,6 +44,7 @@ class ServerManager:
 
     def _heartbeat_loop(self):
         from django.conf import settings as dj
+        from django.db import close_old_connections
         first = True
         while not self._hb_stop:
             delay = 20 if first else max(
@@ -58,6 +59,10 @@ class ServerManager:
                 do_heartbeat()  # no-op without LICENSE_CONTROL_CENTER_URL
             except Exception:  # noqa: BLE001 — never let the worker die
                 logger.exception('heartbeat worker iteration failed')
+            finally:
+                # Release this thread's DB connection each cycle — see the note
+                # in _sync_loop. License.load() runs queries here.
+                close_old_connections()
 
     # -- Automatic background sync ------------------------------------------
     def _ensure_sync_worker(self):
@@ -73,6 +78,7 @@ class ServerManager:
         logger.info('sync worker started')
 
     def _sync_loop(self):
+        from django.db import close_old_connections
         from base.services.sync.config import (
             SyncConfig, get_sync_interval, is_local_mode, get_pull_enabled,
             get_cloud_url,
@@ -91,6 +97,15 @@ class ServerManager:
                         SyncService.pull_from_cloud()
             except Exception:  # noqa: BLE001 — never let the worker die
                 logger.exception('sync worker iteration failed')
+            finally:
+                # This daemon thread runs ORM queries outside Django's
+                # request cycle, so the request_finished signal never fires to
+                # release its DB connection. Without this the connection stays
+                # pinned for the life of the process — on SQLite it holds a
+                # WAL/writer slot (worsening "database is locked" for LAN
+                # terminals), on Postgres it accumulates toward "too many
+                # clients". Close it each cycle; the next iteration reopens.
+                close_old_connections()
 
     # -- Django bootstrap (idempotent) --------------------------------------
     def ensure_django(self):

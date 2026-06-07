@@ -1,6 +1,11 @@
 Django==6.0.3
 asgiref==3.11.1
 sqlparse==0.5.5
+# IANA timezone database. The python:slim base image ships no system tzdata,
+# and Django only pulls the tzdata wheel transitively on Windows — so without
+# this the Linux container raises ZoneInfoNotFoundError (HTTP 500) the first
+# time a view touches TIME_ZONE='Asia/Tashkent' (attendance/analytics/shifts).
+tzdata==2025.2
 redis==7.3.0
 django-redis==6.0.0
 requests==2.32.5
