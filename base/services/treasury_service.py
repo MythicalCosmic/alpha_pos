@@ -232,8 +232,14 @@ class TreasuryService:
 
     @staticmethod
     @transaction.atomic
-    def record_expense(account_kind, amount, category='', description='', performed_by=None):
-        """Spend money out of SAFE or BANK."""
+    def record_expense(account_kind, amount, category='', description='',
+                       performed_by=None, fee=0):
+        """Spend money out of SAFE or BANK.
+
+        `fee` is an optional commission (e.g. a bank charge on a BANK payment):
+        the account is debited `amount + fee` and the fee is recorded on the
+        ledger row, mirroring the transfer-fee convention.
+        """
         account_kind = (account_kind or '').upper()
         if account_kind not in {TreasuryAccount.Kind.SAFE, TreasuryAccount.Kind.BANK}:
             return ServiceResponse.validation_error(
@@ -244,19 +250,25 @@ class TreasuryService:
             return ServiceResponse.validation_error(
                 errors={'amount': 'Amount must be greater than 0'},
                 message='Invalid amount')
+        fee_d = _to_decimal(fee) or Decimal('0')
+        if fee_d < 0:
+            return ServiceResponse.validation_error(
+                errors={'fee': 'Fee cannot be negative'}, message='Invalid fee')
+        total = amt + fee_d
 
         acct = _get_account_locked(account_kind)
-        if (acct.balance or Decimal('0')) < amt:
+        if (acct.balance or Decimal('0')) < total:
             return ServiceResponse.validation_error(
-                errors={'amount': f'{account_kind} balance {acct.balance} is less than {amt}'},
+                errors={'amount': f'{account_kind} balance {acct.balance} is less than {total}'},
                 message='Insufficient funds')
 
         txn = _apply(
-            acct, -amt, TreasuryTransaction.Type.EXPENSE,
+            acct, -total, TreasuryTransaction.Type.EXPENSE,
             category=category or '', description=description or '',
-            performed_by=performed_by)
+            fee=fee_d, performed_by=performed_by)
         return ServiceResponse.created(
-            data={'account': _serialize_account(acct), 'transaction': _serialize_txn(txn)},
+            data={'account': _serialize_account(acct), 'fee': str(fee_d),
+                  'transaction': _serialize_txn(txn)},
             message='Expense recorded')
 
     @staticmethod

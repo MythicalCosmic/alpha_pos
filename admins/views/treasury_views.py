@@ -79,6 +79,7 @@ def treasury_expense(request):
         category=data.get('category', ''),
         description=data.get('description', ''),
         performed_by=request.user,
+        fee=data.get('fee', 0) or data.get('commission', 0),
     )
     if result.get('success'):
         txn = result.get('data', {}).get('transaction', {})
