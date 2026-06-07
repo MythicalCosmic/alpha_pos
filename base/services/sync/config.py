@@ -34,6 +34,9 @@ SYNC_ORDER = [
     'employmentevent',
     # Discount models
     'discounttype', 'discount', 'orderdiscount', 'discountusage',
+    # Cashbox / shift settlement (last: FK to shift/user/supplier/category,
+    # all of which sync earlier). Category before the expense that references it.
+    'cashboxexpensecategory', 'shiftpaymenttotal', 'cashboxexpense',
 ]
 
 MODEL_MAP = {
@@ -107,6 +110,10 @@ MODEL_MAP = {
     'discount': 'discounts.Discount',
     'orderdiscount': 'discounts.OrderDiscount',
     'discountusage': 'discounts.DiscountUsage',
+    # Cashbox / shift settlement
+    'cashboxexpensecategory': 'cashbox.CashboxExpenseCategory',
+    'shiftpaymenttotal': 'cashbox.ShiftPaymentTotal',
+    'cashboxexpense': 'cashbox.CashboxExpense',
 }
 
 FK_UUID_MAPPINGS = {
@@ -190,6 +197,11 @@ FK_UUID_MAPPINGS = {
     'discount_uuid': ('discounts', 'Discount', 'discount'),
     'free_product_uuid': ('base', 'Product', 'free_product'),
     'applied_by_uuid': ('base', 'User', 'applied_by'),
+    # Cashbox FK mappings (distinct uuid keys — category_uuid is claimed by
+    # base.Category, so the cashbox category uses its own key).
+    'cashbox_category_uuid': ('cashbox', 'CashboxExpenseCategory', 'category'),
+    'recipient_user_uuid': ('base', 'User', 'recipient_user'),
+    'recipient_supplier_uuid': ('stock', 'Supplier', 'recipient_supplier'),
 }
 
 

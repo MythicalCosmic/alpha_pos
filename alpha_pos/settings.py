@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     'discounts',
     'notifications',
     'fiscalization',
+    'cashbox',
     # Licensing must boot before any app whose endpoints we want to gate;
     # the middleware checks the singleton row at request time.
     'licensing',
