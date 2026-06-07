@@ -56,37 +56,50 @@ class TestSyncConflictTiebreaker:
         local.refresh_from_db()
         assert local.first_name == 'Local', 'older version must not overwrite'
 
-    def test_equal_version_branch_keeps_local_even_if_incoming_newer(self):
-        """On a branch (mode='local'), an equal-version conflict keeps the local
-        row — the branch dominates the cloud — even when the incoming record has
-        a newer updated_at. (Old policy let newer updated_at win; reversed per
-        operator decision so a branch's data is never clobbered on a tie.)"""
+    @override_settings(BRANCH_ID='branch1')
+    def test_tie_branch_keeps_its_own_record(self):
+        """On a branch, an equal-version conflict on the branch's OWN record
+        (branch_id == ours) keeps local — the till's transactional data is never
+        clobbered by a stale cloud echo. This is the 'local dominant' intent."""
         from base.models import User
 
         local = User.objects.create(
             first_name='Local', last_name='Name', email='u@test.local',
-            password='hashed', role='USER', sync_version=3,
+            password='hashed', role='USER', sync_version=3, branch_id='branch1',
         )
-        future = (timezone.now() + timedelta(hours=1)).isoformat()
-
         User.from_sync_dict({
-            'uuid': str(local.uuid),
-            'sync_version': 3,
-            'is_deleted': False,
-            'first_name': 'Newer',
-            'last_name': 'Name',
-            'email': 'u@test.local',
-            'password': 'hashed',
-            'role': 'USER',
-            'updated_at': future,
+            'uuid': str(local.uuid), 'sync_version': 3, 'is_deleted': False,
+            'first_name': 'Echo', 'last_name': 'Name', 'email': 'u@test.local',
+            'password': 'hashed', 'role': 'USER', 'branch_id': 'branch1',
         })
         local.refresh_from_db()
         assert local.first_name == 'Local'
 
+    @override_settings(BRANCH_ID='branch1')
+    def test_tie_branch_accepts_cloud_owned_record(self):
+        """On a branch, an equal-version conflict on a CLOUD-owned record
+        (branch_id != ours) accepts the incoming change — otherwise an
+        authoritative cloud edit (password reset, price change) would be silently
+        rejected on a version tie. Regression for the local-dominant bug."""
+        from base.models import User
+
+        local = User.objects.create(
+            first_name='Stale', last_name='Name', email='u@test.local',
+            password='old', role='USER', sync_version=3, branch_id='cloud',
+        )
+        User.from_sync_dict({
+            'uuid': str(local.uuid), 'sync_version': 3, 'is_deleted': False,
+            'first_name': 'FromCloud', 'last_name': 'Name', 'email': 'u@test.local',
+            'password': 'new-hash', 'role': 'USER', 'branch_id': 'cloud',
+        })
+        local.refresh_from_db()
+        assert local.first_name == 'FromCloud'
+        assert local.password == 'new-hash'
+
     @override_settings(DEPLOYMENT_MODE='cloud')
     def test_equal_version_cloud_accepts_branch_push(self):
         """On the cloud (mode='cloud'), an equal-version conflict accepts the
-        incoming branch push — the branch is the source of truth."""
+        incoming branch push — the branch owns its transactional data."""
         from base.models import User
 
         local = User.objects.create(

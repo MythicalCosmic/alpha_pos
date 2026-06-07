@@ -427,19 +427,26 @@ class SyncMixin(models.Model):
         if incoming_version < instance.sync_version:
             return False
 
-        # Equal version == a genuine conflict: the local row and the incoming
-        # record were edited independently and happened to land on the same
-        # version. Policy (operator's call): the BRANCH / local terminal is the
-        # source of truth and dominates the cloud aggregator, so on a conflict we
-        # keep the branch's data:
-        #   - On a branch (mode='local') we're ingesting a cloud/peer record —
-        #     keep our own local row, DON'T replace it.
-        #   - On the cloud (mode='cloud') we're ingesting a branch push — the
-        #     branch wins, so DO replace the cloud's copy.
-        # This is deterministic (no dependence on clock skew between machines,
-        # which the old updated_at tiebreaker was vulnerable to).
+        # Equal version == a genuine conflict (both sides independently reached
+        # the same version). Resolution is OWNERSHIP-aware, not blanket
+        # "local always wins" — otherwise a till that bumped a record's version
+        # locally (e.g. last_login_at on login) would REJECT an authoritative
+        # cloud change to that same record (a password reset, a price edit) on a
+        # version tie. Deterministic; no dependence on cross-machine clock skew.
         mode = getattr(settings, 'DEPLOYMENT_MODE', 'local')
-        return mode == 'cloud'
+        if mode == 'cloud':
+            # The hub accepts the branch push (branches own their transactional
+            # data). Cloud-owned fields are still protected by the direction-aware
+            # SYNC_DENY_FROM_BRANCH denylist, so this can't rewrite credentials.
+            return True
+        # On a branch: keep our row ONLY when it's THIS branch's OWN record
+        # (orders, drawer, the till's transactions) — that's the "local
+        # dominant" intent. For records owned elsewhere (cloud catalog/users,
+        # branch_id != ours) the originating node is authoritative, so accept the
+        # incoming change instead of silently dropping it.
+        own_branch = getattr(settings, 'BRANCH_ID', '') or ''
+        local_branch = instance.branch_id or ''
+        return local_branch != own_branch
 
     @classmethod
     def _is_sync_denylisted(cls, field_name):
