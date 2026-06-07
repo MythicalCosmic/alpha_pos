@@ -42,6 +42,7 @@ urlpatterns = [
     path('api/admins/hr/', include('hr.urls')),
     path('api/admins/discounts/', include('discounts.urls')),
     path('api/admins/notifications/', include('notifications.urls')),
+    path('api/admins/cashbox/', include('cashbox.urls')),
     path('api/waiters/', include('waiters.urls')),
     path('api/sync/', include(get_sync_urls())),
     # Licensing endpoints are allowlisted in the kill-switch middleware so
