@@ -68,7 +68,7 @@ class TestBuildExport:
     def test_includes_paid_completed_orders(self, regular_user):
         order = _make_order(regular_user)
         _add_item(order, 'Margherita', '50000', 2)
-        xml, count = build_export(date(2026, 5, 1), date.today())
+        xml, count = build_export(date(2026, 5, 1), timezone.localdate())
         assert count == 1
         root = ET.fromstring(xml)
         docs = root.findall('Документ')
@@ -80,45 +80,45 @@ class TestBuildExport:
 
     def test_excludes_unpaid_by_default(self, regular_user):
         _make_order(regular_user, is_paid=False)
-        _, count = build_export(date(2026, 5, 1), date.today())
+        _, count = build_export(date(2026, 5, 1), timezone.localdate())
         assert count == 0
 
     def test_includes_unpaid_when_flagged(self, regular_user):
         _make_order(regular_user, is_paid=False)
-        _, count = build_export(date(2026, 5, 1), date.today(),
+        _, count = build_export(date(2026, 5, 1), timezone.localdate(),
                                 include_unpaid=True)
         assert count == 1
 
     def test_excludes_cancelled(self, regular_user):
         _make_order(regular_user, status='CANCELED')
-        _, count = build_export(date(2026, 5, 1), date.today(),
+        _, count = build_export(date(2026, 5, 1), timezone.localdate(),
                                 include_unpaid=True)
         assert count == 0
 
     def test_excludes_outside_window(self, regular_user):
         from django.utils import timezone as tz
         _make_order(regular_user, created_at=tz.now() - timedelta(days=60))
-        _, count = build_export(date(2026, 5, 1), date.today())
+        _, count = build_export(date(2026, 5, 1), timezone.localdate())
         assert count == 0
 
     def test_includes_payment_method_label(self, regular_user):
         order = _make_order(regular_user, payment_method='UZCARD')
         _add_item(order, 'Salad', '30000', 1)
-        xml, _ = build_export(date(2026, 5, 1), date.today())
+        xml, _ = build_export(date(2026, 5, 1), timezone.localdate())
         root = ET.fromstring(xml)
         assert root.find('Документ').find('ФормаОплаты').text == 'Uzcard'
 
     def test_includes_phone(self, regular_user):
         order = _make_order(regular_user, phone='998900000001')
         _add_item(order, 'X', '1', 1)
-        xml, _ = build_export(date(2026, 5, 1), date.today())
+        xml, _ = build_export(date(2026, 5, 1), timezone.localdate())
         root = ET.fromstring(xml)
         assert root.find('Документ').find('ТелефонКонтакта').text == '998900000001'
 
     def test_root_element_has_commerceml_version(self, regular_user):
         order = _make_order(regular_user)
         _add_item(order, 'X', '1', 1)
-        xml, _ = build_export(date(2026, 5, 1), date.today())
+        xml, _ = build_export(date(2026, 5, 1), timezone.localdate())
         root = ET.fromstring(xml)
         assert root.tag == 'КоммерческаяИнформация'
         assert root.attrib['ВерсияСхемы'] == '2.05'
@@ -147,7 +147,7 @@ class TestExportEndpoint:
         _add_item(order, 'X', '1', 1)
         client = Client()
         resp = client.get(
-            f'/api/admins/exports/1c?from=2026-05-01&to={date.today().isoformat()}',
+            f'/api/admins/exports/1c?from=2026-05-01&to={timezone.localdate().isoformat()}',
             **_auth(admin_session),
         )
         assert resp.status_code == 200

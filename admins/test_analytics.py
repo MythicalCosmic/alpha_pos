@@ -119,7 +119,7 @@ class TestMenuEngineering:
         # Low qty + low price → Dog
         add('D', '4000', 1)
 
-        data = menu_engineering(date.today() - timedelta(days=5), date.today())
+        data = menu_engineering(timezone.localdate() - timedelta(days=5), timezone.localdate())
         klasses = {i['product_name']: i['class'] for i in data['items']}
         assert klasses['A'] == 'Star'
         assert klasses['D'] == 'Dog'
@@ -133,9 +133,9 @@ class TestMenuEngineering:
         p = Product.objects.create(name='A', price=Decimal('100000'), category=cat)
         o = _make_order(regular_user, cashier_user, total='100')
         _add_item_at_price(o, p, 1)
-        d1 = menu_engineering(date.today() - timedelta(days=5), date.today(),
+        d1 = menu_engineering(timezone.localdate() - timedelta(days=5), timezone.localdate(),
                               cogs_fraction=Decimal('0.20'))
-        d2 = menu_engineering(date.today() - timedelta(days=5), date.today(),
+        d2 = menu_engineering(timezone.localdate() - timedelta(days=5), timezone.localdate(),
                               cogs_fraction=Decimal('0.80'))
         m1 = Decimal(d1['items'][0]['margin_per_unit'])
         m2 = Decimal(d2['items'][0]['margin_per_unit'])
@@ -191,7 +191,7 @@ class TestMenuEngineeringEndpoint:
         o = _make_order(regular_user, cashier_user, total='100')
         _add_item_at_price(o, p, 1)
         client = Client()
-        today = date.today().isoformat()
+        today = timezone.localdate().isoformat()
         resp = client.get(
             f'/api/admins/analytics/menu-engineering?from=2026-05-01&to={today}',
             HTTP_AUTHORIZATION=f'Bearer {admin_session}',
