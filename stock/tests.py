@@ -305,3 +305,64 @@ class TestReserveForOrderHonorsFailures:
         # Rolled back: nothing left reserved.
         level.refresh_from_db()
         assert level.reserved_quantity == Decimal('0'), 'must not hold any reservation'
+
+
+class TestSupplierLedger:
+    """Supplier debt ledger (P5): receiving creates debt, paying reduces it."""
+
+    def _supplier(self):
+        from stock.models import Supplier
+        return Supplier.objects.create(name='ACME Foods')
+
+    def test_record_purchase_increases_balance(self):
+        from stock.services.supplier_ledger_service import SupplierLedgerService
+        from stock.models import Supplier
+        s = self._supplier()
+        SupplierLedgerService.record_purchase(s.id, Decimal('50000'),
+                                              reference_type='Test')
+        s.refresh_from_db()
+        assert s.current_balance == Decimal('50000.00')
+
+    def test_pay_supplier_from_safe_reduces_balance_and_debits_treasury(self):
+        from decimal import Decimal as D
+        from stock.services.supplier_ledger_service import SupplierLedgerService
+        from stock.models import Supplier
+        from base.models import TreasuryAccount
+        TreasuryAccount.objects.create(kind='SAFE', balance=D('100000'))
+        s = self._supplier()
+        SupplierLedgerService.record_purchase(s.id, D('50000'))
+        result, status = SupplierLedgerService.pay_supplier(
+            s.id, D('30000'), source_account='SAFE')
+        assert status == 200, result
+        s.refresh_from_db()
+        assert s.current_balance == D('20000.00')  # 50k owed - 30k paid
+        assert TreasuryAccount.objects.get(kind='SAFE').balance == D('70000.00')
+
+    def test_pay_supplier_insufficient_safe_is_rejected(self):
+        from decimal import Decimal as D
+        from stock.services.supplier_ledger_service import SupplierLedgerService
+        from base.models import TreasuryAccount
+        TreasuryAccount.objects.create(kind='SAFE', balance=D('100'))
+        s = self._supplier()
+        SupplierLedgerService.record_purchase(s.id, D('50000'))
+        result, status = SupplierLedgerService.pay_supplier(
+            s.id, D('30000'), source_account='SAFE')
+        assert status >= 400
+        s.refresh_from_db()
+        # Treasury rejected before the supplier ledger moved.
+        assert s.current_balance == D('50000.00')
+
+    def test_bank_payment_commission_debits_amount_plus_fee(self):
+        from decimal import Decimal as D
+        from stock.services.supplier_ledger_service import SupplierLedgerService
+        from base.models import TreasuryAccount
+        TreasuryAccount.objects.create(kind='BANK', balance=D('100000'))
+        s = self._supplier()
+        SupplierLedgerService.record_purchase(s.id, D('50000'))
+        result, status = SupplierLedgerService.pay_supplier(
+            s.id, D('30000'), source_account='BANK', commission=D('500'))
+        assert status == 200, result
+        # amount + fee left the bank.
+        assert TreasuryAccount.objects.get(kind='BANK').balance == D('69500.00')
+        s.refresh_from_db()
+        assert s.current_balance == D('20000.00')  # debt reduced by amount only

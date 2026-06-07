@@ -8,7 +8,7 @@ from stock.models.catalog import StockLocation, StockUnit, StockCategory
 from stock.models.items import StockItem, StockItemUnit
 from stock.models.recipes import Recipe, RecipeIngredient, RecipeIngredientSubstitute, RecipeByProduct, RecipeStep
 from stock.models.product_links import ProductStockLink, ProductComponentStock
-from stock.models.suppliers import Supplier, SupplierStockItem
+from stock.models.suppliers import Supplier, SupplierStockItem, SupplierTransaction
 from stock.models.purchases import PurchaseOrder, PurchaseOrderItem, PurchaseReceiving, PurchaseReceivingItem
 from stock.models.inventory import StockLevel, StockBatch, StockTransaction
 from stock.models.production import ProductionOrder, ProductionOrderIngredient, ProductionOrderOutput, ProductionOrderStep
@@ -31,6 +31,7 @@ __all__ = [
     'ProductComponentStock',
     'Supplier',
     'SupplierStockItem',
+    'SupplierTransaction',
     'PurchaseOrder',
     'PurchaseOrderItem',
     'PurchaseReceiving',

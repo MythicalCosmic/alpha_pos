@@ -780,8 +780,10 @@ class PurchaseReceivingService:
 
         settings = StockSettings.load()
         po = rcv.purchase_order
+        received_value = Decimal("0")
 
         for item in rcv.items.select_related("stock_item", "unit", "po_item"):
+            received_value += to_decimal(item.unit_cost) * to_decimal(item.quantity_received)
             batch = None
             if settings.track_batches or item.stock_item.track_batches:
                 from .batch_service import StockBatchService
@@ -841,6 +843,17 @@ class PurchaseReceivingService:
         rcv.save(update_fields=["status", "updated_at"])
 
         cls._update_po_status(po)
+
+        # Record the supplier debt: receiving goods worth `received_value` means
+        # we now owe the supplier that much (a PURCHASE ledger row). Previously
+        # the debt was never recorded — the money owed vanished.
+        if received_value > 0 and po.supplier_id:
+            from .supplier_ledger_service import SupplierLedgerService
+            SupplierLedgerService.record_purchase(
+                po.supplier_id, received_value,
+                reference_type="PurchaseReceiving", reference_id=rcv.id,
+                performed_by=rcv.received_by,
+            )
 
         return ServiceResponse.success(data={
             "receiving": cls.serialize(rcv)

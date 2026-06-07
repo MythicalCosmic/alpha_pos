@@ -233,12 +233,17 @@ class TreasuryService:
     @staticmethod
     @transaction.atomic
     def record_expense(account_kind, amount, category='', description='',
-                       performed_by=None, fee=0):
+                       performed_by=None, fee=0, txn_type=None,
+                       reference_type='', reference_id=None):
         """Spend money out of SAFE or BANK.
 
         `fee` is an optional commission (e.g. a bank charge on a BANK payment):
         the account is debited `amount + fee` and the fee is recorded on the
         ledger row, mirroring the transfer-fee convention.
+
+        `txn_type` lets callers tag the ledger row (e.g. SUPPLIER_PAYMENT,
+        SALARY_PAYMENT) with an optional reference_type/reference_id; it defaults
+        to a plain EXPENSE.
         """
         account_kind = (account_kind or '').upper()
         if account_kind not in {TreasuryAccount.Kind.SAFE, TreasuryAccount.Kind.BANK}:
@@ -263,9 +268,10 @@ class TreasuryService:
                 message='Insufficient funds')
 
         txn = _apply(
-            acct, -total, TreasuryTransaction.Type.EXPENSE,
+            acct, -total, txn_type or TreasuryTransaction.Type.EXPENSE,
             category=category or '', description=description or '',
-            fee=fee_d, performed_by=performed_by)
+            fee=fee_d, reference_type=reference_type or '',
+            reference_id=reference_id, performed_by=performed_by)
         return ServiceResponse.created(
             data={'account': _serialize_account(acct), 'fee': str(fee_d),
                   'transaction': _serialize_txn(txn)},

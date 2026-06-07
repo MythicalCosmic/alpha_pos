@@ -1291,11 +1291,14 @@ class TreasuryTransaction(SyncMixin, models.Model):
         FEE = 'FEE', 'Transfer fee'
         EXPENSE = 'EXPENSE', 'Expense'
         ADJUSTMENT = 'ADJUSTMENT', 'Adjustment'
+        SUPPLIER_PAYMENT = 'SUPPLIER_PAYMENT', 'Supplier payment'
+        SALARY_PAYMENT = 'SALARY_PAYMENT', 'Salary payment'
+        SHIFT_DEPOSIT = 'SHIFT_DEPOSIT', 'Shift settlement deposit'
 
     account = models.ForeignKey(
         TreasuryAccount, on_delete=models.CASCADE, related_name='transactions',
     )
-    type = models.CharField(max_length=15, choices=Type.choices)
+    type = models.CharField(max_length=20, choices=Type.choices)
     # Signed change applied to the account balance (+ in / - out).
     delta = models.DecimalField(max_digits=14, decimal_places=2)
     fee = models.DecimalField(max_digits=14, decimal_places=2, default=0)

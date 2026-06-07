@@ -45,6 +45,11 @@ class Supplier(SyncMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # current_balance is computed from the SupplierTransaction ledger on the
+    # branch; a pulled catalog copy (name/terms edited on the cloud) must not
+    # reset it. Refused on branch ingest, accepted by the cloud aggregator.
+    SYNC_WRITE_DENYLIST = frozenset({'current_balance'})
+
     objects = SyncManager()
 
     class Meta:
@@ -52,6 +57,65 @@ class Supplier(SyncMixin, models.Model):
 
     def __str__(self):
         return self.name
+
+
+class SupplierTransaction(SyncMixin, models.Model):
+    """Append-only supplier ledger. Positive balance = we owe the supplier.
+
+    Mirrors the treasury ledger (balance_before/after so the books reconcile).
+    `source_account` (for payments) is a plain enum, NOT an FK to the per-branch
+    TreasuryAccount, so this ledger syncs coherently.
+    """
+    class Type(models.TextChoices):
+        PURCHASE = 'PURCHASE', 'Purchase (debt +)'
+        PAYMENT = 'PAYMENT', 'Payment (debt -)'
+        RETURN = 'RETURN', 'Return (debt -)'
+        ADJUSTMENT = 'ADJUSTMENT', 'Adjustment'
+
+    class SourceAccount(models.TextChoices):
+        SAFE = 'SAFE', 'Safe'
+        BANK = 'BANK', 'Bank'
+        DRAWER = 'DRAWER', 'Shift drawer'
+
+    supplier = models.ForeignKey(
+        Supplier, on_delete=models.CASCADE, related_name='ledger',
+    )
+    type = models.CharField(max_length=12, choices=Type.choices)
+    # Always stored positive; the sign applied to the balance comes from `type`.
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    balance_before = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    balance_after = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    source_account = models.CharField(
+        max_length=10, choices=SourceAccount.choices, blank=True, default='',
+    )
+    fee = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    note = models.TextField(blank=True, default='')
+    reference_type = models.CharField(max_length=50, blank=True, default='')
+    reference_id = models.PositiveIntegerField(null=True, blank=True)
+    performed_by = models.ForeignKey(
+        'base.User', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='supplier_transactions',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # Branch-owned money figures.
+    SYNC_WRITE_DENYLIST = frozenset({
+        'amount', 'balance_before', 'balance_after', 'fee',
+    })
+
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['supplier_uuid'] = str(self.supplier.uuid) if self.supplier else None
+        data['performed_by_uuid'] = str(self.performed_by.uuid) if self.performed_by else None
+        return data
+
+    def __str__(self):
+        return f"{self.supplier_id}:{self.type} {self.amount}"
 
 
 class SupplierStockItem(SyncMixin, models.Model):

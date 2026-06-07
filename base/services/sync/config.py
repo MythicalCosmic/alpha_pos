@@ -11,7 +11,7 @@ SYNC_ORDER = [
     'shifttemplate', 'shift', 'cashreconciliation',
     # Stock models (synced after base, respecting FK dependencies)
     'stocklocation', 'stockunit', 'stockcategory', 'stockitem',
-    'stockitemunit', 'supplier', 'supplierstockitem',
+    'stockitemunit', 'supplier', 'supplierstockitem', 'suppliertransaction',
     'recipe', 'recipeingredient', 'recipeingredientsubstitute',
     'recipebyproduct', 'recipestep',
     'productstocklink', 'productcomponentstock',
@@ -63,6 +63,7 @@ MODEL_MAP = {
     'stockitemunit': 'stock.StockItemUnit',
     'supplier': 'stock.Supplier',
     'supplierstockitem': 'stock.SupplierStockItem',
+    'suppliertransaction': 'stock.SupplierTransaction',
     'recipe': 'stock.Recipe',
     'recipeingredient': 'stock.RecipeIngredient',
     'recipeingredientsubstitute': 'stock.RecipeIngredientSubstitute',
