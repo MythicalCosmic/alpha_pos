@@ -282,3 +282,32 @@ class TestPartialUniqueAllowsEmpty:
         with pytest.raises(IntegrityError):
             with transaction.atomic():
                 Category.objects.create(name='B', slug='drinks')
+
+
+class TestCategorySlugReconcile:
+    """Sync must reconcile an incoming category onto an existing same-slug row
+    instead of INSERTing a duplicate (UNIQUE constraint failed: base_category.slug)."""
+
+    def test_slug_collision_reconciles_not_inserts(self):
+        from base.models import Category
+        import uuid as _uuid
+        Category.objects.create(name='Drinks', slug='drinks', sync_version=1)
+        incoming = str(_uuid.uuid4())
+        inst, action = Category.from_sync_dict({
+            'uuid': incoming, 'sync_version': 5, 'is_deleted': False,
+            'name': 'Beverages', 'slug': 'drinks',
+        })
+        assert action == 'updated'
+        assert Category.objects.filter(slug='drinks').count() == 1
+        assert str(Category.objects.get(slug='drinks').uuid) == incoming
+
+    def test_empty_slug_incoming_inserts(self):
+        from base.models import Category
+        import uuid as _uuid
+        Category.objects.create(name='A', slug='', sync_version=1)
+        inst, action = Category.from_sync_dict({
+            'uuid': str(_uuid.uuid4()), 'sync_version': 1, 'is_deleted': False,
+            'name': 'B', 'slug': '',
+        })
+        assert action == 'created'
+        assert Category.objects.filter(slug='').count() == 2

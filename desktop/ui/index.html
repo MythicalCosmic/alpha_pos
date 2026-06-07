@@ -255,6 +255,19 @@
         </div>
       </div>
 
+      <div class="card" style="border:1px solid #f59e0b;margin-top:18px">
+        <h1 style="color:#f59e0b;font-size:18px;margin:0 0 4px">🧹 Flush database</h1>
+        <div class="sub">Delete ALL data (orders, products, categories, users,
+          shifts…) and start on a clean, empty database — but KEEP your
+          configuration (sync, Telegram, etc.). The admin login is reset (shown
+          on the Dashboard). One click; no reinstall.</div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn" style="background:#f59e0b;border-color:#f59e0b;color:#111"
+                  onclick="flushDatabase()">🧹 Flush database</button>
+          <span class="result" id="flush-result"></span>
+        </div>
+      </div>
+
       <div class="card" style="border:1px solid #b91c1c;margin-top:18px">
         <h1 style="color:#ef4444;font-size:18px;margin:0 0 4px">⚠️ Danger zone</h1>
         <div class="sub">Permanently delete EVERYTHING — database, all settings,
@@ -508,6 +521,22 @@ async function saveConfig(){
 
 // Danger zone: wipe everything for a fresh install. Double-gated — a confirm
 // then typed DELETE — because it's irreversible and leaves nothing behind.
+async function flushDatabase(){
+  const el=document.getElementById('flush-result');
+  if(!confirm('Flush the database?\n\nDeletes ALL data (orders, products, users, shifts…) but KEEPS your configuration. The admin login will be reset.')) return;
+  el.className='result'; el.textContent='Flushing…';
+  try{
+    const r = await api.flush_database(true);
+    if(r.ok){
+      el.className='result ok';
+      el.textContent = r.message || 'Database flushed.';
+      alert(r.message || 'Database flushed — clean data, same configuration.');
+    } else {
+      el.className='result err'; el.textContent = r.error || 'Flush failed';
+    }
+  }catch(e){ el.className='result err'; el.textContent=String(e); }
+}
+
 async function factoryReset(){
   const el=document.getElementById('reset-result');
   if(!confirm('Delete ALL Alpha POS data — database, settings, login, logs and uploads?\n\nThis cannot be undone.')) return;

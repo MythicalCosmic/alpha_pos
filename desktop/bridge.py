@@ -119,6 +119,50 @@ class Api:
         return {'ok': True, **self.server.stop()}
 
     @_safe
+    def flush_database(self, confirm=False):
+        """Wipe ALL data (orders, products, users, shifts, …) and rebuild a clean
+        empty database, KEEPING the install config + secrets. Restarts the
+        backend in place — one click, no app restart. The admin login is
+        recreated (new password shown in the panel)."""
+        if confirm is not True:
+            return {'ok': False, 'error': 'Confirmation required'}
+        import sys
+        if not getattr(sys, 'frozen', False):
+            return {'ok': False,
+                    'error': 'Database flush only runs in the installed app.'}
+        try:
+            self.server.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception('stop during flush failed')
+        try:
+            from django.db import connections
+            connections.close_all()
+        except Exception:  # noqa: BLE001
+            pass
+        # Delete only the DB files — keep .env / secrets / logs / media so the
+        # install stays configured. The schema is rebuilt by first_time_install.
+        for _name in ('db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm'):
+            _p = config_store.DATA_DIR / _name
+            try:
+                if _p.exists():
+                    _p.unlink()
+            except OSError:
+                pass
+        # Rebuild empty schema + reseed (payment methods, templates) + admin.
+        try:
+            self.server.first_time_install()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception('rebuild after flush failed')
+            return {'ok': False, 'error': f'Rebuild failed: {exc}'}
+        try:
+            self.server.start()
+        except Exception:  # noqa: BLE001
+            logger.exception('start after flush failed')
+        return {'ok': True,
+                'message': 'Database flushed — clean data, same configuration. '
+                           'The admin login was reset (see the Dashboard).'}
+
+    @_safe
     def factory_reset(self, confirm=False):
         """Delete the entire install — database, settings, secrets, logs, media
         — so the operator can start over with a clean first install. Requires

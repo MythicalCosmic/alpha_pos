@@ -592,6 +592,12 @@ class Category(SyncMixin, models.Model):
             ),
         ]
 
+    # Reconcile an incoming category onto an existing local row with the same
+    # (non-empty) slug instead of INSERTing a duplicate that fails the unique
+    # constraint ("UNIQUE constraint failed: base_category.slug"). Empty slugs
+    # are skipped by _find_by_natural_key, so slug-less categories still insert.
+    SYNC_NATURAL_KEYS = ('slug',)
+
     objects = SyncManager()
 
     def to_sync_dict(self):
