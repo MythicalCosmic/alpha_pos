@@ -224,12 +224,23 @@ class SalaryService:
         created = 0
         skipped = 0
 
+        # Previous month, for seeding each row's editable base from last month.
+        prev_year, prev_month = (year, month - 1) if month > 1 else (year - 1, 12)
+
         for employee in active_employees:
             if SalaryPaymentRepository.exists_for_period(employee.id, year, month):
                 skipped += 1
                 continue
 
-            net_amount = employee.base_salary
+            # The month's base pre-fills from last month's (edited) base_amount,
+            # falling back to the employee's standing base_salary. Editing a
+            # month's base never mutates employee.base_salary — it's a snapshot.
+            prev = SalaryPayment.objects.filter(
+                employee_id=employee.id, period_year=prev_year,
+                period_month=prev_month, is_deleted=False,
+            ).first()
+            base = prev.base_amount if prev else employee.base_salary
+            net_amount = base
 
             # Savepoint + catch so a concurrent generate_payroll that inserted
             # this (employee, year, month) row between exists_for_period() and
@@ -241,7 +252,7 @@ class SalaryService:
                         employee_id=employee.id,
                         period_year=year,
                         period_month=month,
-                        base_amount=employee.base_salary,
+                        base_amount=base,
                         bonus=Decimal("0"),
                         deduction=Decimal("0"),
                         net_amount=net_amount,

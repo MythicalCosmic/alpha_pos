@@ -34,6 +34,11 @@ urlpatterns = [
     path('salaries/<int:salary_id>/', salary_views.salary_detail, name='salary-detail'),
     path('salaries/<int:salary_id>/approve/', salary_views.salary_approve, name='salary-approve'),
     path('salaries/<int:salary_id>/pay/', salary_views.salary_pay, name='salary-pay'),
+    path('salaries/<int:salary_id>/base/', salary_views.salary_set_base, name='salary-set-base'),
+    path('salaries/<int:salary_id>/bonuses/', salary_views.salary_bonuses, name='salary-bonuses'),
+    path('salaries/<int:salary_id>/deductions/', salary_views.salary_deductions, name='salary-deductions'),
+    path('salaries/<int:salary_id>/bonuses/<int:bonus_id>/', salary_views.salary_bonus_delete, name='salary-bonus-delete'),
+    path('salaries/<int:salary_id>/deductions/<int:deduction_id>/', salary_views.salary_deduction_delete, name='salary-deduction-delete'),
 
     # Cash
     path('cash/', cash_views.cash_transactions, name='cash-list'),

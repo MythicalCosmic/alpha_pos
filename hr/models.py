@@ -271,6 +271,53 @@ class SalaryPayment(SyncMixin, models.Model):
         return f"Salary: {self.employee} - {self.period_year}/{self.period_month}"
 
 
+class SalaryBonus(SyncMixin, models.Model):
+    """One itemized bonus line on a month's salary (amount + reason). The scalar
+    SalaryPayment.bonus is kept in sync (= Σ of these) for back-compat."""
+    salary = models.ForeignKey(
+        SalaryPayment, on_delete=models.CASCADE, related_name='bonuses')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reason = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    SYNC_WRITE_DENYLIST = frozenset({'amount'})
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['created_at']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['salary_uuid'] = str(self.salary.uuid) if self.salary else None
+        return data
+
+    def __str__(self):
+        return f"Bonus {self.amount} ({self.reason})"
+
+
+class SalaryDeduction(SyncMixin, models.Model):
+    """One itemized penalty line on a month's salary (amount + reason)."""
+    salary = models.ForeignKey(
+        SalaryPayment, on_delete=models.CASCADE, related_name='deductions')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    reason = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    SYNC_WRITE_DENYLIST = frozenset({'amount'})
+    objects = SyncManager()
+
+    class Meta:
+        ordering = ['created_at']
+
+    def to_sync_dict(self):
+        data = super().to_sync_dict()
+        data['salary_uuid'] = str(self.salary.uuid) if self.salary else None
+        return data
+
+    def __str__(self):
+        return f"Penalty {self.amount} ({self.reason})"
+
+
 class CashTransaction(SyncMixin, models.Model):
     class TransactionType(models.TextChoices):
         DEPOSIT = 'DEPOSIT', 'Deposit'

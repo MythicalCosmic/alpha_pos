@@ -124,3 +124,62 @@ def salary_summary(request):
         month=int(month),
     )
     return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+@admin_required
+def salary_bonuses(request, salary_id):
+    from hr.services.salary_item_service import SalaryItemService
+    if request.method == "GET":
+        result, status = SalaryItemService.items(salary_id)
+        return JsonResponse(result, status=status)
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    result, status = SalaryItemService.add_bonus(
+        salary_id, amount=data.get("amount"), reason=data.get("reason", ""))
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_POST
+@admin_required
+def salary_deductions(request, salary_id):
+    from hr.services.salary_item_service import SalaryItemService
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    result, status = SalaryItemService.add_deduction(
+        salary_id, amount=data.get("amount"), reason=data.get("reason", ""))
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_POST
+@admin_required
+def salary_set_base(request, salary_id):
+    from hr.services.salary_item_service import SalaryItemService
+    data, error = parse_json_body(request)
+    if error:
+        return json_response(error)
+    result, status = SalaryItemService.set_base(salary_id, amount=data.get("amount"))
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@admin_required
+def salary_bonus_delete(request, salary_id, bonus_id):
+    from hr.services.salary_item_service import SalaryItemService
+    result, status = SalaryItemService.remove_bonus(salary_id, bonus_id)
+    return JsonResponse(result, status=status)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@admin_required
+def salary_deduction_delete(request, salary_id, deduction_id):
+    from hr.services.salary_item_service import SalaryItemService
+    result, status = SalaryItemService.remove_deduction(salary_id, deduction_id)
+    return JsonResponse(result, status=status)
