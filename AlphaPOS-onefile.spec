@@ -18,7 +18,7 @@ import django  # noqa: E402
 django.setup()
 
 APPS = ['base', 'admins', 'customers', 'waiters', 'stock', 'hr', 'discounts',
-        'notifications', 'licensing', 'fiscalization', 'alpha_pos']
+        'notifications', 'licensing', 'fiscalization', 'cashbox', 'alpha_pos']
 
 hiddenimports = []
 for app in APPS:
