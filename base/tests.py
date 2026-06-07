@@ -311,3 +311,33 @@ class TestCategorySlugReconcile:
         })
         assert action == 'created'
         assert Category.objects.filter(slug='').count() == 2
+
+
+class TestRehashPasswords:
+    """Repair for users created via Django /admin/ with a plaintext PIN."""
+
+    def test_plaintext_pin_rehashed_and_verifies(self):
+        from base.models import User
+        from base.security.hashing import verify_password
+        from django.core.management import call_command
+        u = User.objects.create(
+            first_name='P', last_name='IN', email='pin@t.local',
+            password='2233', role='CASHIER', status='ACTIVE')
+        # Plaintext can't be verified by check_password — this is the 401 cause.
+        assert verify_password('2233', u.password) is False
+        call_command('rehash_passwords', verbosity=0)
+        u.refresh_from_db()
+        assert verify_password('2233', u.password) is True
+
+    def test_existing_hash_left_untouched(self):
+        from base.models import User
+        from base.security.hashing import hash_password, verify_password
+        from django.core.management import call_command
+        h = hash_password('9999')
+        u = User.objects.create(
+            first_name='H', last_name='Ash', email='hash@t.local',
+            password=h, role='CASHIER', status='ACTIVE')
+        call_command('rehash_passwords', verbosity=0)
+        u.refresh_from_db()
+        assert u.password == h  # untouched
+        assert verify_password('9999', u.password) is True

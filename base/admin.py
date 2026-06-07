@@ -13,6 +13,26 @@ class UserAdmin(admin.ModelAdmin):
     search_fields = ('email', 'first_name', 'last_name')
     ordering = ('-id',)
 
+    def save_model(self, request, obj, form, change):
+        # A plain ModelAdmin saves the `password` field verbatim — so a PIN typed
+        # here ('2233') was stored as PLAINTEXT and login's check_password() could
+        # never verify it (401 Invalid credentials). Hash any value that isn't
+        # already a recognized Django hash, leaving real hashes untouched so
+        # editing other fields doesn't re-hash.
+        from django.contrib.auth.hashers import identify_hasher
+        from base.security.hashing import hash_password
+        pw = obj.password or ''
+        already_hashed = False
+        if pw:
+            try:
+                identify_hasher(pw)
+                already_hashed = True
+            except Exception:  # noqa: BLE001 — unrecognized => plaintext
+                already_hashed = False
+        if pw and not already_hashed:
+            obj.password = hash_password(pw)
+        super().save_model(request, obj, form, change)
+
 
 @admin.register(Session)
 class SessionAdmin(admin.ModelAdmin):
