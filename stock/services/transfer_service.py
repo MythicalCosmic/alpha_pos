@@ -334,8 +334,11 @@ class StockTransferService:
                     location=transfer.from_location,
                 ).select_for_update()
             )
+            # Net of reservations: stock already reserved for orders/production
+            # isn't free to transfer, so approve against available_quantity
+            # (quantity - reserved_quantity), not the raw on-hand quantity.
             available = sum(
-                (lvl.quantity for lvl in locked_levels), Decimal("0")
+                (lvl.available_quantity for lvl in locked_levels), Decimal("0")
             )
 
             if item.requested_qty > available and not settings.allow_negative_stock:

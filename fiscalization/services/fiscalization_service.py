@@ -221,7 +221,21 @@ class FiscalizationService:
                 confirmed += 1
             else:
                 still += 1
-        return {'retried': retried, 'confirmed': confirmed, 'still_failing': still}
+        # Surface receipts that have exhausted the retry cap: under serve-now the
+        # sale already completed (cash taken), so a permanently-FAILED receipt is
+        # an un-fiscalized sale that needs manual intervention. Log loudly rather
+        # than let it fall silently out of the sweep.
+        dead = FiscalReceipt.objects.filter(
+            status=FiscalReceipt.Status.FAILED, attempts__gte=MAX_ATTEMPTS,
+        ).count()
+        if dead:
+            logger.error(
+                'fiscalize_retry: %d receipt(s) permanently FAILED at the %d-attempt '
+                'cap — these sales are un-fiscalized and need manual intervention',
+                dead, MAX_ATTEMPTS,
+            )
+        return {'retried': retried, 'confirmed': confirmed, 'still_failing': still,
+                'dead_letter': dead}
 
     @staticmethod
     def stats():
@@ -235,6 +249,10 @@ class FiscalizationService:
             'confirmed': by_status.get('CONFIRMED', 0),
             'failed': by_status.get('FAILED', 0),
             'skipped': by_status.get('SKIPPED', 0),
+            # Permanently-failed (hit the attempt cap) — needs operator attention.
+            'dead_letter': FiscalReceipt.objects.filter(
+                status=FiscalReceipt.Status.FAILED, attempts__gte=MAX_ATTEMPTS,
+            ).count(),
         }
 
     @staticmethod

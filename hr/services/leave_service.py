@@ -1,6 +1,6 @@
 from typing import Dict, Any, Tuple
 from decimal import Decimal
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.core.paginator import Paginator
 from django.utils import timezone
 
@@ -543,15 +543,23 @@ class LeaveService:
                     carried_over = min(remaining, Decimal(str(leave_type.max_carryover)))
                     carried_over = max(Decimal("0"), carried_over)
 
-                LeaveBalance.objects.create(
-                    employee_id=employee.id,
-                    leave_type_id=leave_type.id,
-                    year=year,
-                    allocated_days=Decimal(str(leave_type.annual_quota)),
-                    used_days=Decimal("0"),
-                    carried_over=carried_over,
-                )
-                created += 1
+                # Savepoint + catch so a concurrent initialize that created this
+                # (employee, leave_type, year) row between our exists() check and
+                # this insert doesn't IntegrityError out and roll back the whole
+                # batch — just count it as skipped.
+                try:
+                    with transaction.atomic():
+                        LeaveBalance.objects.create(
+                            employee_id=employee.id,
+                            leave_type_id=leave_type.id,
+                            year=year,
+                            allocated_days=Decimal(str(leave_type.annual_quota)),
+                            used_days=Decimal("0"),
+                            carried_over=carried_over,
+                        )
+                    created += 1
+                except IntegrityError:
+                    skipped += 1
 
         return ServiceResponse.success(data={
             "year": year,

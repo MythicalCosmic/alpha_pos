@@ -420,31 +420,26 @@ class SyncMixin(models.Model):
 
     @classmethod
     def _should_replace(cls, instance, incoming_version, incoming_data, incoming_branch):
-        # Higher sync_version always wins. On a tie, fall back to a
-        # deterministic tiebreaker so two branches that happened to land at
-        # the same version don't silently overwrite each other based on
-        # whichever batch arrived second:
-        #   1. updated_at (newer wins) when both sides have it
-        #   2. branch_id lexicographic comparison as last resort.
+        # Higher sync_version always wins — that's normal forward progress and
+        # must apply regardless of where the record came from.
         if incoming_version > instance.sync_version:
             return True
         if incoming_version < instance.sync_version:
             return False
 
-        from django.utils.dateparse import parse_datetime
-        incoming_updated = incoming_data.get('updated_at')
-        if isinstance(incoming_updated, str):
-            incoming_updated = parse_datetime(incoming_updated)
-        local_updated = getattr(instance, 'updated_at', None)
-        if incoming_updated and local_updated:
-            if incoming_updated > local_updated:
-                return True
-            if incoming_updated < local_updated:
-                return False
-
-        local_branch = instance.branch_id or ''
-        incoming = incoming_branch or ''
-        return incoming > local_branch
+        # Equal version == a genuine conflict: the local row and the incoming
+        # record were edited independently and happened to land on the same
+        # version. Policy (operator's call): the BRANCH / local terminal is the
+        # source of truth and dominates the cloud aggregator, so on a conflict we
+        # keep the branch's data:
+        #   - On a branch (mode='local') we're ingesting a cloud/peer record —
+        #     keep our own local row, DON'T replace it.
+        #   - On the cloud (mode='cloud') we're ingesting a branch push — the
+        #     branch wins, so DO replace the cloud's copy.
+        # This is deterministic (no dependence on clock skew between machines,
+        # which the old updated_at tiebreaker was vulnerable to).
+        mode = getattr(settings, 'DEPLOYMENT_MODE', 'local')
+        return mode == 'cloud'
 
     @classmethod
     def _is_sync_denylisted(cls, field_name):

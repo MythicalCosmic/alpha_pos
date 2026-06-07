@@ -1,6 +1,6 @@
 from typing import Dict, Any, Tuple
 from decimal import Decimal
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -231,19 +231,27 @@ class SalaryService:
 
             net_amount = employee.base_salary
 
-            SalaryPaymentRepository.create(
-                employee_id=employee.id,
-                period_year=year,
-                period_month=month,
-                base_amount=employee.base_salary,
-                bonus=Decimal("0"),
-                deduction=Decimal("0"),
-                net_amount=net_amount,
-                status=SalaryPayment.Status.PENDING,
-                payment_method="CASH",
-                created_by_id=created_by_id,
-            )
-            created += 1
+            # Savepoint + catch so a concurrent generate_payroll that inserted
+            # this (employee, year, month) row between exists_for_period() and
+            # this create doesn't IntegrityError out and roll back the whole
+            # payroll run — just count it as skipped.
+            try:
+                with transaction.atomic():
+                    SalaryPaymentRepository.create(
+                        employee_id=employee.id,
+                        period_year=year,
+                        period_month=month,
+                        base_amount=employee.base_salary,
+                        bonus=Decimal("0"),
+                        deduction=Decimal("0"),
+                        net_amount=net_amount,
+                        status=SalaryPayment.Status.PENDING,
+                        payment_method="CASH",
+                        created_by_id=created_by_id,
+                    )
+                created += 1
+            except IntegrityError:
+                skipped += 1
 
         return ServiceResponse.success(data={
             "created": created,

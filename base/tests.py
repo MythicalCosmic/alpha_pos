@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 
@@ -10,9 +11,10 @@ pytestmark = pytest.mark.django_db
 
 
 class TestSyncConflictTiebreaker:
-    """Pre-fix: from_sync_dict accepted on `>=`, so two branches landing at
-    the same sync_version silently let whichever-arrived-second overwrite.
-    Now: strict `>`, with updated_at/branch_id deterministic tiebreakers."""
+    """Higher sync_version always wins. On an equal-version conflict the policy
+    is BRANCH-dominant: a branch (mode='local') keeps its own row, while the
+    cloud (mode='cloud') accepts the incoming branch push. This is deterministic
+    and doesn't depend on cross-machine clock skew."""
 
     def test_higher_version_wins(self):
         from base.models import User
@@ -54,7 +56,11 @@ class TestSyncConflictTiebreaker:
         local.refresh_from_db()
         assert local.first_name == 'Local', 'older version must not overwrite'
 
-    def test_equal_version_newer_updated_at_wins(self):
+    def test_equal_version_branch_keeps_local_even_if_incoming_newer(self):
+        """On a branch (mode='local'), an equal-version conflict keeps the local
+        row — the branch dominates the cloud — even when the incoming record has
+        a newer updated_at. (Old policy let newer updated_at win; reversed per
+        operator decision so a branch's data is never clobbered on a tie.)"""
         from base.models import User
 
         local = User.objects.create(
@@ -75,30 +81,30 @@ class TestSyncConflictTiebreaker:
             'updated_at': future,
         })
         local.refresh_from_db()
-        assert local.first_name == 'Newer'
+        assert local.first_name == 'Local'
 
-    def test_equal_version_older_updated_at_loses(self):
+    @override_settings(DEPLOYMENT_MODE='cloud')
+    def test_equal_version_cloud_accepts_branch_push(self):
+        """On the cloud (mode='cloud'), an equal-version conflict accepts the
+        incoming branch push — the branch is the source of truth."""
         from base.models import User
 
         local = User.objects.create(
             first_name='Local', last_name='Name', email='u@test.local',
             password='hashed', role='USER', sync_version=3,
         )
-        past = (timezone.now() - timedelta(hours=1)).isoformat()
-
         User.from_sync_dict({
             'uuid': str(local.uuid),
             'sync_version': 3,
             'is_deleted': False,
-            'first_name': 'Older',
+            'first_name': 'FromBranch',
             'last_name': 'Name',
             'email': 'u@test.local',
             'password': 'hashed',
             'role': 'USER',
-            'updated_at': past,
         })
         local.refresh_from_db()
-        assert local.first_name == 'Local'
+        assert local.first_name == 'FromBranch'
 
 
 class TestUserCredentialSync:

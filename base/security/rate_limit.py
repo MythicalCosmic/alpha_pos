@@ -17,17 +17,24 @@ def _get_ip(request):
 
 
 def _check_and_incr(key, max_attempts, window):
-    """Returns retry_after seconds if the limit is exceeded, else None."""
-    count = cache.get(key)
-    if count is not None and count >= max_attempts:
+    """Returns retry_after seconds if the limit is exceeded, else None.
+
+    Uses add()+incr() instead of get()-then-set(): incr is atomic on both
+    LocMem and Redis, so two concurrent requests can't both read count<max and
+    slip through the old check-then-set race. (A shared backend like Redis is
+    still required to enforce the limit ACROSS worker processes — LocMem is
+    per-process.)
+    """
+    # Seed the window only if absent; a no-op when the key already exists.
+    cache.add(key, 0, window)
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        # Key expired between add and incr — re-seed and count this request.
+        cache.add(key, 0, window)
+        count = cache.incr(key)
+    if count > max_attempts:
         return cache.ttl(key) if hasattr(cache, 'ttl') else window
-    if count is None:
-        cache.set(key, 1, window)
-    else:
-        try:
-            cache.incr(key)
-        except ValueError:
-            cache.set(key, 1, window)
     return None
 
 
