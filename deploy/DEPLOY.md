@@ -127,3 +127,41 @@ cd ~/alpha_pos && docker compose \
 Watchtower only updates containers labelled
 `com.centurylinklabs.watchtower.enable=true` (just `web`); db, redis and caddy
 are left untouched.
+
+## Self-redeploy without CI (no GitHub Actions / no registry)
+
+If GitHub Actions isn't available (billing lock, private-repo minutes, etc.),
+skip the image pipeline entirely: a small systemd timer on the server polls git
+and rebuilds when the deploy branch moves. You `git push`, the server redeploys
+itself — no Actions, no GHCR, no Watchtower.
+
+**Files:** `deploy/auto_redeploy.sh` + `deploy/systemd/alpha-pos-autodeploy.{service,timer}`.
+
+**Install (once, on the server):**
+```bash
+cd ~/alpha_pos && git checkout main && git pull
+chmod +x deploy/auto_redeploy.sh
+
+# Edit the unit if you don't deploy as root from /root/alpha_pos:
+#   User=, Environment=ALPHA_DIR=, ExecStart= and DEPLOY_BRANCH=
+sudo cp deploy/systemd/alpha-pos-autodeploy.service /etc/systemd/system/
+sudo cp deploy/systemd/alpha-pos-autodeploy.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now alpha-pos-autodeploy.timer
+
+# Test the poll immediately:
+sudo systemctl start alpha-pos-autodeploy.service
+journalctl -u alpha-pos-autodeploy.service -n 30 --no-pager
+```
+
+From then on: **push to `main` → within ~3 min the server fast-forwards and runs
+`docker compose … up -d --build`; migrations run on container start.** Check the
+timer with `systemctl list-timers | grep autodeploy`.
+
+Safe by design: fast-forward only (won't clobber server-side commits — it bails
+loudly if the branch diverged), a flock guard prevents overlapping deploys, and
+the gitignored `.env` / `docker-compose.edge.yml` are left untouched. To pause
+auto-deploy: `sudo systemctl disable --now alpha-pos-autodeploy.timer`.
+
+This and the CI+Watchtower path (above) are alternatives — run one or the other,
+not both.
