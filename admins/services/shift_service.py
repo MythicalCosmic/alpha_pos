@@ -1,5 +1,5 @@
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.db import transaction
 from django.db.models import Q, Sum, Count, DecimalField
 from django.db.models.functions import Coalesce
@@ -164,8 +164,18 @@ class ShiftService:
         return ServiceResponse.created(data=ShiftService._serialize_shift(shift))
 
     @staticmethod
+    def ensure_active_shift(user_id):
+        """Idempotent: return the user's open shift, creating one if none exists.
+        Used to auto-start a shift when a cashier logs in. Never errors."""
+        active = ShiftRepository.get_active_for_user(user_id)
+        if active:
+            return active
+        return ShiftRepository.create(
+            user_id=user_id, start_time=timezone.now(), status='ACTIVE')
+
+    @staticmethod
     @transaction.atomic
-    def end_shift(shift_id, user_id, notes, actor=None):
+    def end_shift(shift_id, user_id, notes, actor=None, counted=None):
         # Row-lock the shift first so two concurrent end_shift calls can't
         # both pass the ACTIVE guard and double-write the final stats.
         try:
@@ -237,12 +247,30 @@ class ShiftService:
             notes=notes or '',
         )
 
+        # Per-type settlement rows: freeze expected (system) per tender, plus the
+        # cashier's blind count + difference. The drawer figures are derived from
+        # OrderPayment (cash net of cashbox expenses).
+        from cashbox.services.drawer import expected_payment_totals
+        from cashbox.models import ShiftPaymentTotal
+        counted = counted or {}
+        for method, exp in expected_payment_totals(shift).items():
+            raw = counted.get(method)
+            try:
+                cnt = Decimal(str(raw)) if raw is not None else Decimal('0')
+            except (InvalidOperation, TypeError, ValueError):
+                cnt = Decimal('0')
+            ShiftPaymentTotal.objects.update_or_create(
+                shift=shift, method=method,
+                defaults={'expected_amount': exp, 'counted_amount': cnt,
+                          'difference': cnt - exp},
+            )
+
         shift = ShiftRepository.get_with_relations(shift.id)
         return ServiceResponse.success(data=ShiftService._serialize_shift(shift))
 
     @staticmethod
     @transaction.atomic
-    def reconcile(shift_id, actual_cash, notes, reconciled_by_id):
+    def reconcile(shift_id, actual_cash, notes, reconciled_by_id, confirmed=None):
         # Row-lock the shift first (same pattern as end_shift) so two concurrent
         # reconcile calls can't both pass the "no existing reconciliation" guard
         # and each create a CashReconciliation for the same shift.
@@ -276,6 +304,36 @@ class ShiftService:
             notes=notes or '',
             reconciled_by_id=reconciled_by_id,
         )
+
+        # Post the manager-confirmed money to the branch SAFE (cash) / BANK
+        # (cards) and freeze the per-type confirmed figures. confirmed defaults
+        # to the cashier's counted amount per method (the "copy" UX).
+        from cashbox.models import ShiftPaymentTotal
+        confirmed = confirmed or {}
+        confirmed_cash = Decimal('0')
+        confirmed_card = Decimal('0')
+        for spt in ShiftPaymentTotal.objects.filter(shift=shift):
+            raw = confirmed.get(spt.method)
+            if raw is not None:
+                try:
+                    amt = Decimal(str(raw))
+                except (InvalidOperation, TypeError, ValueError):
+                    amt = spt.counted_amount or Decimal('0')
+            else:
+                amt = spt.counted_amount or Decimal('0')
+            spt.confirmed_amount = amt
+            spt.save(update_fields=['confirmed_amount', 'synced_at', 'sync_version'])
+            if amt and amt > 0:
+                if spt.method == 'CASH':
+                    confirmed_cash += amt
+                else:
+                    confirmed_card += amt
+        if confirmed_cash > 0 or confirmed_card > 0:
+            from base.services.treasury_service import TreasuryService
+            TreasuryService.deposit_shift(
+                confirmed_cash, confirmed_card,
+                performed_by=reconciliation.reconciled_by, reference_id=shift.id,
+            )
 
         # Manager confirmed the cash: ENDED -> COMPLETED.
         ShiftRepository.update(shift, status='COMPLETED')

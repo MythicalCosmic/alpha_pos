@@ -74,3 +74,41 @@ class TestCashboxExpenseRecipients:
             s.id, Decimal('1000'), recipient_user_id=other.id,
             recipient_supplier_id=sup.id, created_by=u)
         assert st >= 400
+
+
+class TestShiftSettlement:
+    def test_close_and_confirm_posts_to_treasury(self):
+        from base.models import TreasuryAccount
+        from admins.services.shift_service import ShiftService
+        from cashbox.models import ShiftPaymentTotal
+        u = _user(); s = _shift(u)
+        _paid_cash_order(u, Decimal('100000'), 'CASH')
+        _paid_cash_order(u, Decimal('40000'), 'UZCARD')
+        res, st = ShiftService.end_shift(
+            s.id, u.id, '', actor=u,
+            counted={'CASH': '100000', 'UZCARD': '40000'})
+        assert st == 200, res
+        s.refresh_from_db()
+        assert s.status == 'ENDED'
+        cash_spt = ShiftPaymentTotal.objects.get(shift=s, method='CASH')
+        assert cash_spt.expected_amount == Decimal('100000.00')
+        assert cash_spt.counted_amount == Decimal('100000.00')
+        assert cash_spt.difference == Decimal('0.00')
+
+        res, st = ShiftService.reconcile(
+            s.id, actual_cash='100000', notes='', reconciled_by_id=u.id,
+            confirmed={'CASH': '100000', 'UZCARD': '40000'})
+        assert st == 201, res
+        s.refresh_from_db()
+        assert s.status == 'COMPLETED'
+        assert TreasuryAccount.objects.get(kind='SAFE').balance == Decimal('100000.00')
+        assert TreasuryAccount.objects.get(kind='BANK').balance == Decimal('40000.00')
+
+    def test_ensure_active_shift_idempotent(self):
+        from admins.services.shift_service import ShiftService
+        from base.models import Shift
+        u = _user()
+        a = ShiftService.ensure_active_shift(u.id)
+        b = ShiftService.ensure_active_shift(u.id)
+        assert a.id == b.id
+        assert Shift.objects.filter(user=u, status='ACTIVE').count() == 1

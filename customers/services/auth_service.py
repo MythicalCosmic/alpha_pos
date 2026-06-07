@@ -93,10 +93,14 @@ class AuthService:
         if user.role == User.RoleChoices.CASHIER:
             user_name = f'{user.first_name} {user.last_name}'.strip()
             ShiftNotification.on_cashier_login(user.id, user_name)
-
-        # Shifts are managed manually via the shift API (POST /shifts/start) —
-        # login no longer auto-opens a shift. The cashier opens/closes their own
-        # shift from the till; an open shift survives logout (resume on relogin).
+            # Auto-start the shift on login (idempotent — resumes an open one).
+            # A manager can still open a shift on a cashier's behalf via the
+            # shift API. Never let this block login.
+            try:
+                from admins.services.shift_service import ShiftService
+                ShiftService.ensure_active_shift(user.id)
+            except Exception:
+                logger.exception('auto-start shift failed during login (user=%s)', user.id)
 
         try:
             from hr.services import AttendanceService

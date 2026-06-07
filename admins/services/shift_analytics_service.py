@@ -631,9 +631,36 @@ def shift_handover_report(shift):
 
     distribution = _hourly_daily([shift])  # by_hour / peak_hour for this shift
 
+    # Per-type settlement (P2): expected (system) / counted / confirmed /
+    # difference per tender type, frozen at close.
+    from cashbox.models import ShiftPaymentTotal
+    settlement = [{
+        'method': spt.method,
+        'expected': _money(spt.expected_amount),
+        'counted': _money(spt.counted_amount),
+        'confirmed': _money(spt.confirmed_amount),
+        'difference': _money(spt.difference),
+    } for spt in ShiftPaymentTotal.objects.filter(shift=shift, is_deleted=False)]
+
+    # Cash paid OUT of the drawer this shift, grouped by category (P4).
+    from cashbox.models import CashboxExpense
+    exp_rows = (
+        CashboxExpense.objects.filter(shift=shift, is_deleted=False)
+        .values('category__name')
+        .annotate(total=Coalesce(Sum('amount'), Decimal('0'), output_field=_DEC),
+                  count=Count('id'))
+    )
+    cash_expenses = [{
+        'category': r['category__name'] or 'Uncategorized',
+        'total': _money(r['total']),
+        'count': r['count'],
+    } for r in exp_rows]
+
     return {
         'shift': row,                 # full KPIs incl. money.cash / money.card / payment_mix
         'cashier': {'id': shift.user_id, 'name': _user_name(shift.user)},
+        'settlement': settlement,     # per-type expected/counted/confirmed/diff
+        'cash_expenses': cash_expenses,
         'receipts': receipts,
         'receipt_count': len(receipts),
         'products': products,

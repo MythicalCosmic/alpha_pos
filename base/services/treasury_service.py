@@ -171,6 +171,32 @@ class TreasuryService:
 
     @staticmethod
     @transaction.atomic
+    def deposit_shift(cash_amount, card_amount, performed_by=None, reference_id=None):
+        """Post a shift's confirmed settlement into the treasury: cash → SAFE,
+        cards → BANK. Returns (safe_txn, bank_txn); either may be None."""
+        safe_txn = bank_txn = None
+        cash_amount = _to_decimal(cash_amount) or Decimal('0')
+        card_amount = _to_decimal(card_amount) or Decimal('0')
+        if cash_amount > 0:
+            safe = _get_account_locked(TreasuryAccount.Kind.SAFE)
+            safe_txn = _apply(
+                safe, cash_amount, TreasuryTransaction.Type.SHIFT_DEPOSIT,
+                description='Shift cash settlement',
+                reference_type='Shift', reference_id=reference_id,
+                performed_by=performed_by,
+            )
+        if card_amount > 0:
+            bank = _get_account_locked(TreasuryAccount.Kind.BANK)
+            bank_txn = _apply(
+                bank, card_amount, TreasuryTransaction.Type.SHIFT_DEPOSIT,
+                description='Shift card settlement',
+                reference_type='Shift', reference_id=reference_id,
+                performed_by=performed_by,
+            )
+        return safe_txn, bank_txn
+
+    @staticmethod
+    @transaction.atomic
     def transfer(from_kind, to_kind, amount, fee=0, performed_by=None, description=''):
         """Move `amount` from one account to another, charging `fee`.
 

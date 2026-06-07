@@ -128,6 +128,8 @@ def shift_end(request, shift_id):
         user_id=request.user.id,
         notes=data.get('notes', ''),
         actor=request.user,
+        # {method: counted_amount} from the cashier's blind per-type count.
+        counted=data.get('counted'),
     )
     return JsonResponse(result, status=status_code)
 
@@ -152,6 +154,9 @@ def shift_reconcile(request, shift_id):
         actual_cash=actual_cash,
         notes=data.get('notes', ''),
         reconciled_by_id=request.user.id,
+        # {method: confirmed_amount} the manager accepts; defaults per method to
+        # the cashier's counted figure. Posts CASH→SAFE, cards→BANK.
+        confirmed=data.get('confirmed'),
     )
     if result.get('success'):
         payload = result.get('data', {})
