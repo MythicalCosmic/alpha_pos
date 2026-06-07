@@ -37,6 +37,7 @@ def users(request):
         role=data.get('role', 'CASHIER'),
         password=data.get('password'),
         email=data.get('email'),
+        actor=request.user,
     )
     if result.get('success'):
         created_user = (result.get('data') or {}).get('user') or {}
@@ -65,7 +66,7 @@ def user_detail(request, user_id):
         if error:
             return json_response(error)
 
-        result, status_code = AdminUserService.update_user(user_id, **data)
+        result, status_code = AdminUserService.update_user(user_id, actor=request.user, **data)
         # Role escalation, account reactivation, and admin-driven password
         # resets all flow through update_user; without an audit row they leave
         # no trail and compromised admin credentials become undetectable.

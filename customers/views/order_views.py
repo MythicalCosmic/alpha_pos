@@ -31,10 +31,10 @@ def list_orders(request):
     cashier_id = request.GET.get('cashier_id')
     order_by = request.GET.get('order_by', '-created_at')
 
-    # Only ADMIN/CASHIER can pull other users' orders; everyone else is
-    # pinned to their own. Without this, a USER token could pass
-    # ?user_id=N to enumerate any other customer's orders.
-    if request.user.role not in ('ADMIN', 'CASHIER'):
+    # Only staff (ADMIN/CASHIER/MANAGER/WAITER) can pull other users' orders;
+    # everyone else is pinned to their own. Without this, a USER token could
+    # pass ?user_id=N to enumerate any other customer's orders.
+    if request.user.role not in STAFF_ROLES:
         user_id = str(request.user.id)
         cashier_id = None
 

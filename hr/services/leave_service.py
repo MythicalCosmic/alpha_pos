@@ -317,6 +317,14 @@ class LeaveService:
                 return ServiceResponse.validation_error(
                     errors={"days_count": f"Insufficient leave balance. Remaining: {remaining}, Requested: {days_count}"},
                 )
+        elif leave_type.annual_quota > 0:
+            # Quota-tracked type with no balance row for this year means the
+            # employee has zero days available — treat as 0 rather than
+            # silently allowing unlimited leave. Types with annual_quota == 0
+            # (e.g. unpaid leave) are not balance-tracked and pass through.
+            return ServiceResponse.validation_error(
+                errors={"days_count": f"No leave balance configured for this type/year ({year})"},
+            )
 
         leave_req = LeaveRequest.objects.create(
             employee_id=employee_id,
@@ -341,19 +349,26 @@ class LeaveService:
     def approve(cls,
                 leave_id: int,
                 approved_by_id: int) -> Tuple[Dict[str, Any], int]:
+        # Lock the LeaveRequest row first so concurrent approvals serialize.
+        # Without the row lock, two requests could both pass the PENDING check
+        # and each debit the balance, double-counting used_days.
         try:
-            leave_req = LeaveRequest.objects.select_related(
-                'employee__user', 'leave_type', 'approved_by'
-            ).get(pk=leave_id, is_deleted=False)
+            leave_req = LeaveRequest.objects.select_for_update().get(
+                pk=leave_id, is_deleted=False
+            )
         except LeaveRequest.DoesNotExist:
             return ServiceResponse.not_found(
                 f"Leave request with id {leave_id} not found"
             )
 
+        # Re-check status under the lock — a concurrent approval may have
+        # already flipped it.
         if leave_req.status != LeaveRequest.Status.PENDING:
             return ServiceResponse.error(
                 f"Cannot approve leave request in {leave_req.status} status. Must be PENDING."
             )
+
+        leave_type = leave_req.leave_type
 
         # Lock the balance row so concurrent approvals serialize and re-check
         # the available balance under the lock — request-time validation in
@@ -371,6 +386,13 @@ class LeaveService:
                 return ServiceResponse.validation_error(
                     errors={"days_count": f"Insufficient leave balance. Remaining: {remaining}, Requested: {leave_req.days_count}"},
                 )
+        elif leave_type and leave_type.annual_quota > 0:
+            # Quota-tracked type with no balance row means zero days available.
+            # Reject rather than silently approving unlimited leave. Types with
+            # annual_quota == 0 (e.g. unpaid leave) are not balance-tracked.
+            return ServiceResponse.validation_error(
+                errors={"days_count": f"No leave balance configured for this type/year ({leave_req.start_date.year})"},
+            )
 
         leave_req.status = LeaveRequest.Status.APPROVED
         leave_req.approved_by_id = approved_by_id

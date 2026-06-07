@@ -3,6 +3,7 @@
 Webhook auth, dispatcher resolution, /start handler, customer upsert.
 TelegramAPI.send_to_chat is monkeypatched so no real network calls happen.
 """
+import itertools
 import json
 
 import pytest
@@ -71,9 +72,17 @@ def _post(client, body, secret=SECRET):
     )
 
 
-def _start_update(chat_id=12345, first_name='Adrian'):
+_update_id_seq = itertools.count(1)
+
+
+def _start_update(chat_id=12345, first_name='Adrian', update_id=None):
+    # Each real Telegram update carries a distinct update_id; auto-assign a
+    # unique one per call so handle_update's redelivery dedup (which keys on
+    # update_id) doesn't drop a second genuine update in the same test.
+    if update_id is None:
+        update_id = next(_update_id_seq)
     return {
-        'update_id': 1,
+        'update_id': update_id,
         'message': {
             'message_id': 1,
             'chat': {'id': chat_id, 'type': 'private'},

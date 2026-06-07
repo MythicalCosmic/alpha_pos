@@ -113,10 +113,15 @@ class ShiftService:
         })
 
     @staticmethod
-    def get(shift_id):
+    def get(shift_id, actor=None):
         shift = ShiftRepository.get_with_relations(shift_id)
         if not shift:
             return ServiceResponse.not_found("Shift not found")
+
+        # A plain cashier may only see their own shift; managers/admins see any.
+        if actor is not None and getattr(actor, 'role', None) not in ('ADMIN', 'MANAGER') \
+                and shift.user_id != actor.id:
+            return ServiceResponse.forbidden("You can only view your own shift")
 
         data = ShiftService._serialize_shift(shift)
 
@@ -160,7 +165,7 @@ class ShiftService:
 
     @staticmethod
     @transaction.atomic
-    def end_shift(shift_id, user_id, notes):
+    def end_shift(shift_id, user_id, notes, actor=None):
         # Row-lock the shift first so two concurrent end_shift calls can't
         # both pass the ACTIVE guard and double-write the final stats.
         try:
@@ -170,6 +175,11 @@ class ShiftService:
         shift = ShiftRepository.get_with_relations(shift_id)
         if not shift:
             return ServiceResponse.not_found("Shift not found")
+        # Ownership: a cashier may only end their own shift; a manager/admin may
+        # close anyone's (e.g. a till a cashier walked away from).
+        if actor is not None and getattr(actor, 'role', None) not in ('ADMIN', 'MANAGER') \
+                and shift.user_id != actor.id:
+            return ServiceResponse.forbidden("You can only end your own shift")
         if shift.status != 'ACTIVE':
             return ServiceResponse.error("Shift is not active")
 
@@ -198,7 +208,7 @@ class ShiftService:
             is_paid=True,
             paid_at__gte=shift.start_time,
             paid_at__lte=now,
-        ).aggregate(
+        ).exclude(status='CANCELED').aggregate(
             total_revenue=Coalesce(
                 Sum('total_amount'),
                 Decimal('0.00'),
@@ -231,7 +241,16 @@ class ShiftService:
         return ServiceResponse.success(data=ShiftService._serialize_shift(shift))
 
     @staticmethod
+    @transaction.atomic
     def reconcile(shift_id, actual_cash, notes, reconciled_by_id):
+        # Row-lock the shift first (same pattern as end_shift) so two concurrent
+        # reconcile calls can't both pass the "no existing reconciliation" guard
+        # and each create a CashReconciliation for the same shift.
+        try:
+            Shift.objects.select_for_update().get(pk=shift_id, is_deleted=False)
+        except Shift.DoesNotExist:
+            return ServiceResponse.not_found("Shift not found")
+
         shift = ShiftRepository.get_with_relations(shift_id)
         if not shift:
             return ServiceResponse.not_found("Shift not found")
@@ -239,6 +258,8 @@ class ShiftService:
         if shift.status != 'ENDED':
             return ServiceResponse.error("Shift must be ended before reconciling")
 
+        # Re-checked AFTER acquiring the lock: the loser of a concurrent race
+        # sees the winner's row here and bails instead of double-creating.
         existing = CashReconciliationRepository.get_for_shift(shift_id)
         if existing:
             return ServiceResponse.error("Reconciliation already exists for this shift")
@@ -309,7 +330,7 @@ class ShiftService:
         money = Order.objects.filter(
             is_deleted=False, cashier_id=shift.user_id, is_paid=True,
             paid_at__gte=start, paid_at__lte=end,
-        ).aggregate(
+        ).exclude(status='CANCELED').aggregate(
             total_revenue=Coalesce(Sum('total_amount'), Decimal('0.00'), output_field=DecimalField()),
             cash_collected=Coalesce(
                 Sum('total_amount', filter=Q(payment_method='CASH') | Q(payment_method__isnull=True)),

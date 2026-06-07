@@ -180,12 +180,12 @@ class OrderRepository(BaseSyncRepository):
             paid=Count('id', filter=Q(is_paid=True)),
             unpaid=Count('id', filter=Q(is_paid=False, status__in=['PREPARING', 'READY', 'COMPLETED'])),
             total_revenue=Coalesce(
-                Sum('total_amount', filter=Q(is_paid=True)),
+                Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')),
                 Decimal('0.00'),
                 output_field=DecimalField()
             ),
             avg_order_value=Coalesce(
-                Avg('total_amount', filter=Q(is_paid=True)),
+                Avg('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')),
                 Decimal('0.00'),
                 output_field=DecimalField()
             ),
@@ -203,7 +203,7 @@ class OrderRepository(BaseSyncRepository):
 
         return list(qs.annotate(date=TruncDate('created_at')).values('date').annotate(
             orders=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
             paid=Count('id', filter=Q(is_paid=True)),
             cancelled=Count('id', filter=Q(status='CANCELED')),
         ).order_by('date'))
@@ -218,10 +218,10 @@ class OrderRepository(BaseSyncRepository):
 
         return list(qs.annotate(month=TruncMonth('created_at')).values('month').annotate(
             orders=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
             paid=Count('id', filter=Q(is_paid=True)),
             cancelled=Count('id', filter=Q(status='CANCELED')),
-            avg_order_value=Coalesce(Avg('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            avg_order_value=Coalesce(Avg('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
         ).order_by('month'))
 
     @classmethod
@@ -230,7 +230,7 @@ class OrderRepository(BaseSyncRepository):
             cls.model.objects.filter(is_deleted=False)
             .annotate(year=TruncYear('created_at')).values('year').annotate(
                 orders=Count('id'),
-                revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+                revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
                 paid=Count('id', filter=Q(is_paid=True)),
                 cancelled=Count('id', filter=Q(status='CANCELED')),
             ).order_by('year')
@@ -248,7 +248,7 @@ class OrderRepository(BaseSyncRepository):
             'cashier_id', 'cashier__first_name', 'cashier__last_name'
         ).annotate(
             orders=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
             paid=Count('id', filter=Q(is_paid=True)),
             cancelled=Count('id', filter=Q(status='CANCELED')),
         ).order_by('-orders'))
@@ -263,7 +263,7 @@ class OrderRepository(BaseSyncRepository):
 
         return list(qs.values('status').annotate(
             count=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
         ).order_by('status'))
 
     @classmethod
@@ -276,7 +276,7 @@ class OrderRepository(BaseSyncRepository):
 
         return list(qs.values('order_type').annotate(
             count=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
         ).order_by('order_type'))
 
     @classmethod
@@ -318,5 +318,5 @@ class OrderRepository(BaseSyncRepository):
 
         return list(qs.annotate(hour=ExtractHour('created_at')).values('hour').annotate(
             count=Count('id'),
-            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True)), Decimal('0.00'), output_field=DecimalField()),
+            revenue=Coalesce(Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')), Decimal('0.00'), output_field=DecimalField()),
         ).order_by('hour'))

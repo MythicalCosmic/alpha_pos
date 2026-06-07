@@ -31,8 +31,28 @@ DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6'
 DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
 
 
+def _timeout_seconds():
+    # call_ai runs synchronously in the request/worker thread. Without an
+    # explicit timeout the Anthropic SDK waits up to 600s, pinning a worker on a
+    # hung provider. Cap it (override via LLM_TIMEOUT_SECONDS).
+    try:
+        return float(getattr(settings, 'LLM_TIMEOUT_SECONDS', 30) or 30)
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def get_provider():
     return (getattr(settings, 'AI_PROVIDER', '') or 'claude').strip().lower()
+
+
+def key_missing():
+    """True when the *active* provider's API key is not configured. Lets callers
+    fail fast with a clear message instead of gating on one provider's key
+    (the view used to check GEMINI_API_KEY even when the default provider is
+    Claude, so a Claude-configured deployment was wrongly reported unconfigured)."""
+    if get_provider() == 'gemini':
+        return not (getattr(settings, 'GEMINI_API_KEY', '') or '')
+    return not (getattr(settings, 'ANTHROPIC_API_KEY', '') or '')
 
 
 def call_ai(prompt, system=None, max_tokens=2048):
@@ -50,7 +70,7 @@ def _call_claude(prompt, system, max_tokens):
         return None, 'llm_key_missing'
     model = getattr(settings, 'ANTHROPIC_MODEL', '') or DEFAULT_CLAUDE_MODEL
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key, timeout=_timeout_seconds())
         kwargs = {
             'model': model,
             'max_tokens': max_tokens,
@@ -83,7 +103,15 @@ def _call_gemini(prompt, system, max_tokens):
     # Gemini has no separate system field — prepend it to the prompt.
     contents = (system + '\n\n' + prompt) if system else prompt
     try:
-        client = genai.Client(api_key=api_key)
+        # google-genai takes the request timeout (in milliseconds) via
+        # http_options; fall back gracefully if the installed SDK predates it.
+        try:
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=int(_timeout_seconds() * 1000)),
+            )
+        except (TypeError, AttributeError):
+            client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
             model=model,
             contents=contents,

@@ -229,8 +229,23 @@ def get_sync_batch_size():
     return getattr(settings, 'SYNC_BATCH_SIZE', 500)
 
 
+def get_sync_max_queue_attempts():
+    # After this many failed delivery attempts a queued record is treated as a
+    # poison message: it stops being re-sent every cycle (dead-lettered) so a
+    # permanently-rejected row can't spin forever or drown out healthy records.
+    # 0 disables the cap. Surfaced via SyncQueue.dead_letter_count().
+    return getattr(settings, 'SYNC_MAX_QUEUE_ATTEMPTS', 25)
+
+
 def get_pull_enabled():
     return getattr(settings, 'SYNC_PULL_ENABLED', True)
+
+
+def get_sync_require_https():
+    # When True, refuse to talk to a plaintext http:// cloud URL (the branch
+    # token and password hashes would traverse it in clear). Off by default so
+    # existing LAN deployments keep working, but logged as a warning.
+    return getattr(settings, 'SYNC_REQUIRE_HTTPS', False)
 
 
 def is_local_mode():

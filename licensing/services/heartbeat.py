@@ -379,9 +379,18 @@ def register(email: str, plan_id=None) -> Tuple[Dict[str, Any], int]:
     # heartbeat case — an active MITM that substitutes the key can re-sign with
     # it — so TLS (_require_https, enforced in production) stays the primary
     # defense. But a *present-but-invalid* signature means tampering or
-    # corruption in flight: refuse to persist the key. A missing signature is
-    # tolerated for backward compatibility with control centers that don't yet
-    # sign /register, with a warning to harden that side.
+    # corruption in flight: refuse to persist the key.
+    #
+    # A *present-but-invalid* signature always means tampering or corruption in
+    # flight: refuse to persist the key. A *missing* signature is tolerated by
+    # default (and only warned about), because TLS (_require_https, enforced in
+    # production) is the primary defense and this signature is weaker than the
+    # heartbeat's anyway — a MITM that substitutes the key can re-sign with it.
+    # Operators whose control center signs /register can flip
+    # LICENSE_REQUIRE_REGISTER_SIGNATURE=True to make a signature mandatory.
+    # NB: keying mandatory-enforcement off DEBUG would break real activation,
+    # since production builds (and the test runner) force DEBUG=False even
+    # against a control center that doesn't sign /register.
     reg_sig = resp.headers.get('X-Response-Signature', '')
     if reg_sig:
         if not _verify_response_signature(body, reg_sig, key):
@@ -391,10 +400,21 @@ def register(email: str, plan_id=None) -> Tuple[Dict[str, Any], int]:
                 'message': 'Control center response failed signature verification.',
                 'code': 'response_signature_invalid',
             }, 502)
+    elif getattr(settings, 'LICENSE_REQUIRE_REGISTER_SIGNATURE', False):
+        logger.error(
+            'register: control center response is unsigned and '
+            'LICENSE_REQUIRE_REGISTER_SIGNATURE is enabled; refusing the key.',
+        )
+        return ({
+            'success': False,
+            'message': 'Control center response was not signed.',
+            'code': 'response_signature_missing',
+        }, 502)
     else:
         logger.warning(
-            'register: control center did not sign the response; relying on TLS '
-            'alone. Harden the control center to sign /register responses.',
+            'register: control center did not sign the response. TLS is the '
+            'primary defense; set LICENSE_REQUIRE_REGISTER_SIGNATURE=True once '
+            'the control center signs /register responses to enforce it.',
         )
 
     # TOCTOU close: recheck the singleton status INSIDE the row lock. The

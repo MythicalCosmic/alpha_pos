@@ -14,7 +14,7 @@ a 5,000 fee → BANK -1,000,000, SAFE +995,000, fee 5,000.
 """
 from decimal import Decimal, InvalidOperation
 
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 
 from base.models import TreasuryAccount, TreasuryTransaction
@@ -33,14 +33,37 @@ def _to_decimal(value):
 def _get_account_locked(kind):
     """Row-locked account for the given kind, created at zero if missing.
 
-    Must run inside an atomic block (callers are decorated)."""
+    Must run inside an atomic block (callers are decorated).
+
+    There is no DB-level uniqueness on (kind, is_deleted), so two concurrent
+    transactions could both miss the SELECT and each INSERT a row — duplicate
+    SAFE/BANK accounts whose balances then diverge. Guard against the race in
+    code: catch the IntegrityError from a losing INSERT and re-fetch the row
+    the winner created, with the lock held. RECOMMENDED follow-up (separate
+    migration, intentionally not added here): a
+    UniqueConstraint(fields=['kind'], condition=Q(is_deleted=False)) so the DB
+    enforces a single active account per kind."""
     acct = (
         TreasuryAccount.objects.select_for_update()
         .filter(kind=kind, is_deleted=False)
         .first()
     )
-    if not acct:
-        acct = TreasuryAccount.objects.create(kind=kind, balance=Decimal('0'))
+    if acct:
+        return acct
+    try:
+        with transaction.atomic():
+            acct = TreasuryAccount.objects.create(kind=kind, balance=Decimal('0'))
+    except IntegrityError:
+        # Lost an INSERT race (only possible once the unique constraint above
+        # exists) — the winner's row is now committed; fall through to re-fetch.
+        acct = None
+    if acct is None:
+        acct = (
+            TreasuryAccount.objects.select_for_update()
+            .filter(kind=kind, is_deleted=False)
+            .first()
+        )
+    else:
         acct = TreasuryAccount.objects.select_for_update().get(pk=acct.pk)
     return acct
 
@@ -104,6 +127,11 @@ class TreasuryService:
 
     @staticmethod
     def get_accounts():
+        # get_or_create only collapses concurrent creators into one row when the
+        # DB enforces uniqueness on (kind, active); without the recommended
+        # UniqueConstraint(kind, condition=is_deleted=False) two callers can
+        # still each INSERT an account. .filter(...).first() picks the oldest of
+        # any duplicates so the display stays stable until the constraint lands.
         data = {}
         for kind in (TreasuryAccount.Kind.SAFE, TreasuryAccount.Kind.BANK):
             acct, _ = TreasuryAccount.objects.get_or_create(

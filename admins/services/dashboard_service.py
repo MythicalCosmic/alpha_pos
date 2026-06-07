@@ -27,7 +27,7 @@ def _today_revenue():
     agg = Order.objects.filter(
         is_deleted=False, is_paid=True,
         created_at__gte=start, created_at__lt=end,
-    ).aggregate(
+    ).exclude(status='CANCELED').aggregate(
         total=Sum('total_amount'),
         orders=Count('id'),
     )

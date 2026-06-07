@@ -79,15 +79,18 @@ def receive(request):
 
     branch_id = request.META.get('HTTP_X_BRANCH_ID', 'unknown')
 
-    # If the token was bound to a specific branch, the caller cannot claim a
-    # different branch_id — otherwise any holder of any valid token could
-    # write records as another branch and poison per-branch filtering.
-    if bound_branch is not None and branch_id not in (bound_branch, 'unknown'):
-        return JsonResponse(
-            {'error': f'X-Branch-ID does not match token (expected {bound_branch})'},
-            status=403,
-        )
+    # If the token was bound to a specific branch, the caller MUST present an
+    # X-Branch-ID equal to that bound branch. Previously a bound token also
+    # accepted the literal 'unknown' (and a missing header defaults to
+    # 'unknown'), which let any token holder forge records under the catch-all
+    # 'unknown' branch — bypassing per-branch filtering. Reject 'unknown' and
+    # any mismatch outright.
     if bound_branch is not None:
+        if branch_id != bound_branch:
+            return JsonResponse(
+                {'error': f'X-Branch-ID does not match token (expected {bound_branch})'},
+                status=403,
+            )
         branch_id = bound_branch
     elif not is_cloud:
         # Legacy unbound ALLOWED_BRANCH_TOKENS path: the X-Branch-ID is fully
@@ -123,7 +126,14 @@ def receive(request):
     if isinstance(data, list):
         if not data:
             return JsonResponse({'error': 'Empty records'}, status=400)
-        model_name = data[0].get('model_name', 'order')
+        # Require an explicit model_name — defaulting to 'order' would write a
+        # malformed array as Orders.
+        model_name = data[0].get('model_name')
+        if not model_name:
+            return JsonResponse(
+                {'error': 'Array format requires model_name on the first item'},
+                status=400,
+            )
         records = [item.get('data', item) for item in data]
     elif isinstance(data, dict):
         model_name = data.get('model')
@@ -258,6 +268,10 @@ def changes(request):
 
     requesting_branch = request.META.get('HTTP_X_BRANCH_ID', '')
     if bound_branch is not None:
+        # A bound token may only claim its bound branch. Reject any mismatch
+        # (including the catch-all 'unknown') so a token holder can't request
+        # another branch's change feed. An absent/empty header is tolerated and
+        # pinned to the bound branch (the response is scoped to it regardless).
         if requesting_branch and requesting_branch != bound_branch:
             return JsonResponse(
                 {'error': f'X-Branch-ID does not match token (expected {bound_branch})'},

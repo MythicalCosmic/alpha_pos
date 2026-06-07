@@ -420,8 +420,9 @@ class WaiterOrderService:
         return ServiceResponse.success(message='Item removed from order successfully')
 
     @staticmethod
+    @transaction.atomic
     def mark_ready(order_id, waiter_user_id):
-        order = OrderRepository.get_by_id(order_id)
+        order = OrderRepository.get_for_update(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
 
@@ -466,15 +467,26 @@ class WaiterOrderService:
         order.status = 'CANCELED'
         order.save(update_fields=['status'])
 
-        # Cancelling a paid order must reverse the cash-register entry.
-        # Only cash reverses through the drawer; card/Payme settle externally.
-        if (
-            order.is_paid
-            and order.total_amount
-            and (order.payment_method == 'CASH' or order.payment_method is None)
-        ):
+        # Cancelling a paid order must reverse the cash that actually hit the
+        # drawer. A MIXED order reverses only its cash portion (bill total minus
+        # whatever settled externally via card/Payme); card/Payme settle
+        # off-drawer. Mirrors the customer-service reversal so the till
+        # reconciles identically regardless of which surface cancelled.
+        if order.is_paid:
             from base.services.inkassa_service import InkassaService
-            InkassaService.add_to_register(-order.total_amount)
+            from base.models import OrderPayment
+            from django.db.models import Sum
+            from decimal import Decimal
+            pay_qs = OrderPayment.objects.filter(order=order)
+            if pay_qs.exists():
+                noncash = pay_qs.exclude(method='CASH').aggregate(s=Sum('amount'))['s'] or Decimal('0')
+                cash_in_drawer = Decimal(order.total_amount or 0) - noncash
+            elif order.payment_method in ('CASH', None) and order.total_amount:
+                cash_in_drawer = Decimal(order.total_amount or 0)
+            else:
+                cash_in_drawer = Decimal('0')
+            if cash_in_drawer > 0:
+                InkassaService.add_to_register(-cash_in_drawer)
 
         if order.table:
             TableRepository.update_status(order.table_id, Table.Status.AVAILABLE)

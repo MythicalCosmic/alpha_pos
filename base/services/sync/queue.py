@@ -58,20 +58,29 @@ class SyncQueue:
         return [cls._to_dict(r) for r in SyncQueueRecord.objects.all().iterator()]
 
     @classmethod
-    def get_by_model(cls, model_name):
-        from base.models import SyncQueueRecord
-        return [
-            cls._to_dict(r)
-            for r in SyncQueueRecord.objects.filter(model_name=model_name).iterator()
-        ]
-
-    @classmethod
     def get_grouped(cls):
+        # Source of the outbound batch. Excludes dead-lettered records (attempts
+        # at/over the cap) so a permanently-rejected row stops being retried
+        # every cycle instead of spinning forever and blocking healthy records.
         from base.models import SyncQueueRecord
+        from base.services.sync.config import get_sync_max_queue_attempts
+        max_attempts = get_sync_max_queue_attempts()
+        qs = SyncQueueRecord.objects.all()
+        if max_attempts:
+            qs = qs.filter(attempts__lt=max_attempts)
         grouped = defaultdict(list)
-        for r in SyncQueueRecord.objects.all().iterator():
+        for r in qs.iterator():
             grouped[r.model_name].append(cls._to_dict(r))
         return dict(grouped)
+
+    @classmethod
+    def dead_letter_count(cls):
+        from base.models import SyncQueueRecord
+        from base.services.sync.config import get_sync_max_queue_attempts
+        max_attempts = get_sync_max_queue_attempts()
+        if not max_attempts:
+            return 0
+        return SyncQueueRecord.objects.filter(attempts__gte=max_attempts).count()
 
     @classmethod
     def queued_uuids_for_model(cls, model_name):
@@ -90,7 +99,11 @@ class SyncQueue:
         return total, failed
 
     @classmethod
-    def remove(cls, uuids):
+    def remove(cls, uuids, model_name=None):
+        # The queue's unique key is (model_name, record_uuid): two different
+        # models can legitimately hold the same record_uuid. Scope by model_name
+        # when the caller knows it so we never delete a sibling model's row that
+        # happens to share a uuid. model_name stays optional for back-compat.
         from base.models import SyncQueueRecord
         coerced = []
         for u in uuids:
@@ -100,22 +113,31 @@ class SyncQueue:
                 continue
         if not coerced:
             return
-        SyncQueueRecord.objects.filter(record_uuid__in=coerced).delete()
+        qs = SyncQueueRecord.objects.filter(record_uuid__in=coerced)
+        if model_name is not None:
+            qs = qs.filter(model_name=model_name)
+        qs.delete()
 
     @classmethod
-    def mark_failed(cls, uuid_val, error):
+    def mark_failed(cls, uuid_val, error, model_name=None):
         from base.models import SyncQueueRecord
         try:
             record_uuid = _coerce_uuid(uuid_val)
         except (ValueError, TypeError):
             return
-        SyncQueueRecord.objects.filter(record_uuid=record_uuid).update(
+        qs = SyncQueueRecord.objects.filter(record_uuid=record_uuid)
+        if model_name is not None:
+            qs = qs.filter(model_name=model_name)
+        qs.update(
             attempts=models_F_plus_one(),
             last_error=str(error)[:500],
         )
 
     @classmethod
-    def mark_batch_failed(cls, uuids, error):
+    def mark_batch_failed(cls, uuids, error, model_name=None):
+        # Scope by model_name (the unique key's other half) when known so a
+        # failure on one model doesn't bump attempts on a different model's row
+        # sharing the same record_uuid.
         from base.models import SyncQueueRecord
         coerced = []
         for u in uuids:
@@ -125,7 +147,10 @@ class SyncQueue:
                 continue
         if not coerced:
             return
-        SyncQueueRecord.objects.filter(record_uuid__in=coerced).update(
+        qs = SyncQueueRecord.objects.filter(record_uuid__in=coerced)
+        if model_name is not None:
+            qs = qs.filter(model_name=model_name)
+        qs.update(
             attempts=models_F_plus_one(),
             last_error=str(error)[:500],
         )

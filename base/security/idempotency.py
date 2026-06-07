@@ -4,12 +4,20 @@ from functools import wraps
 
 from django.db import IntegrityError, transaction
 from django.http import JsonResponse
+from django.utils import timezone
 
 from base.models import IdempotencyKey
 
 logger = logging.getLogger(__name__)
 
 _SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+
+# An in-flight claim (response_status == 0) older than this is treated as a
+# zombie left behind by a crashed/killed worker. Without this, such a row would
+# wedge every future retry into the 409 in-progress branch forever. Kept short:
+# long enough to outlast a normal request, short enough that a real crash
+# recovers quickly.
+INFLIGHT_TTL_SECONDS = 90
 
 
 def idempotent(scope):
@@ -78,17 +86,31 @@ def idempotent(scope):
                     # request rather than 500.
                     return view_func(request, *args, **kwargs)
                 if record.response_status == 0:
-                    return JsonResponse(
-                        {
-                            'success': False,
-                            'message': 'Duplicate request — original is still in progress.',
-                        },
-                        status=409,
+                    age = (timezone.now() - record.created_at).total_seconds()
+                    if age < INFLIGHT_TTL_SECONDS:
+                        # Genuinely still in flight — fail fast so the retry
+                        # doesn't double-act.
+                        return JsonResponse(
+                            {
+                                'success': False,
+                                'message': 'Duplicate request — original is still in progress.',
+                            },
+                            status=409,
+                        )
+                    # Stale zombie claim from a crashed worker. Take it over:
+                    # reset created_at (so a fresh crash gets its own TTL) and
+                    # run the view as if we own the claim.
+                    IdempotencyKey.objects.filter(pk=record.pk).update(
+                        response_status=0,
+                        response_body={},
+                        created_at=timezone.now(),
                     )
-                return JsonResponse(
-                    record.response_body,
-                    status=record.response_status,
-                )
+                    we_own_it = True
+                else:
+                    return JsonResponse(
+                        record.response_body,
+                        status=record.response_status,
+                    )
 
             # We won the claim. Run the view and persist its response.
             # If the view raises, drop the claim so a retry can run fresh —

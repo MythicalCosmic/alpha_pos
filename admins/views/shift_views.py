@@ -89,7 +89,7 @@ def shifts(request):
 @pos_staff_required
 def shift_detail(request, shift_id):
     # pos_staff so a cashier can see their own shift's stats, not just managers.
-    result, status_code = ShiftService.get(shift_id)
+    result, status_code = ShiftService.get(shift_id, actor=request.user)
     return JsonResponse(result, status=status_code)
 
 
@@ -127,6 +127,7 @@ def shift_end(request, shift_id):
         shift_id=shift_id,
         user_id=request.user.id,
         notes=data.get('notes', ''),
+        actor=request.user,
     )
     return JsonResponse(result, status=status_code)
 

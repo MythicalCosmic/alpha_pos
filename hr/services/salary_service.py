@@ -118,6 +118,30 @@ class SalaryService:
             "salary": cls.serialize(salary),
         })
 
+    @staticmethod
+    def _validate_period(period_year: int, period_month: int):
+        # Reject out-of-range months/years. Without this, period_month 0 or 13
+        # creates payable rows that the exists_for_period guard treats as
+        # distinct from the valid 1..12 months, allowing duplicate payroll.
+        errors = {}
+        try:
+            month = int(period_month)
+        except (TypeError, ValueError):
+            month = None
+        try:
+            yr = int(period_year)
+        except (TypeError, ValueError):
+            yr = None
+
+        if month is None or not (1 <= month <= 12):
+            errors["period_month"] = "must be between 1 and 12"
+        if yr is None or not (2000 <= yr <= 2100):
+            errors["period_year"] = "must be between 2000 and 2100"
+
+        if errors:
+            return ServiceResponse.validation_error(errors=errors)
+        return None
+
     @classmethod
     @transaction.atomic
     def create(cls,
@@ -133,6 +157,10 @@ class SalaryService:
         employee = EmployeeRepository.get_by_id(employee_id)
         if not employee:
             return ServiceResponse.not_found("Employee not found")
+
+        period_error = cls._validate_period(period_year, period_month)
+        if period_error:
+            return period_error
 
         if SalaryPaymentRepository.exists_for_period(employee_id, period_year, period_month):
             return ServiceResponse.validation_error(
@@ -188,6 +216,10 @@ class SalaryService:
                          year: int,
                          month: int,
                          created_by_id: int = None) -> Tuple[Dict[str, Any], int]:
+        period_error = cls._validate_period(year, month)
+        if period_error:
+            return period_error
+
         active_employees = EmployeeRepository.get_active()
         created = 0
         skipped = 0

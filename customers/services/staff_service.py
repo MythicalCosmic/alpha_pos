@@ -3,23 +3,22 @@ from base.helpers.response import ServiceResponse
 
 
 def _serialize_staff(user, on_shift=False):
+    # PUBLIC pre-auth payload: shown on the login picker before anyone logs in.
+    # Only the fields the monoblock needs to render the picker — never email,
+    # permissions, or last_login_at, which would leak the staff roster and
+    # account metadata to any unauthenticated caller.
     return {
         'id': user.id,
         'uuid': str(user.uuid),
         'first_name': user.first_name,
         'last_name': user.last_name,
         'name': f"{user.first_name} {user.last_name}".strip(),
-        # The login screen submits email + password to /auth-login, so the
-        # list has to carry the email the frontend will log in with.
-        'email': user.email,
         'role': user.role,
         # Managers share the cashier login tier but unlock settings in the UI.
-        # The frontend gates the settings menu on this flag / on role/permissions.
+        # The frontend gates the settings menu on this flag.
         'is_manager': user.role == 'MANAGER',
-        'permissions': user.permissions or [],
         # Lets the monoblock show "on shift" and offer resume vs. start.
         'on_shift': on_shift,
-        'last_login_at': user.last_login_at.isoformat() if user.last_login_at else None,
     }
 
 

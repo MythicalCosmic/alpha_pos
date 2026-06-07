@@ -40,7 +40,8 @@ class SyncService:
         if not is_local_mode():
             return {'success': False, 'message': 'Push only available in local mode'}
 
-        if not cls._acquire_lock('push'):
+        push_token = cls._acquire_lock('push')
+        if not push_token:
             return {'success': False, 'message': 'Push already in progress'}
 
         try:
@@ -75,7 +76,15 @@ class SyncService:
             confirmed_by_model = {}
             batch_size = get_sync_batch_size()
 
+            # A full-batch send failure (transport down, HTTP error) means the
+            # whole-batch send is failing, not one record. Stop the entire push:
+            # continuing to push dependent models would just fail FK resolution
+            # on the cloud (their parents didn't land) and stack more blocking
+            # retry backoff. Everything stays queued and retries next cycle.
+            stop_push = False
             for model_name in sorted_models:
+                if stop_push:
+                    break
                 records = grouped[model_name]
 
                 for i in range(0, len(records), batch_size):
@@ -101,6 +110,7 @@ class SyncService:
                             SyncQueue.mark_batch_failed(
                                 failed_in_batch,
                                 'receiver rejected record(s) in a partial batch',
+                                model_name=model_name,
                             )
                             msg = (f'{model_name}: {len(failed_in_batch)} of '
                                    f'{len(batch_uuids)} record(s) rejected by receiver')
@@ -111,12 +121,22 @@ class SyncService:
                         total_failed += len(batch)
                         error_msg = f'{model_name}: {result.get("error", "Unknown")}'
                         errors.append(error_msg)
-                        SyncQueue.mark_batch_failed(batch_uuids, result.get('error', 'Unknown'))
+                        SyncQueue.mark_batch_failed(
+                            batch_uuids, result.get('error', 'Unknown'),
+                            model_name=model_name,
+                        )
                         logger.warning(f'Sync failed for {model_name}: {result.get("error")}')
+                        stop_push = True
                         break
 
             if synced_uuids:
-                SyncQueue.remove(synced_uuids)
+                # Remove per-model so a confirmed uuid only deletes that model's
+                # queue row (the unique key is (model_name, record_uuid); two
+                # models can share a record_uuid). confirmed_by_model already
+                # carries the model→uuids breakdown the receiver confirmed.
+                for mname, uuids in confirmed_by_model.items():
+                    if uuids:
+                        SyncQueue.remove(uuids, model_name=mname)
 
             # Stamp synced_at on the local rows the cloud confirmed so
             # objects.unsynced() is a meaningful "not yet pushed" signal — both
@@ -145,43 +165,7 @@ class SyncService:
                 'errors': errors,
             }
         finally:
-            cls._release_lock('push')
-
-    @classmethod
-    def pull(cls, data, source_branch=None):
-        if not cls._acquire_lock('pull'):
-            return {'success': False, 'message': 'Pull already in progress'}
-
-        try:
-            models = get_all_models()
-            total_created = 0
-            total_updated = 0
-            total_errors = 0
-            details = {}
-
-            for name in SYNC_ORDER:
-                if name not in data:
-                    continue
-
-                model_class = models.get(name)
-                if not model_class:
-                    continue
-
-                result = cls._apply_records(model_class, data[name], source_branch)
-                details[name] = result
-                total_created += result['created']
-                total_updated += result['updated']
-                total_errors += len(result['errors'])
-
-            return {
-                'success': True,
-                'total_created': total_created,
-                'total_updated': total_updated,
-                'total_errors': total_errors,
-                'details': details,
-            }
-        finally:
-            cls._release_lock('pull')
+            cls._release_lock('push', push_token)
 
     @classmethod
     def pull_from_cloud(cls):
@@ -195,7 +179,8 @@ class SyncService:
         if not get_pull_enabled():
             return {'success': False, 'message': 'Pull disabled'}
 
-        if not cls._acquire_lock('pull'):
+        pull_token = cls._acquire_lock('pull')
+        if not pull_token:
             return {'success': False, 'message': 'Pull already in progress'}
 
         try:
@@ -205,13 +190,16 @@ class SyncService:
 
             SyncStatus.set_online(True)
 
-            status_data = SyncStatus.get()
-            cursor = status_data.get('last_pull')
+            cursor = SyncStatus.get_cursor()
 
             models = get_all_models()
             total_created = 0
             total_updated = 0
             errors = []
+            # Records deferred because a required FK parent hadn't been applied
+            # yet, keyed by model class. Retried after paging completes so a
+            # child fetched on an earlier page than its parent isn't lost.
+            deferred_by_model = {}
             # Page through the change set. The server caps each response at
             # per_page and returns has_more + next_since (the frontier that is
             # safe to resume from). We must follow that frontier instead of
@@ -241,6 +229,10 @@ class SyncService:
                     total_updated += apply_result['updated']
                     if apply_result['errors']:
                         errors.extend(apply_result['errors'])
+                    if apply_result['deferred']:
+                        deferred_by_model.setdefault(model_class, []).extend(
+                            apply_result['deferred']
+                        )
 
                 has_more = result.get('has_more', False)
                 next_since = result.get('next_since')
@@ -250,7 +242,7 @@ class SyncService:
                     # Fully drained — advance the persisted cursor to the
                     # server's snapshot time.
                     if server_ts:
-                        SyncStatus.update(last_pull=server_ts)
+                        SyncStatus.set_cursor(server_ts)
                     break
 
                 if not next_since or next_since == cursor:
@@ -268,10 +260,41 @@ class SyncService:
                 # makes the paging crash-safe (a mid-loop failure resumes here
                 # instead of re-pulling from the start). Re-applies are
                 # idempotent upserts.
-                SyncStatus.update(last_pull=next_since)
+                SyncStatus.set_cursor(next_since)
                 cursor = next_since
             else:
                 logger.warning('Pull: hit MAX_PAGES (%s); will resume next cycle', MAX_PAGES)
+
+            # Retry FK-deferred records now that the whole change set is applied
+            # (a full-drain pull fetches parents across pages in dependency
+            # order). A few passes resolve grandparent→parent→child chains that
+            # arrived out of page order. Whatever is still unresolved is a
+            # genuine orphan (parent never present) — log it rather than lose it
+            # silently. Re-applies are idempotent upserts.
+            MAX_FK_RETRY_PASSES = 3
+            for _ in range(MAX_FK_RETRY_PASSES):
+                if not deferred_by_model:
+                    break
+                next_deferred = {}
+                progressed = False
+                for model_class, recs in deferred_by_model.items():
+                    retry_result = cls._apply_records(model_class, recs)
+                    total_created += retry_result['created']
+                    total_updated += retry_result['updated']
+                    if retry_result['created'] or retry_result['updated']:
+                        progressed = True
+                    if retry_result['deferred']:
+                        next_deferred[model_class] = retry_result['deferred']
+                deferred_by_model = next_deferred
+                if not progressed:
+                    break
+            if deferred_by_model:
+                stuck = sum(len(v) for v in deferred_by_model.values())
+                logger.warning(
+                    'Pull: %d record(s) unresolved after retries (missing parent?)',
+                    stuck,
+                )
+                errors.append(f'{stuck} record(s) unresolved (missing parent)')
 
             SyncStatus.set_last_pull(total_created, total_updated, [str(e) for e in errors[:1]])
 
@@ -288,50 +311,13 @@ class SyncService:
                 'errors': [str(e) for e in errors],
             }
         finally:
-            cls._release_lock('pull')
-
-    @classmethod
-    def acknowledge(cls, data):
-        models = get_all_models()
-        now = timezone.now()
-        for name, uuids in data.items():
-            model_class = models.get(name)
-            if model_class and uuids:
-                # `.update()` is one SQL statement; the previous loop fired
-                # one UPDATE per row plus all SyncMixin.save() side effects
-                # (queue add, signals). Acknowledgement should be cheap.
-                model_class.objects.filter(uuid__in=uuids).update(synced_at=now)
-        return {'success': True, 'message': 'Records acknowledged'}
+            cls._release_lock('pull', pull_token)
 
     @classmethod
     def get_unsynced(cls, model_class, branch_id=None):
         qs = model_class.objects.unsynced()
         if branch_id:
             qs = qs.filter(branch_id=branch_id)
-        return [obj.to_sync_dict() for obj in qs]
-
-    @classmethod
-    def get_changes_since(cls, model_class, since_version, branch_id=None):
-        qs = model_class.objects.filter(sync_version__gt=since_version)
-        if branch_id:
-            qs = qs.filter(branch_id=branch_id)
-        return [obj.to_sync_dict() for obj in qs]
-
-    @classmethod
-    def get_changes_after(cls, model_class, after_timestamp, branch_id=None, limit=None):
-        """Return records updated after `after_timestamp`.
-
-        `limit` caps the result set — without it the changes view can
-        materialize the entire queue for a long-disconnected branch in a
-        single response (OOM on 1M+ row tables). Callers should pass a
-        sane page size; pagination is then driven by the most-recent
-        `synced_at` the client received.
-        """
-        qs = model_class.objects.filter(synced_at__gt=after_timestamp).order_by('synced_at')
-        if branch_id:
-            qs = qs.filter(branch_id=branch_id)
-        if limit is not None:
-            qs = qs[:limit]
         return [obj.to_sync_dict() for obj in qs]
 
     @classmethod
@@ -344,9 +330,10 @@ class SyncService:
             'mode': get_branch_id(),
             'is_online': status_data.get('is_online', False),
             'last_sync': status_data.get('last_sync'),
-            'last_pull': status_data.get('last_pull'),
+            'last_pull': SyncStatus.get_cursor(),
             'pending_count': pending,
             'failed_count': failed,
+            'dead_letter_count': SyncQueue.dead_letter_count(),
             'last_error': status_data.get('last_error'),
             'pending_by_model': SyncQueue.get_summary(),
         }
@@ -418,19 +405,9 @@ class SyncService:
             'success': True,
             'branch_id': branch,
             'last_push': status_data.get('last_sync'),
-            'last_pull': status_data.get('last_pull'),
+            'last_pull': SyncStatus.get_cursor(),
             'models': models_status,
         }
-
-    @classmethod
-    def resolve_conflicts(cls, local_record, remote_record):
-        local_v = local_record.get('sync_version', 0)
-        remote_v = remote_record.get('sync_version', 0)
-        if remote_v > local_v:
-            return 'remote'
-        if local_v > remote_v:
-            return 'local'
-        return 'conflict'
 
     @classmethod
     def _reconcile_unsynced(cls):
@@ -467,27 +444,57 @@ class SyncService:
 
     @classmethod
     def _apply_records(cls, model_class, records, source_branch=None):
-        results = {'created': 0, 'updated': 0, 'skipped': 0, 'errors': []}
+        # `deferred` holds records that couldn't be applied yet because a
+        # required FK parent isn't present (or a transient error hit). The pull
+        # loop retries them once the rest of the change set has landed, so a
+        # child pulled before its parent isn't lost when the cursor advances.
+        from django.db import transaction
+        results = {'created': 0, 'updated': 0, 'skipped': 0, 'errors': [], 'deferred': []}
         for record in records:
             try:
-                _, action = model_class.from_sync_dict(record, branch_id=source_branch)
-                if action in results:
+                # Each record applies in its own transaction so the get()->
+                # compare->save inside from_sync_dict (which now takes a
+                # select_for_update row lock) is atomic against a concurrent
+                # push receiver applying the same uuid. Without this the pull
+                # path could read a row, then a concurrent writer commits, and
+                # the pull's stale save() clobbers the newer version.
+                with transaction.atomic():
+                    _, action = model_class.from_sync_dict(record, branch_id=source_branch)
+                if action == 'deferred':
+                    results['deferred'].append(record)
+                elif action in ('created', 'updated', 'skipped'):
                     results[action] += 1
             except Exception as e:
                 results['errors'].append({
                     'uuid': record.get('uuid'),
                     'error': str(e),
                 })
+                results['deferred'].append(record)
                 results['skipped'] += 1
         return results
 
     @classmethod
     def _acquire_lock(cls, name):
-        return safe_add(f'sync:lock:{name}', True, LOCK_TTL)
+        # Store a per-acquisition owner token (not a bare True) and return it so
+        # _release_lock only deletes the lock THIS caller holds. Without a token,
+        # a caller whose lock expired mid-run (LOCK_TTL elapsed) and was
+        # re-acquired by a second worker would delete the second worker's lock on
+        # its own finally — silently allowing two concurrent push/pull runs.
+        import uuid
+        token = uuid.uuid4().hex
+        if safe_add(f'sync:lock:{name}', token, LOCK_TTL):
+            return token
+        return None
 
     @classmethod
-    def _release_lock(cls, name):
-        safe_delete(f'sync:lock:{name}')
+    def _release_lock(cls, name, token=None):
+        from base.services.sync.cache import safe_get
+        key = f'sync:lock:{name}'
+        # Only release if we still own it. If our token no longer matches, the
+        # lock expired and another worker holds it now — leave theirs intact.
+        if token is not None and safe_get(key) != token:
+            return
+        safe_delete(key)
 
     @classmethod
     def _notify_success(cls, count):

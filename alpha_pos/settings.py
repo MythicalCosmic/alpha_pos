@@ -17,15 +17,29 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 # No fallback on purpose: an unset key must hit the guard below, not silently
 # boot with a publicly-known constant (which would sign admin cookies + QR-order
 # HMAC tokens). The desktop build generates a strong per-install key.
+_DEV_SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
 SECRET_KEY = os.environ.get('SECRET_KEY', '')
 if not SECRET_KEY:
     if DEBUG:
-        SECRET_KEY = 'django-insecure-dev-only-key-do-not-use-in-production'
+        SECRET_KEY = _DEV_SECRET_KEY
     else:
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured(
             "SECRET_KEY environment variable must be set when DEBUG is False."
         )
+
+# Single fail-loud boot guard consolidating the DEBUG fail-open controls
+# (LICENSE_DEV_BYPASS, ALLOWED_HOSTS=*, CORS_ALLOW_ALL, unbound branch tokens —
+# all gated on DEBUG below). A production boot (DEBUG=False) must NOT be running
+# with the publicly-known dev SECRET_KEY: if it is, either DEBUG was meant to be
+# True (so the dev conveniences would silently stay off) or a real key is
+# missing — both are misconfigurations that should crash the boot, not fail open.
+if not DEBUG and SECRET_KEY == _DEV_SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "Refusing to boot with the dev SECRET_KEY while DEBUG is False: set a "
+        "real SECRET_KEY (production) or DEBUG=True (development)."
+    )
 
 if DEBUG:
     ALLOWED_HOSTS = ['*']
@@ -312,6 +326,10 @@ SYNC_RETRY_INTERVAL = 60
 SYNC_TIMEOUT = 30
 SYNC_MAX_RETRIES = 5
 SYNC_BATCH_SIZE = 500
+# After this many failed delivery attempts, a queued record is dead-lettered:
+# it stays in the table (visible via the queue/status endpoints) but is no
+# longer re-sent every cycle, so a permanently-rejected row can't spin forever.
+SYNC_MAX_QUEUE_ATTEMPTS = 25
 # Comma-separated branch tokens (legacy, unbound) and an allowlist of branch
 # ids the cloud will accept from them.
 ALLOWED_BRANCH_TOKENS = [
@@ -330,6 +348,10 @@ try:
 except (ValueError, TypeError):
     BRANCH_TOKEN_MAP = {}
 SYNC_PULL_ENABLED = True
+# When True, the branch refuses a plaintext http:// CLOUD_SYNC_URL (the token
+# and password hashes would traverse it unencrypted). Off by default so LAN
+# deployments keep working; a one-time warning is logged on http either way.
+SYNC_REQUIRE_HTTPS = os.environ.get('SYNC_REQUIRE_HTTPS', 'False').lower() in ('true', '1', 'yes')
 
 # Gates the sync management endpoints (status / trigger / queue / report …).
 # Production must set this — when DEBUG is off and the token is empty the
@@ -553,6 +575,11 @@ LICENSE_BACKOFF_SCHEDULE_S = tuple(
 # cannot flip it to dodge the kill switch. (This is why the gate is `DEBUG and
 # ...` and not just the env var: a settings-toggle fail-open that worked in
 # production would be a license-bypass footgun.)
+#
+# DEBUG-gated BY DESIGN: production builds ship DEBUG=False, so this flag is
+# inert there. The fail-loud SECRET_KEY/DEBUG boot guard near the top of this
+# file backstops the gate — a production boot cannot quietly run as DEBUG with
+# the dev key and silently re-enable this bypass.
 LICENSE_DEV_BYPASS = DEBUG and os.environ.get(
     'LICENSE_DEV_BYPASS', ''
 ).lower() in ('true', '1', 'yes')

@@ -2,7 +2,7 @@ from typing import Dict, Any, List, Tuple
 from decimal import Decimal
 from datetime import date
 from django.db import transaction
-from django.db.models import Q, Sum
+from django.db.models import Q
 from django.utils import timezone
 
 from base.helpers.response import ServiceResponse
@@ -321,10 +321,22 @@ class StockTransferService:
             return ServiceResponse.error(f"Cannot approve {transfer.status} transfer")
 
         for item in transfer.items.all():
-            available = StockLevelRepository.filter(
-                stock_item_id=item.stock_item_id,
-                location=transfer.from_location
-            ).aggregate(qty=Sum("quantity"))["qty"] or Decimal("0")
+            # Lock the source StockLevel rows under the SAME row lock that
+            # ship() acquires (via StockLevelService.adjust ->
+            # get_or_create_level_for_update). Without the lock the availability
+            # check below is an unlocked aggregate read, so two concurrent
+            # approvals can both pass against the same stock and over-commit it.
+            # We materialize the locked rows and sum in Python because aggregate
+            # cannot be combined with select_for_update.
+            locked_levels = list(
+                StockLevelRepository.filter(
+                    stock_item_id=item.stock_item_id,
+                    location=transfer.from_location,
+                ).select_for_update()
+            )
+            available = sum(
+                (lvl.quantity for lvl in locked_levels), Decimal("0")
+            )
 
             if item.requested_qty > available and not settings.allow_negative_stock:
                 return ServiceResponse.error(

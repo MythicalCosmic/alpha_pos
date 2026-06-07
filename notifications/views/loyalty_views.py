@@ -79,6 +79,10 @@ def settings_view(request):
 @require_GET
 @login_required
 @role_required('ADMIN', 'CASHIER')
+# Same caps as redeem_view: bound per-IP lookups and per-phone probes so a
+# stolen cashier session can't enumerate which phone numbers have accounts.
+@rate_limit('loyalty_account', 20, 60)
+@rate_limit_by('loyalty_account_phone', 3, 300, lambda r: r.resolver_match.kwargs.get('phone') if r.resolver_match else None)
 def account_view(request, phone):
     account = loyalty_service.get_account(phone)
     if not account:

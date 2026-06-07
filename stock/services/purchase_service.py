@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Tuple
 from decimal import Decimal
-from datetime import date
+from datetime import date, timedelta
 from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
@@ -204,12 +204,16 @@ class PurchaseOrderService:
 
         order_number = generate_number("PO", PurchaseOrder, "order_number")
 
+        # Apply the supplier's terms: payment is due payment_terms_days after the
+        # order, and expected delivery is lead_time_days out. Previously both
+        # were just set to order_date with no offset, so payables aging and the
+        # delivery forecast (which the AI assistant reads) were always wrong.
         payment_due_date = None
         if supplier.payment_terms_days:
-            payment_due_date = order_date
+            payment_due_date = order_date + timedelta(days=supplier.payment_terms_days)
 
         if not expected_date and supplier.lead_time_days:
-            expected_date = order_date
+            expected_date = order_date + timedelta(days=supplier.lead_time_days)
 
         po = PurchaseOrderRepository.create(
             order_number=order_number,
@@ -360,8 +364,16 @@ class PurchaseOrderService:
 
         po.subtotal = subtotal
         po.tax_amount = tax_amount
-        po.total = subtotal + tax_amount + po.shipping_cost - po.discount
-        po.save(update_fields=["subtotal", "tax_amount", "total", "updated_at"])
+
+        # The PO-level discount is applied on top of any per-line discounts
+        # (already baked into total_price). Clamp it so it can never exceed the
+        # gross (subtotal + tax + shipping), which would otherwise produce a
+        # negative total — mirroring how order totals are floored at zero.
+        gross = subtotal + tax_amount + po.shipping_cost
+        if po.discount > gross:
+            po.discount = gross
+        po.total = gross - po.discount
+        po.save(update_fields=["subtotal", "tax_amount", "discount", "total", "updated_at"])
 
     @classmethod
     @transaction.atomic
@@ -852,6 +864,22 @@ class PurchaseReceivingService:
 
         if quantity_received is not None:
             quantity_received = to_decimal(quantity_received)
+
+            # Mirror add()'s guard: reject non-positive or over-pending
+            # quantities. Without this an update can drive
+            # PurchaseOrderItem.quantity_received negative on complete() and
+            # poison the moving-average cost.
+            if quantity_received <= 0:
+                return ServiceResponse.validation_error(
+                    errors={"quantity_received": "Must be greater than 0"},
+                )
+
+            pending = item.po_item.quantity_ordered - item.po_item.quantity_received
+            if quantity_received > pending:
+                return ServiceResponse.validation_error(
+                    errors={"quantity_received": f"Cannot receive more than pending quantity ({pending})"}
+                )
+
             item.quantity_received = quantity_received
 
         if batch_number is not None:

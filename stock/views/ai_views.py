@@ -18,13 +18,16 @@ from stock.services.ai_assistant_service import AIStockAssistant
 @rate_limit('ai_query', 10, 60)
 @admin_required
 def ai_query(request):
-    # The assistant calls Gemini. Without a key the SDK raises deep in the
-    # request, surfacing as a 500 with no actionable message. Return 503 so
-    # the client can hide the feature instead of showing a generic failure.
-    if not getattr(settings, 'GEMINI_API_KEY', ''):
+    # The assistant calls the configured LLM provider (Claude by default, or
+    # Gemini). Without that provider's key the SDK raises deep in the request,
+    # surfacing as a 500 with no actionable message. Check the ACTIVE provider's
+    # key (not a hardcoded GEMINI_API_KEY) and return 503 so the client can hide
+    # the feature instead of showing a generic failure.
+    from base.services.llm import key_missing
+    if key_missing():
         return JsonResponse({
             'success': False,
-            'message': 'AI assistant is not configured (GEMINI_API_KEY missing).',
+            'message': 'AI assistant is not configured (LLM API key missing).',
         }, status=503)
 
     data, error = parse_json_body(request)

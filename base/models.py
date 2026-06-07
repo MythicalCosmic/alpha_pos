@@ -41,6 +41,12 @@ class SyncMixin(models.Model):
     class Meta:
         abstract = True
 
+    # Outbound opt-out: a SyncMixin subclass whose rows are per-branch state
+    # (e.g. treasury balances kept by get_or_create-per-kind) sets this True so
+    # save()/hard_delete() never enqueue them for the cloud. Distinct from
+    # `_sync_ingest_disabled`, which blocks the inbound (receive) direction.
+    _sync_local_only = False
+
     def save(self, *args, **kwargs):
         syncing = kwargs.pop('_syncing', False)
         if not syncing:
@@ -63,8 +69,20 @@ class SyncMixin(models.Model):
                     # RECEIVED from a branch run with _syncing=True and skip this.)
                     from django.utils import timezone
                     self.synced_at = timezone.now()
+            # When a caller restricts the write with update_fields, the in-memory
+            # sync_version bump and synced_at change above must be added to that
+            # list or Django silently drops them: the persisted version would
+            # stall (so peers reject the next update via _should_replace) and
+            # synced_at would stay non-NULL (so the reconcile sweep never resends
+            # it). Force the sync bookkeeping columns into the written set.
+            if update_fields is not None and self.pk:
+                forced = {'sync_version'}
+                if content_changed:
+                    forced.add('synced_at')
+                kwargs['update_fields'] = list(set(update_fields) | forced)
         super().save(*args, **kwargs)
-        if not syncing and self.synced_at is None and self._is_sync_on_save():
+        if (not syncing and not self._sync_local_only
+                and self.synced_at is None and self._is_sync_on_save()):
             # Defer queueing until the surrounding transaction commits so a
             # rollback doesn't leave an orphan UUID in the sync queue that
             # the cloud cannot resolve. on_commit fires immediately when no
@@ -92,7 +110,7 @@ class SyncMixin(models.Model):
         # enqueue a soft-delete sync record on commit so peers also remove
         # the record. Without this, hard deletes on one branch never
         # propagate and leave dangling FK references on others.
-        if self._is_sync_on_save() and self.pk:
+        if self._is_sync_on_save() and not self._sync_local_only and self.pk:
             try:
                 from base.services.sync.service import SyncService
                 model_name = self.__class__.__name__.lower()
@@ -144,10 +162,21 @@ class SyncMixin(models.Model):
                     data[field.name] = value
         return data
 
-    # Class-level deny-list for fields that must never be written by the sync
-    # ingestion paths (push or pull). Per-model overrides go on the subclass.
-    # Empty by default — only safety-critical fields belong here.
+    # Direction-aware deny-lists for fields the sync ingestion must not
+    # *overwrite*. Which list applies depends on the receiver's data-flow
+    # direction (DEPLOYMENT_MODE):
+    #   * SYNC_WRITE_DENYLIST — money/balance fields a branch owns and the cloud
+    #     collects. Refused when a *branch* ingests (a pulled peer record must
+    #     not rewrite local financials); accepted by the *cloud* (the trusted
+    #     single-operator collector — otherwise revenue never aggregates).
+    #   * SYNC_DENY_FROM_BRANCH — catalog/admin fields the cloud owns (e.g.
+    #     Product.price). Refused when the *cloud* ingests a branch push;
+    #     accepted by a *branch* pulling from the cloud.
+    # On CREATE a denied field that is required (NOT NULL, no default) is still
+    # written: the row cannot materialize otherwise, and a row we don't yet hold
+    # locally has no value to protect. Protection is meaningful only on UPDATE.
     SYNC_WRITE_DENYLIST = frozenset()
+    SYNC_DENY_FROM_BRANCH = frozenset()
 
     # Natural keys that uniquely identify a record independent of its uuid.
     # When an incoming sync record's uuid isn't found locally but another row
@@ -172,8 +201,37 @@ class SyncMixin(models.Model):
         return cls.objects.filter(**lookup).first()
 
     @classmethod
-    def _strip_sync_denied(cls, data):
-        denied = getattr(cls, 'SYNC_WRITE_DENYLIST', frozenset())
+    def _effective_denylist(cls, mode=None):
+        """Fields refused on this ingest, chosen by data-flow direction.
+
+        Cloud receivers (mode='cloud') protect catalog/admin fields a branch
+        push must not rewrite; branch receivers (mode='local') protect the
+        money/balance fields a peer record must not rewrite.
+        """
+        if mode is None:
+            mode = getattr(settings, 'DEPLOYMENT_MODE', 'local')
+        if mode == 'cloud':
+            return frozenset(getattr(cls, 'SYNC_DENY_FROM_BRANCH', frozenset()))
+        return frozenset(getattr(cls, 'SYNC_WRITE_DENYLIST', frozenset()))
+
+    @classmethod
+    def _sync_required_no_default(cls, field_name):
+        # True when the column is NOT NULL with no usable default — stripping it
+        # on CREATE would raise IntegrityError, so create-time ingest keeps it.
+        from django.db.models.fields import NOT_PROVIDED
+        try:
+            f = cls._meta.get_field(field_name)
+        except Exception:
+            return False
+        if not hasattr(f, 'null') or f.null:
+            return False
+        if getattr(f, 'auto_now', False) or getattr(f, 'auto_now_add', False):
+            return False
+        return f.default is NOT_PROVIDED
+
+    @classmethod
+    def _strip_sync_denied(cls, data, *, creating=False, mode=None):
+        denied = cls._effective_denylist(mode)
         if not denied:
             return data
         import logging
@@ -181,9 +239,14 @@ class SyncMixin(models.Model):
         cleaned = {}
         for key, value in data.items():
             if key in denied:
+                if creating and cls._sync_required_no_default(key):
+                    # Required column on a brand-new row — keep the origin value
+                    # so the record can be inserted; nothing local to protect.
+                    cleaned[key] = value
+                    continue
                 logger.warning(
-                    'sync ingest: dropping denylisted field %s on %s',
-                    key, cls.__name__,
+                    'sync ingest: dropping denylisted field %s on %s (mode=%s)',
+                    key, cls.__name__, mode or getattr(settings, 'DEPLOYMENT_MODE', 'local'),
                 )
                 continue
             cleaned[key] = value
@@ -215,7 +278,6 @@ class SyncMixin(models.Model):
             )
             return None, 'skipped'
         incoming_branch = payload_branch or branch_id
-        data = cls._strip_sync_denied(data)
 
         # Resolve UUID-keyed FK references to local instances. The push/receive
         # path does this in CloudReceiver._resolve_foreign_keys, but the
@@ -250,10 +312,14 @@ class SyncMixin(models.Model):
                         import logging
                         logging.getLogger(__name__).warning(
                             'sync ingest: unresolved required FK %s=%s on %s; '
-                            'skipping record %s',
+                            'deferring record %s for retry',
                             fk_field, uuid_value, cls.__name__, uuid_val,
                         )
-                        return None, 'skipped'
+                        # 'deferred' (not 'skipped'): the puller retries these
+                        # after the rest of the pull lands the parent, so a child
+                        # pulled before its parent isn't lost when the cursor
+                        # advances past it.
+                        return None, 'deferred'
                 except Exception:
                     pass
 
@@ -267,7 +333,17 @@ class SyncMixin(models.Model):
             incoming_updated = parse_datetime(incoming_updated)
 
         try:
-            instance = cls.objects.get(uuid=uuid_val)
+            # Row-lock the existing row for the get()->compare->save sequence so
+            # a concurrent pull/receiver applying the same uuid can't interleave
+            # and clobber a newer version (lost update). select_for_update is
+            # only valid inside a transaction — the pull path wraps each record
+            # in transaction.atomic(); when called outside one (e.g. unit tests)
+            # fall back to a plain get() rather than raising.
+            from django.db import transaction
+            base_qs = cls.objects
+            if transaction.get_connection().in_atomic_block:
+                base_qs = cls.objects.select_for_update()
+            instance = base_qs.get(uuid=uuid_val)
             # Refuse to resurrect a hard-deleted row's slot via an older
             # incoming payload. (Soft-deletes are handled by is_deleted
             # propagation; this branch only fires for live rows.)
@@ -281,7 +357,7 @@ class SyncMixin(models.Model):
             # A locally-tombstoned row is terminal — never resurrect it.
             if instance.is_deleted and not is_deleted:
                 return instance, 'skipped'
-            for key, value in data.items():
+            for key, value in cls._strip_sync_denied(data, creating=False).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             for fk_field, related in resolved_fks.items():
@@ -307,7 +383,9 @@ class SyncMixin(models.Model):
             if natural is not None:
                 instance = natural
                 instance.uuid = uuid_val
-                for key, value in data.items():
+                # Reconcile onto an existing row → an UPDATE: protect denied
+                # fields just like the version-matched update branch.
+                for key, value in cls._strip_sync_denied(data, creating=False).items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
                 for fk_field, related in resolved_fks.items():
@@ -329,7 +407,7 @@ class SyncMixin(models.Model):
                 branch_id=incoming_branch or '',
                 synced_at=timezone.now(),
             )
-            for key, value in data.items():
+            for key, value in cls._strip_sync_denied(data, creating=True).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             for fk_field, related in resolved_fks.items():
@@ -391,7 +469,7 @@ class User(SyncMixin, models.Model):
 
     first_name = models.CharField(max_length=25)
     last_name = models.CharField(max_length=25)
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     password = models.CharField(max_length=128)
 
     role = models.CharField(
@@ -417,21 +495,38 @@ class User(SyncMixin, models.Model):
     updated_at = models.DateTimeField(auto_now=True, null=True, blank=True)
 
     # Central user management: the owner creates/edits cashiers and admins on
-    # the cloud hub and expects them to work on every terminal. That requires
-    # the password HASH (PBKDF2 — not keyed by SECRET_KEY, so portable across
-    # machines), role, permissions and status to replicate. Nothing is
-    # denylisted. This is a single-tenant deployment where the cloud and all
-    # branches belong to one operator, so the "a compromised peer could promote
-    # a user to ADMIN" threat the previous denylist guarded against would
-    # require the operator's own infrastructure to be compromised — at which
-    # point credentials are already lost. The password is a one-way hash, never
-    # plaintext. See deployment-status memory for the rationale.
+    # the cloud hub, which is the trusted source of truth and DISTRIBUTES these
+    # fields to every terminal. So a *branch* pulling from the cloud (mode=
+    # 'local') must ACCEPT credentials — SYNC_WRITE_DENYLIST is empty.
+    #
+    # The forgery threat is the reverse direction: a holder of a *branch* token
+    # pushing UP to the hub must not be able to flip a cashier to ADMIN, rewrite
+    # a password hash, or suspend/delete a user. That push lands on the cloud
+    # (mode='cloud'), so those fields go in SYNC_DENY_FROM_BRANCH — refused on
+    # the cloud-receive direction, still distributed downward on pull. (On
+    # CREATE a required NOT-NULL field with no default is still written — see
+    # _strip_sync_denied — so a brand-new user row can still materialize.)
     SYNC_WRITE_DENYLIST = frozenset()
+    SYNC_DENY_FROM_BRANCH = frozenset({'role', 'permissions', 'password', 'status', 'is_deleted'})
 
     # Email is unique, so it's the natural key used to reconcile a server-
     # created user against an existing local row with a different uuid (e.g. a
     # bootstrap admin) instead of dropping it on an IntegrityError.
     SYNC_NATURAL_KEYS = ('email',)
+
+    class Meta:
+        constraints = [
+            # Soft-deleted users still occupy their row. A *global* unique index
+            # on email would block reusing an address after a user is deleted and
+            # raise IntegrityError exactly where the app-level check (which only
+            # looks at live rows) reported the email as free. Scope uniqueness to
+            # non-deleted rows.
+            models.UniqueConstraint(
+                fields=['email'],
+                condition=models.Q(is_deleted=False),
+                name='uniq_user_email_active',
+            ),
+        ]
 
     objects = SyncManager()
 
@@ -482,10 +577,22 @@ class Category(SyncMixin, models.Model):
         choices=[('ACTIVE', 'Active'), ('INACTIVE', 'Inactive')],
         default='ACTIVE',
     )
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField()
     description = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            # Scope slug uniqueness to live rows so a slug freed by soft-deleting
+            # a category can be reused (generate_unique_slug only checks live
+            # rows; a global unique index would IntegrityError on the dead row).
+            models.UniqueConstraint(
+                fields=['slug'],
+                condition=models.Q(is_deleted=False),
+                name='uniq_category_slug_active',
+            ),
+        ]
 
     objects = SyncManager()
 
@@ -550,11 +657,12 @@ class Product(SyncMixin, models.Model):
 
     objects = SyncManager()
 
-    # Price changes are administrative — they must originate at the cloud
-    # / admin path with an audit row, not silently arrive via a peer branch
-    # push. Denylisted from sync ingestion as a defense-in-depth measure
-    # in case a branch token is ever compromised.
-    SYNC_WRITE_DENYLIST = frozenset({'price'})
+    # Price is catalog data the cloud owns: a branch pulling from the cloud must
+    # accept it, but a branch *push* must not rewrite it on the cloud (admin /
+    # audited path only). So it's denied on the cloud-receive direction, not on
+    # branch ingest — see SyncMixin._effective_denylist.
+    SYNC_WRITE_DENYLIST = frozenset()
+    SYNC_DENY_FROM_BRANCH = frozenset({'price'})
 
     def to_sync_dict(self):
         data = super().to_sync_dict()
@@ -572,7 +680,6 @@ class Product(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
-        data = cls._strip_sync_denied(data)
 
         # Preserve the source-of-truth updated_at across save(). updated_at is
         # auto_now=True, so a plain setattr+save would overwrite it with the
@@ -595,7 +702,7 @@ class Product(SyncMixin, models.Model):
                 instance, sync_version,
                 {**data, 'updated_at': incoming_updated}, incoming_branch,
             ):
-                for key, value in data.items():
+                for key, value in cls._strip_sync_denied(data, creating=False).items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
                 if category:
@@ -617,7 +724,7 @@ class Product(SyncMixin, models.Model):
                 synced_at=timezone.now(),
                 category=category,
             )
-            for key, value in data.items():
+            for key, value in cls._strip_sync_denied(data, creating=True).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
@@ -700,7 +807,16 @@ class Table(SyncMixin, models.Model):
 
     class Meta:
         ordering = ['place', 'sort_order', 'number']
-        unique_together = ['place', 'number']
+        constraints = [
+            # Soft-deleted tables keep their row; scope (place, number)
+            # uniqueness to live rows so a number freed by deleting a table can
+            # be reused (number_exists only checks live rows).
+            models.UniqueConstraint(
+                fields=['place', 'number'],
+                condition=models.Q(is_deleted=False),
+                name='uniq_table_place_number_active',
+            ),
+        ]
 
     def to_sync_dict(self):
         data = super().to_sync_dict()
@@ -818,6 +934,11 @@ class Order(SyncMixin, models.Model):
 
     def to_sync_dict(self):
         data = super().to_sync_dict()
+        # display_id is a per-branch counter value (DisplayIdCounter) meaning
+        # "the number shown on THIS branch's screen". It must never propagate or
+        # two branches' orders would overwrite each other's numbers and the
+        # local get_by_display_id lookup would see duplicates. Keep it local.
+        data.pop('display_id', None)
         data['user_uuid'] = str(self.user.uuid) if self.user else None
         data['cashier_uuid'] = str(self.cashier.uuid) if self.cashier else None
         data['delivery_person_uuid'] = str(self.delivery_person.uuid) if self.delivery_person else None
@@ -838,7 +959,6 @@ class Order(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
-        data = cls._strip_sync_denied(data)
 
         # Preserve the source-of-truth updated_at across save() (auto_now would
         # overwrite it with the local clock and break the equal-version
@@ -855,42 +975,65 @@ class Order(SyncMixin, models.Model):
             try:
                 user = User.objects.get(uuid=user_uuid)
             except User.DoesNotExist:
-                raise ValueError(f"User with UUID {user_uuid} not found")
+                user = None
 
+        # A uuid that's present but not yet synced locally must NOT overwrite an
+        # existing attribution link to NULL on update — that silently
+        # de-attributes the order and corrupts cashier/shift stats. Track
+        # resolvability so the update branch can skip the overwrite.
+        cashier_unresolved = False
         if cashier_uuid:
             try:
                 cashier = User.objects.get(uuid=cashier_uuid)
             except User.DoesNotExist:
-                pass
+                cashier_unresolved = True
 
+        delivery_unresolved = False
         if delivery_person_uuid:
             try:
                 delivery_person = DeliveryPerson.objects.get(uuid=delivery_person_uuid)
             except DeliveryPerson.DoesNotExist:
-                pass
+                delivery_unresolved = True
 
         if not user:
-            raise ValueError(f"User with UUID {user_uuid} not found - sync User first")
+            # Required FK (Order.user) not present yet — defer for retry after
+            # the rest of the pull lands the user, instead of erroring it away.
+            return None, 'deferred'
 
         try:
-            instance = cls.objects.get(uuid=uuid_val)
-            if cls._should_replace(
+            from django.db import transaction
+            base_qs = cls.objects
+            if transaction.get_connection().in_atomic_block:
+                base_qs = cls.objects.select_for_update()
+            instance = base_qs.get(uuid=uuid_val)
+            if not cls._should_replace(
                 instance, sync_version,
                 {**data, 'updated_at': incoming_updated}, incoming_branch,
             ):
-                for key, value in data.items():
-                    if hasattr(instance, key):
-                        setattr(instance, key, value)
-                instance.user = user
+                # Stale/older payload — report the skip honestly so pull stats
+                # don't over-count it as an applied update.
+                return instance, 'skipped'
+            # A locally-tombstoned order is terminal — never resurrect it from a
+            # stale pre-delete payload.
+            if instance.is_deleted and not is_deleted:
+                return instance, 'skipped'
+            for key, value in cls._strip_sync_denied(data, creating=False).items():
+                if hasattr(instance, key):
+                    setattr(instance, key, value)
+            instance.user = user
+            # Don't wipe an existing attribution link when the incoming uuid
+            # simply hasn't synced locally yet (see resolution above).
+            if not cashier_unresolved:
                 instance.cashier = cashier
+            if not delivery_unresolved:
                 instance.delivery_person = delivery_person
-                instance.sync_version = sync_version
-                instance.is_deleted = is_deleted
-                instance.synced_at = timezone.now()
-                instance.save(_syncing=True)
-                if incoming_updated:
-                    cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
-                    instance.updated_at = incoming_updated
+            instance.sync_version = sync_version
+            instance.is_deleted = is_deleted
+            instance.synced_at = timezone.now()
+            instance.save(_syncing=True)
+            if incoming_updated:
+                cls.objects.filter(pk=instance.pk).update(updated_at=incoming_updated)
+                instance.updated_at = incoming_updated
             return instance, 'updated'
         except cls.DoesNotExist:
             instance = cls(
@@ -903,7 +1046,7 @@ class Order(SyncMixin, models.Model):
                 cashier=cashier,
                 delivery_person=delivery_person,
             )
-            for key, value in data.items():
+            for key, value in cls._strip_sync_denied(data, creating=True).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
@@ -961,7 +1104,7 @@ class OrderItem(SyncMixin, models.Model):
             try:
                 order = Order.objects.get(uuid=order_uuid)
             except Order.DoesNotExist:
-                raise ValueError(f"Order with UUID {order_uuid} not found")
+                order = None
 
         if product_uuid:
             try:
@@ -970,7 +1113,8 @@ class OrderItem(SyncMixin, models.Model):
                 pass
 
         if not order:
-            raise ValueError(f"Order with UUID {order_uuid} not found - sync Order first")
+            # Required FK (OrderItem.order) not present yet — defer for retry.
+            return None, 'deferred'
 
         try:
             instance = cls.objects.get(uuid=uuid_val)
@@ -1075,7 +1219,6 @@ class Inkassa(SyncMixin, models.Model):
         sync_version = data.pop('sync_version', 1)
         is_deleted = data.pop('is_deleted', False)
         incoming_branch = data.pop('branch_id', branch_id)
-        data = cls._strip_sync_denied(data)
 
         cashier = None
         if cashier_uuid:
@@ -1087,7 +1230,7 @@ class Inkassa(SyncMixin, models.Model):
         try:
             instance = cls.objects.get(uuid=uuid_val)
             if cls._should_replace(instance, sync_version, data, incoming_branch):
-                for key, value in data.items():
+                for key, value in cls._strip_sync_denied(data, creating=False).items():
                     if hasattr(instance, key):
                         setattr(instance, key, value)
                 instance.cashier = cashier
@@ -1105,7 +1248,7 @@ class Inkassa(SyncMixin, models.Model):
                 synced_at=timezone.now(),
                 cashier=cashier,
             )
-            for key, value in data.items():
+            for key, value in cls._strip_sync_denied(data, creating=True).items():
                 if hasattr(instance, key):
                     setattr(instance, key, value)
             instance.save(_syncing=True)
@@ -1132,9 +1275,13 @@ class TreasuryAccount(SyncMixin, models.Model):
 
     objects = SyncManager()
 
-    # Balance is only ever mutated locally inside TreasuryService under a row
-    # lock; a peer push must never dictate it.
-    SYNC_WRITE_DENYLIST = frozenset({'balance'})
+    # Local-only: one get_or_create-per-kind row per branch, with a per-branch
+    # balance mutated under a row lock in TreasuryService. There is no coherent
+    # cross-branch identity for a "safe"/"bank" account, so syncing it would
+    # create duplicate-kind rows on the cloud and clobber balances. Treasury is
+    # per-branch state — never propagate it (matches Sequence/DisplayIdCounter).
+    _sync_local_only = True
+    _sync_ingest_disabled = True
 
     def __str__(self):
         return f"{self.kind}: {self.balance}"
@@ -1176,7 +1323,11 @@ class TreasuryTransaction(SyncMixin, models.Model):
 
     objects = SyncManager()
 
-    SYNC_WRITE_DENYLIST = frozenset({'delta', 'fee', 'balance_before', 'balance_after'})
+    # Local-only: this ledger's `account` FK points at a per-branch treasury
+    # account with no cross-branch identity, so the ledger can't propagate
+    # coherently either. Per-branch state — never sync it. See TreasuryAccount.
+    _sync_local_only = True
+    _sync_ingest_disabled = True
 
     class Meta:
         ordering = ['-created_at']
@@ -1333,6 +1484,30 @@ class SyncQueueRecord(models.Model):
 
     def __str__(self):
         return f"SyncQueue<{self.model_name} {self.record_uuid}>"
+
+
+class SyncState(models.Model):
+    """Durable key/value for sync control state that must survive a process
+    restart and a cache flush.
+
+    Notably the pull CURSOR (`last_pull`): the cloud-clock `synced_at` frontier
+    the pull loop resumes from. It used to live only in the cache-backed
+    SyncStatus (24h TTL + per-process LocMem fallback), so a restart or a >24h
+    offline window silently reset it and forced a full re-pull. The cursor is
+    the source of truth for "what have I already pulled" and belongs in the DB.
+
+    Not a SyncMixin — local bookkeeping, must never propagate.
+    """
+
+    key = models.CharField(max_length=64, primary_key=True)
+    value = models.TextField(blank=True, default='')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'sync_state'
+
+    def __str__(self):
+        return f"SyncState<{self.key}={self.value}>"
 
 
 class AuditLog(SyncMixin, models.Model):

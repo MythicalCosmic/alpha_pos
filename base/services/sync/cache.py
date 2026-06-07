@@ -4,6 +4,7 @@ import threading
 logger = logging.getLogger(__name__)
 
 _fallback = {}
+_fallback_ttl = {}
 _fallback_lock = threading.Lock()
 _available = None
 _available_checked = 0
@@ -51,6 +52,7 @@ def safe_get(key, default=None):
 def safe_set(key, value, ttl=None):
     with _fallback_lock:
         _fallback[key] = value
+        _fallback_ttl[key] = ttl
     try:
         _cache().set(key, value, ttl)
     except Exception:
@@ -60,6 +62,7 @@ def safe_set(key, value, ttl=None):
 def safe_delete(key):
     with _fallback_lock:
         _fallback.pop(key, None)
+        _fallback_ttl.pop(key, None)
     try:
         _cache().delete(key)
     except Exception:
@@ -74,6 +77,7 @@ def safe_add(key, value, ttl):
             if key in _fallback:
                 return False
             _fallback[key] = value
+            _fallback_ttl[key] = ttl
             return True
 
 
@@ -87,7 +91,11 @@ def _flush_fallback():
     flushed = 0
     for key, value in items.items():
         try:
-            _cache().set(key, value, None)
+            # Preserve each key's original TTL — flushing with None would make
+            # a short-lived lock or status entry permanent in Redis.
+            with _fallback_lock:
+                ttl = _fallback_ttl.get(key)
+            _cache().set(key, value, ttl)
             flushed += 1
         except Exception:
             break

@@ -306,7 +306,7 @@ class DiscountService:
         })
 
     @staticmethod
-    def calculate_discount(discount, order_items):
+    def calculate_discount(discount, order_items, already_applied_discount=Decimal('0')):
         method = discount.discount_type.discount_method
 
         # Determine which items the discount applies to
@@ -382,6 +382,21 @@ class DiscountService:
         if discount_amount < Decimal('0'):
             discount_amount = Decimal('0')
 
+        # Cumulative cap: a single rule is capped at its own applicable
+        # subtotal above, but when discounts stack the SUM can still exceed the
+        # whole order subtotal (only a downstream max(0, ...) hides it). Clamp
+        # this rule's contribution to the order subtotal remaining after the
+        # discounts already applied so the running total never goes past it.
+        order_subtotal = Decimal(str(
+            sum(item.price * item.quantity for item in order_items) or 0
+        ))
+        already_applied = Decimal(str(already_applied_discount or 0))
+        remaining_subtotal = order_subtotal - already_applied
+        if remaining_subtotal < Decimal('0'):
+            remaining_subtotal = Decimal('0')
+        if discount_amount > remaining_subtotal:
+            discount_amount = remaining_subtotal
+
         return discount_amount.quantize(Decimal('0.01'))
 
     @staticmethod
@@ -455,9 +470,16 @@ class DiscountService:
                 "Order already has a non-stackable discount applied"
             )
 
-        # Calculate the discount amount
+        # Calculate the discount amount. Pass the discount already applied to
+        # this order so calculate_discount clamps this rule to the remaining
+        # subtotal — stacked discounts can't sum past the order subtotal.
         order_items = order.items.select_related('product__category').all()
-        discount_amount = DiscountService.calculate_discount(discount, order_items)
+        already_applied = OrderDiscountRepository.get_for_order(order_id).aggregate(
+            total=Sum('discount_amount'),
+        )['total'] or Decimal('0')
+        discount_amount = DiscountService.calculate_discount(
+            discount, order_items, already_applied_discount=already_applied,
+        )
 
         if discount_amount <= 0:
             return ServiceResponse.error("Discount does not apply to this order")
@@ -529,12 +551,16 @@ class DiscountService:
 
         discount = order_discount.discount
 
-        # Delete corresponding DiscountUsage
+        # Delete the DiscountUsage tied to THIS order + discount, regardless of
+        # which user removes it. Filtering by the caller-supplied user_id (e.g.
+        # an admin removing a discount a customer applied) orphaned the usage
+        # row while usage_count was still decremented below — drifting the
+        # per-user and global counters out of sync. Apply created exactly one
+        # usage row per (order, discount), so deleting by order+discount keeps
+        # the counters consistent on apply/remove for the same order.
         usages = DiscountUsageRepository.get_for_order(order_id).filter(
             discount_id=discount.id,
         )
-        if user_id:
-            usages = usages.filter(user_id=user_id)
         usages.delete()
 
         # Delete the OrderDiscount

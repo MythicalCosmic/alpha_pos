@@ -21,26 +21,42 @@ import logging
 import secrets
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from base.models import Order, OrderItem, Product, User
 from notifications.models import Cart, CartItem
+# Reuse the QR self-order caps so both self-serve surfaces are bounded the same
+# way: at most MAX_QUANTITY_PER_LINE of one product, at most MAX_ITEMS_PER_ORDER
+# distinct lines per cart.
+from notifications.services.qr_order_service import (
+    MAX_ITEMS_PER_ORDER, MAX_QUANTITY_PER_LINE,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def get_or_create_active_cart(customer):
-    cart, _ = Cart.objects.get_or_create(
-        customer=customer, status=Cart.Status.ACTIVE,
-    )
-    return cart
+    try:
+        cart, _ = Cart.objects.get_or_create(
+            customer=customer, status=Cart.Status.ACTIVE,
+        )
+        return cart
+    except IntegrityError:
+        # Concurrent first-add: two near-simultaneous taps both miss the
+        # existing row and try to INSERT, but the one_active_cart_per_customer
+        # partial unique constraint rejects the loser. Re-fetch the winner
+        # instead of bubbling a 500 that silently drops the command.
+        return Cart.objects.get(customer=customer, status=Cart.Status.ACTIVE)
 
 
 def add_item(customer, product_id, quantity=1):
     """Add (or bump) `product_id` x `quantity` on `customer`'s cart.
 
     Returns (cart, product) on success, or (None, error_string) if the
-    product doesn't exist / is deleted. Quantity is clamped to >= 1.
+    product doesn't exist / is deleted, or the cart already holds the max
+    number of distinct lines ('items_too_many'). Per-line quantity is clamped
+    to the range [1, MAX_QUANTITY_PER_LINE] so a single /order can't request an
+    unbounded amount.
     """
     if quantity < 1:
         quantity = 1
@@ -53,10 +69,18 @@ def add_item(customer, product_id, quantity=1):
     with transaction.atomic():
         item, created = CartItem.objects.select_for_update().get_or_create(
             cart=cart, product=product,
-            defaults={'quantity': quantity, 'price': product.price},
+            defaults={'quantity': min(quantity, MAX_QUANTITY_PER_LINE),
+                      'price': product.price},
         )
-        if not created:
-            item.quantity += quantity
+        if created:
+            # Reject a brand-new line once the cart is already at the line cap.
+            # Re-check inside the lock so concurrent /order adds can't overshoot.
+            if cart.items.count() > MAX_ITEMS_PER_ORDER:
+                item.delete()
+                return None, 'items_too_many'
+        else:
+            # Bump but never exceed the per-line cap.
+            item.quantity = min(item.quantity + quantity, MAX_QUANTITY_PER_LINE)
             item.save(update_fields=['quantity', 'updated_at'])
     return cart, product
 

@@ -188,7 +188,7 @@ def _cashier_shift_row(shift, att_map):
     paid = Order.objects.filter(
         is_deleted=False, cashier_id=shift.user_id, is_paid=True,
         paid_at__gte=start, paid_at__lte=end,
-    )
+    ).exclude(status='CANCELED')
     money = paid.aggregate(
         revenue=Coalesce(Sum('total_amount'), Decimal('0'), output_field=_DEC),
         paid_count=Count('id'),

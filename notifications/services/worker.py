@@ -99,7 +99,8 @@ def _dispatch(item, min_interval):
         time.sleep(min_interval - delta)
 
     try:
-        ok, error = TelegramService.send_message(text)
+        failed, error = TelegramService.send_to_chats(text, chat_ids)
+        ok = not failed
         _last_send_per_chat[chat_key] = time.monotonic()
         NotificationLog.objects.create(
             notification_type=notification_type,
@@ -108,8 +109,10 @@ def _dispatch(item, min_interval):
             status='SENT' if ok else 'FAILED',
             error_message=error if not ok else '',
         )
-        if not ok:
-            QueueService.add(text, notification_type)
+        if failed:
+            # Re-queue ONLY the chats that failed so the retry doesn't duplicate
+            # the message to chats that already received it.
+            QueueService.add(text, notification_type, chat_ids=failed)
     except Exception as e:
         NotificationLog.objects.create(
             notification_type=notification_type,

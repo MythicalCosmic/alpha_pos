@@ -156,10 +156,11 @@ class ExpenseService:
             description=description,
             expense_date=expense_date,
             payment_method=payment_method,
-            # Expenses are auto-approved on creation — there's no separate
-            # approval step. The creator is recorded as the approver.
-            status=Expense.Status.APPROVED,
-            approved_by_id=created_by_id,
+            # Expenses start PENDING. The approve/reject endpoints are the
+            # real approval gate — self-approval at creation time would let a
+            # cashier authorize their own payout.
+            status=Expense.Status.PENDING,
+            approved_by_id=None,
             receipt_number=receipt_number,
             receipt_image_url=receipt_image_url,
             created_by_id=created_by_id,
@@ -302,6 +303,12 @@ class ExpenseService:
         if expense.status != Expense.Status.APPROVED:
             return ServiceResponse.error(
                 f"Cannot mark expense as paid in {expense.status} status. Must be APPROVED."
+            )
+
+        valid_methods = Expense.PaymentMethod.values
+        if payment_method not in valid_methods:
+            return ServiceResponse.validation_error(
+                errors={"payment_method": f"Must be one of {valid_methods}"},
             )
 
         from hr.services.cash_transaction_service import CashTransactionService

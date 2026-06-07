@@ -19,6 +19,26 @@ def _parse_date(date_str):
             return None
 
 
+def _parse_date_to(date_str):
+    """Parse an inclusive end-of-range bound.
+
+    A bare date like '2026-05-31' parses to midnight, and filter_logs uses
+    created_at__lte=date_to — so every log from that day was excluded. When
+    only a date is supplied, roll it to the last microsecond of the day so the
+    whole day is included. An explicit timestamp is honored as-is. (Mirrors
+    order_service._parse_date_to.)
+    """
+    if not date_str:
+        return None
+    dt = _parse_date(date_str)
+    if dt is None:
+        return None
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and dt.microsecond == 0 \
+            and len(date_str.strip()) <= 10:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
 def _serialize(log):
     return {
         'id': log.id,
@@ -50,7 +70,7 @@ class AdminAuditService:
             target_type=target_type,
             target_id=target_id,
             date_from=_parse_date(date_from),
-            date_to=_parse_date(date_to),
+            date_to=_parse_date_to(date_to),
         )
         paginator = Paginator(qs, per_page)
         page_obj = paginator.get_page(page)

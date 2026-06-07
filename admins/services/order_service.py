@@ -711,6 +711,12 @@ class AdminOrderService:
         if not order:
             return ServiceResponse.not_found('Order not found')
 
+        # Cancelling a paid order already reversed its cash through the drawer
+        # (update_order_status CANCELED path) while deliberately leaving
+        # is_paid=True. Reversing again here would double-credit the register.
+        if order.status == 'CANCELED':
+            return ServiceResponse.error('Cancelled order cannot be marked unpaid')
+
         if not order.is_paid:
             return ServiceResponse.error('Order is not paid')
 

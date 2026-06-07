@@ -7,6 +7,7 @@ policy a provider failure is recorded as FAILED (not raised) so the sale still
 completes and a retry sweep picks it up later.
 """
 import logging
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -21,6 +22,12 @@ from fiscalization.services.builder import build_receipt_payload
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 8
+
+# A receipt is flipped to SENT and committed BEFORE the provider call, then
+# flipped to CONFIRMED/FAILED after. If the process dies in that window the row
+# is stranded in SENT forever (the FAILED-only retry sweep never sees it). Treat
+# a SENT row older than this as stranded and let retry_failed re-drive it.
+SENT_STALE_SECONDS = 120
 
 
 class FiscalizationService:
@@ -113,22 +120,94 @@ class FiscalizationService:
 
     @staticmethod
     def fiscalize_on_payment(order_id):
-        """Hook for the order pay flow. NEVER raises — under serve-now policy a
-        failure is logged + queued, the sale stands. Under block-on-failure the
-        caller checks the returned success flag."""
+        """Hook for the order pay flow. NEVER raises.
+
+        Return contract the pay-flow callers MUST honor:
+          - Under serve-now policy (block_on_failure() False — the default) a
+            provider failure is logged + the receipt is queued for retry and we
+            still return the failure ServiceResponse, but the caller is free to
+            ignore it and complete the sale (serve-now).
+          - Under block_on_failure() True the returned value is a *failure*
+            ServiceResponse whenever fiscalization did not succeed. Callers are
+            REQUIRED to check `result['success']` and refuse to finish the sale
+            when it is False; swallowing it defeats strict-compliance mode.
+        """
+        block = FiscalConfig.block_on_failure()
         try:
             result, _ = FiscalizationService.fiscalize_order(order_id)
-            return result
         except Exception:
             logger.exception('fiscalize_on_payment failed (order=%s)', order_id)
+            # Treat an unexpected crash as a failure too: surface it under
+            # block-on-failure, otherwise it's swallowed by the serve-now caller.
             return ServiceResponse.error('fiscalization error (queued for retry)')
+
+        # fiscalize_order returns either a success dict (ServiceResponse) or a
+        # failure dict {'success': False, ...}. Pass both back verbatim so a
+        # block-on-failure caller can read result['success']; a serve-now caller
+        # ignores the failure and serves now exactly as before.
+        if block and not result.get('success'):
+            logger.warning(
+                'fiscalize_on_payment: block_on_failure set and fiscalization '
+                'failed (order=%s) — caller must refuse to finish the sale',
+                order_id,
+            )
+        return result
+
+    @staticmethod
+    def _reap_stale_sent():
+        """Rescue receipts stranded in SENT (process died between the pre-call
+        SENT commit and the post-call CONFIRMED/FAILED commit).
+
+        We have no provider receipt-id / idempotency token to ask the provider
+        whether the prior send landed, so we cannot KNOW it failed. Conservative
+        handling:
+          - If a fiscal_sign is already present, the send actually succeeded and
+            only the final status write was lost — promote it to CONFIRMED (no
+            re-send).
+          - Otherwise flip it to FAILED so the normal retry path re-drives it.
+            This may re-send a receipt that secretly succeeded, but with no
+            dedup field that is the safest available option (better a possible
+            duplicate report than a silently unreported sale). Bounded by
+            MAX_ATTEMPTS so it can't loop forever.
+        Returns the number of rows flipped to FAILED (now eligible for retry)."""
+        cutoff = timezone.now() - timedelta(seconds=SENT_STALE_SECONDS)
+        stale = FiscalReceipt.objects.filter(
+            status=FiscalReceipt.Status.SENT, updated_at__lt=cutoff,
+        )
+        flipped = 0
+        for receipt in stale:
+            with transaction.atomic():
+                receipt = FiscalReceipt.objects.select_for_update().get(pk=receipt.pk)
+                if receipt.status != FiscalReceipt.Status.SENT:
+                    continue  # raced with the post-call commit; leave it alone
+                if receipt.fiscal_sign:
+                    receipt.status = FiscalReceipt.Status.CONFIRMED
+                    if not receipt.fiscalized_at:
+                        receipt.fiscalized_at = timezone.now()
+                    receipt.error = ''
+                    receipt.save()
+                else:
+                    receipt.status = FiscalReceipt.Status.FAILED
+                    receipt.error = (
+                        'stranded in SENT > %ss; re-queued for retry'
+                        % SENT_STALE_SECONDS
+                    )
+                    receipt.save()
+                    flipped += 1
+        if flipped:
+            logger.warning('retry_failed: reaped %d stale-SENT receipt(s)', flipped)
+        return flipped
 
     @staticmethod
     def retry_failed(limit=100):
         """Re-attempt FAILED receipts under the retry cap. Run by the
-        `fiscalize_retry` command / control-panel button / a periodic worker."""
+        `fiscalize_retry` command / control-panel button / a periodic worker.
+
+        First reaps stale-SENT rows (orphaned by a crash mid-send) into FAILED
+        so they get swept in the same pass."""
         if not FiscalConfig.is_enabled():
             return {'retried': 0, 'confirmed': 0, 'still_failing': 0, 'skipped': True}
+        FiscalizationService._reap_stale_sent()
         qs = FiscalReceipt.objects.filter(
             status=FiscalReceipt.Status.FAILED, attempts__lt=MAX_ATTEMPTS,
         ).order_by('updated_at')[:limit]

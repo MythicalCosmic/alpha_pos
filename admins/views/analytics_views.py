@@ -13,6 +13,13 @@ from base.models import Shift
 from base.security.permissions import manager_required, pos_staff_required
 
 
+def _can_view_any_shift(user):
+    """Managers/admins see every shift's financials; a plain cashier may only
+    see their own (these endpoints expose revenue, cash variance and receipts —
+    without this check any cashier could read a coworker's handover by id)."""
+    return getattr(user, 'role', None) in ('ADMIN', 'MANAGER')
+
+
 @require_GET
 @pos_staff_required
 def shift_perf_view(request, shift_id):
@@ -24,6 +31,8 @@ def shift_perf_view(request, shift_id):
         return JsonResponse(
             {'success': False, 'message': 'Shift not found'}, status=404,
         )
+    if not _can_view_any_shift(request.user) and shift.user_id != request.user.id:
+        return JsonResponse({'success': False, 'message': 'Forbidden'}, status=403)
     return JsonResponse({'success': True, 'data': shift_performance(shift)})
 
 
@@ -112,6 +121,8 @@ def shift_report_view(request, shift_id):
         )
     except Shift.DoesNotExist:
         return JsonResponse({'success': False, 'message': 'Shift not found'}, status=404)
+    if not _can_view_any_shift(request.user) and shift.user_id != request.user.id:
+        return JsonResponse({'success': False, 'message': 'Forbidden'}, status=403)
     return JsonResponse({'success': True, 'data': shift_handover_report(shift)})
 
 

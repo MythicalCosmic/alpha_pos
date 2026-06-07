@@ -3,11 +3,13 @@ import logging
 import requests
 from base.services.sync.config import (
     get_cloud_url, get_cloud_token, get_branch_id,
-    get_sync_timeout, get_sync_max_retries,
+    get_sync_timeout, get_sync_max_retries, get_sync_require_https,
 )
 from base.services.sync.encoder import SyncEncoder
 
 logger = logging.getLogger(__name__)
+
+_insecure_url_warned = False
 
 
 def _auth_headers():
@@ -18,9 +20,33 @@ def _auth_headers():
     }
 
 
+def _guard_url(url):
+    """Return an error string if the URL must not be used, else None.
+
+    Plaintext http:// carries the branch token and user password hashes in the
+    clear. Warn once; refuse only when SYNC_REQUIRE_HTTPS is enabled so existing
+    LAN deployments keep working until the operator opts in.
+    """
+    global _insecure_url_warned
+    if not url.startswith('http://'):
+        return None
+    if get_sync_require_https():
+        return 'CLOUD_SYNC_URL must use https:// (SYNC_REQUIRE_HTTPS is enabled)'
+    if not _insecure_url_warned:
+        logger.warning(
+            'CLOUD_SYNC_URL uses plaintext http:// — the branch token and user '
+            'password hashes traverse it unencrypted. Use https:// in '
+            'production (set SYNC_REQUIRE_HTTPS=true to enforce).'
+        )
+        _insecure_url_warned = True
+    return None
+
+
 def check_health():
     url = get_cloud_url()
     if not url:
+        return False
+    if _guard_url(url):
         return False
     try:
         resp = requests.get(
@@ -37,6 +63,9 @@ def send_batch(model_name, records, retry=True):
     url = get_cloud_url()
     if not url:
         return {'success': False, 'error': 'Cloud URL not configured'}
+    guard = _guard_url(url)
+    if guard:
+        return {'success': False, 'error': guard}
 
     payload = json.dumps({
         'model': model_name,
@@ -106,6 +135,9 @@ def fetch_changes(since_timestamp=None):
     url = get_cloud_url()
     if not url:
         return {'success': False, 'error': 'Cloud URL not configured'}
+    guard = _guard_url(url)
+    if guard:
+        return {'success': False, 'error': guard}
 
     params = {'branch_id': get_branch_id()}
     if since_timestamp:

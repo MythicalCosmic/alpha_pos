@@ -17,7 +17,7 @@ def _discount_meta(payload):
         return {}
     keep = ('code', 'discount_type_id', 'value', 'is_active', 'is_stackable',
             'usage_limit', 'usage_per_user', 'min_order_amount',
-            'starts_at', 'ends_at')
+            'start_date', 'end_date')
     return {k: payload.get(k) for k in keep if k in payload}
 
 
@@ -180,7 +180,10 @@ def validate_discount(request):
 
     code = data.get('code', '')
     order_subtotal = data.get('order_subtotal', 0)
-    user_id = data.get('user_id')
+    # Evaluate the per-user redemption cap against the AUTHENTICATED user, not a
+    # client-supplied id — otherwise the limit can be checked against an
+    # attacker-chosen account and bypassed.
+    user_id = request.user.id
 
     result, status_code = DiscountService.validate_code(
         code=code, order_subtotal=order_subtotal, user_id=user_id,

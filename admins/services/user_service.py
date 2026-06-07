@@ -54,7 +54,7 @@ class AdminUserService:
         return ServiceResponse.success(data={'user': _serialize_user(user)})
 
     @staticmethod
-    def create_user(first_name, last_name, role='CASHIER', password=None, email=None):
+    def create_user(first_name, last_name, role='CASHIER', password=None, email=None, actor=None):
         if not first_name or not last_name:
             return ServiceResponse.validation_error(
                 errors={'name': 'first_name and last_name are required'},
@@ -75,6 +75,13 @@ class AdminUserService:
                 errors={'role': f"Must be one of {list(User.RoleChoices.values)}"},
                 message='Invalid role',
             )
+
+        # Privilege-escalation guard: a non-ADMIN actor (e.g. a MANAGER, who is
+        # admitted by @manager_required) must not be able to mint an ADMIN
+        # account. actor=None (internal/seed callers) is unrestricted; the HTTP
+        # view always passes the real actor.
+        if actor is not None and actor.role != 'ADMIN' and role == 'ADMIN':
+            return ServiceResponse.forbidden('Only an admin can create an admin account')
 
         # Managers sign in by email (they're the back-office-adjacent tier), so
         # the email is required for them. Every other role (CASHIER, etc.) logs
@@ -121,11 +128,24 @@ class AdminUserService:
         )
 
     @staticmethod
-    def update_user(user_id, **kwargs):
+    def update_user(user_id, actor=None, **kwargs):
         try:
             user = User.objects.get(pk=user_id, is_deleted=False)
         except User.DoesNotExist:
             return ServiceResponse.not_found('User not found')
+
+        # Privilege-escalation guard. A non-ADMIN actor (MANAGER) may edit
+        # regular staff but must not mint or touch admins, nor grant the
+        # wildcard '*' permission. actor=None (internal callers) is unrestricted
+        # for back-compat — the HTTP view always passes the real actor.
+        if actor is not None and actor.role != 'ADMIN':
+            if kwargs.get('role') == 'ADMIN':
+                return ServiceResponse.forbidden('Only an admin can grant the ADMIN role')
+            if user.role == 'ADMIN':
+                return ServiceResponse.forbidden('Only an admin can modify an admin account')
+            if 'permissions' in kwargs and kwargs['permissions'] is not None \
+                    and '*' in kwargs['permissions']:
+                return ServiceResponse.forbidden('Only an admin can grant the "*" permission')
 
         if 'role' in kwargs and kwargs['role'] is not None:
             if kwargs['role'] not in User.RoleChoices.values:
@@ -160,9 +180,23 @@ class AdminUserService:
             user.permissions = perms
 
         if kwargs.get('password'):
-            user.password = hash_password(str(kwargs['password']))
+            # Same 4-digit PIN rule as create_user — otherwise an admin could
+            # set a non-PIN password the monoblock id+PIN login can never match,
+            # locking the staff member out of the POS.
+            pin = str(kwargs['password']).strip()
+            if not pin.isdigit() or len(pin) != 4:
+                return ServiceResponse.validation_error(
+                    errors={'password': 'PIN must be exactly 4 digits'},
+                    message='Validation failed',
+                )
+            user.password = hash_password(pin)
 
-        user.save()
+        # email is globally UNIQUE; a collision on update must return a clean
+        # 400 rather than bubbling an IntegrityError up as a 500.
+        try:
+            user.save()
+        except IntegrityError:
+            return ServiceResponse.error(f"User with email {user.email} already exists")
         return ServiceResponse.success(
             data={'user': _serialize_user(user)},
             message='User updated',

@@ -321,8 +321,9 @@ class CustomerOrderService:
         order = OrderRepository.get_by_id_with_relations(order_id)
         if not order:
             return ServiceResponse.not_found('Order not found')
-        # Read-side ownership: ADMIN/CASHIER may read any order; USER only their own.
-        if user_role not in ('ADMIN', 'CASHIER') and user_id is not None and order.user_id != user_id:
+        # Read-side ownership: staff (ADMIN/CASHIER/MANAGER/WAITER) may read any
+        # order; a plain USER only their own.
+        if user_role not in ('ADMIN', 'CASHIER', 'MANAGER', 'WAITER') and user_id is not None and order.user_id != user_id:
             return ServiceResponse.forbidden(
                 f'You do not have permission to view order #{order.display_id}.'
             )

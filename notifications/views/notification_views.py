@@ -2,7 +2,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods, require_GET, require_POST
 from base.helpers.request import parse_json_body, safe_page, safe_per_page
-from base.helpers.response import json_response
+from base.helpers.response import json_response, ServiceResponse
 from base.security.permissions import admin_required
 from notifications.services.config_service import ConfigService
 from notifications.services.sender_service import SenderService
@@ -29,9 +29,12 @@ def settings_view(request):
 @require_POST
 @admin_required
 def settings_test(request):
-    settings = ConfigService.get_settings_obj()
+    settings = ConfigService.load()
     brand = settings.brand_name if settings else 'Alpha POS'
-    return json_response(SenderService.send_raw(f"{brand} - test notification"))
+    # send_raw() enqueues the message and returns None, so wrap the outcome in a
+    # ServiceResponse ourselves rather than feeding None into json_response.
+    SenderService.send_raw(f"{brand} - test notification")
+    return json_response(ServiceResponse.success(message='Test notification queued'))
 
 
 @require_GET

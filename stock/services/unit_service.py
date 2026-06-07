@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Any, Optional, Tuple
 from decimal import Decimal
 from django.db import transaction
@@ -6,6 +7,8 @@ from base.helpers.response import ServiceResponse
 from stock.models import StockUnit, StockItemUnit
 from stock.services.base_service import to_decimal, round_decimal
 from stock.repositories import StockUnitRepository, StockItemUnitRepository
+
+logger = logging.getLogger(__name__)
 
 
 class StockUnitService:
@@ -402,18 +405,40 @@ class StockItemUnitService:
                          stock_item_id: int,
                          quantity: Decimal,
                          from_unit_id: int) -> Decimal:
+        # CONTRACT: this MUST always return a Decimal. Callers (e.g.
+        # StockLevelService.adjust) do arithmetic on the result mid-transaction,
+        # so returning a ServiceResponse (dict, int) tuple here would blow up
+        # with a TypeError. On any missing/inconsistent data we fall back to the
+        # raw quantity treated as base units and log a warning instead.
+        quantity = to_decimal(quantity)
+
         item_unit = StockItemUnitRepository.get_by_item_and_unit(stock_item_id, from_unit_id)
         if item_unit:
-            return to_decimal(quantity) * item_unit.conversion_to_base
+            return quantity * item_unit.conversion_to_base
 
         from stock.repositories import StockItemRepository
         stock_item = StockItemRepository.get_by_id(stock_item_id)
         if not stock_item:
-            return ServiceResponse.not_found(f"Stock item with id {stock_item_id} not found")
+            logger.warning(
+                "convert_for_item: stock item %s not found; treating quantity "
+                "as base units", stock_item_id,
+            )
+            return quantity
 
-        result, _ = StockUnitService.convert(
+        result = StockUnitService.convert(
             quantity,
             from_unit_id,
             stock_item.base_unit_id
         )
-        return result
+        # convert() returns (Decimal, details) on success but a ServiceResponse
+        # (dict, int) tuple on failure (unknown unit, mismatched unit types).
+        # Distinguish them: a successful first element is a Decimal.
+        converted = result[0]
+        if not isinstance(converted, Decimal):
+            logger.warning(
+                "convert_for_item: unit conversion failed for item %s from "
+                "unit %s; treating quantity as base units", stock_item_id,
+                from_unit_id,
+            )
+            return quantity
+        return converted

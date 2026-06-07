@@ -62,6 +62,17 @@ def handle_update(update):
     Dispatches `message` and `callback_query` updates. Inline queries and
     other update types are silently ignored.
     """
+    # Idempotency: Telegram re-delivers an update whenever the webhook doesn't
+    # ACK in time (and the async inbound path re-enqueues it too). Without
+    # dedup, a redelivered '/order add' or an inc:/add: callback bumps the cart
+    # twice. cache.add is atomic (sets only if absent) so concurrent
+    # redeliveries collapse to one. update_id is unique per bot.
+    update_id = update.get('update_id')
+    if update_id is not None:
+        from django.core.cache import cache
+        if not cache.add(f'tg:update:{update_id}', True, 3600):
+            return None
+
     callback = update.get('callback_query')
     if callback:
         return _handle_callback_query(callback)

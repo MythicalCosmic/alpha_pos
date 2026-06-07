@@ -53,9 +53,6 @@ def _clean_field_value(field, value):
             return date_parser.parse(value)
         return value
 
-    if field_type == 'ForeignKey':
-        return None
-
     if field_type == 'BooleanField':
         return bool(value)
 
@@ -65,40 +62,19 @@ def _clean_field_value(field, value):
     return value
 
 
-# Per-model write denylist for incoming sync records. Models opt into rules by
-# setting a SYNC_WRITE_DENYLIST class attribute (preferred — keeps the policy
-# next to the model); the dict below is a fallback for models that don't.
-# Every SyncMixin model declares the attribute (empty by default), so the
-# fallback is rarely consulted. User intentionally syncs fully (credentials +
-# role) for central user management — see User.SYNC_WRITE_DENYLIST.
-WRITE_DENYLIST = {}
-
-
-def _denylist_for(model_class):
-    declared = getattr(model_class, 'SYNC_WRITE_DENYLIST', None)
-    if declared is not None:
-        return set(declared)
-    label = f'{model_class._meta.app_label}.{model_class.__name__}'
-    return WRITE_DENYLIST.get(label, set())
-
-
 def _prepare_fields(model_class, data):
+    # Clean+coerce incoming scalar fields. The direction-aware write denylist is
+    # applied later, per create/update branch, via model_class._strip_sync_denied
+    # so a required column on a brand-new row isn't stripped (which would raise a
+    # NOT NULL IntegrityError and re-queue the record forever).
     model_fields = {}
     for f in model_class._meta.get_fields():
         if hasattr(f, 'column'):
             model_fields[f.name] = f
 
-    denied = _denylist_for(model_class)
-
     cleaned = {}
     for key, value in data.items():
         if key not in model_fields:
-            continue
-        if key in denied:
-            logger.warning(
-                'sync receive: dropping denylisted field %s on %s',
-                key, model_class.__name__,
-            )
             continue
         field = model_fields[key]
         if field.get_internal_type() == 'ForeignKey':
@@ -112,6 +88,15 @@ def _prepare_fields(model_class, data):
     return cleaned
 
 
+def _strip_denied(model_class, cleaned, *, creating):
+    # Delegate to the model's direction-aware policy when available (every
+    # SyncMixin subclass has it). Non-SyncMixin models pass through unchanged.
+    strip = getattr(model_class, '_strip_sync_denied', None)
+    if strip is None:
+        return cleaned
+    return strip(cleaned, creating=creating)
+
+
 def _preserve_updated_at(model_class, instance, incoming_updated):
     # .update() bypasses auto_now so the source-of-truth updated_at survives
     # the receive write and the _should_replace tiebreaker stays meaningful.
@@ -122,12 +107,6 @@ def _preserve_updated_at(model_class, instance, incoming_updated):
 
 
 class CloudReceiver:
-
-    @classmethod
-    def is_branch_authorized(cls, branch_token):
-        from django.conf import settings
-        allowed = getattr(settings, 'ALLOWED_BRANCH_TOKENS', [])
-        return branch_token in allowed
 
     @classmethod
     def receive_batch(cls, model_name, branch_id, records):
@@ -280,7 +259,7 @@ class CloudReceiver:
                 # which bypasses auto_now (same approach as SyncMixin.from_sync_dict).
                 incoming_updated = cleaned.pop('updated_at', None)
 
-                for key, value in cleaned.items():
+                for key, value in _strip_denied(model_class, cleaned, creating=False).items():
                     setattr(instance, key, value)
 
                 for fk_field, fk_instance in resolved_fks.items():
@@ -305,9 +284,13 @@ class CloudReceiver:
                 if hasattr(model_class, '_find_by_natural_key'):
                     natural = model_class._find_by_natural_key(cleaned)
                 if natural is not None:
-                    instance = natural
+                    # Re-fetch under a row lock so two concurrent receives that
+                    # both reconcile onto the same natural-key row serialize
+                    # instead of clobbering each other.
+                    instance = model_class.objects.select_for_update().get(pk=natural.pk)
                     instance.uuid = uuid_val
-                    for key, value in cleaned.items():
+                    # Reconcile = UPDATE of an existing row: protect denied fields.
+                    for key, value in _strip_denied(model_class, cleaned, creating=False).items():
                         setattr(instance, key, value)
                     for fk_field, fk_instance in resolved_fks.items():
                         setattr(instance, fk_field, fk_instance)
@@ -327,7 +310,7 @@ class CloudReceiver:
                     synced_at=timezone.now(),
                 )
 
-                for key, value in cleaned.items():
+                for key, value in _strip_denied(model_class, cleaned, creating=True).items():
                     setattr(instance, key, value)
 
                 for fk_field, fk_instance in resolved_fks.items():

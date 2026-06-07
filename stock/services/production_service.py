@@ -343,7 +343,11 @@ class ProductionOrderService:
             )
 
         if auto_allocate:
-            cls._allocate_ingredients(po.id)
+            try:
+                cls._allocate_ingredients(po.id)
+            except _ProductionStepError as e:
+                transaction.set_rollback(True)
+                return e.result, e.status
 
         return ServiceResponse.success(data={
             "id": po.id,
@@ -406,7 +410,11 @@ class ProductionOrderService:
 
         po.status = ProductionOrder.Status.PLANNED
         po.save(update_fields=["status", "updated_at"])
-        cls._allocate_ingredients(po_id)
+        try:
+            cls._allocate_ingredients(po_id)
+        except _ProductionStepError as e:
+            transaction.set_rollback(True)
+            return e.result, e.status
 
         return ServiceResponse.success(data={
             "order": cls.serialize(po)
@@ -499,7 +507,11 @@ class ProductionOrderService:
             return ServiceResponse.error(f"Cannot cancel order in {po.status} status")
 
         if po.status in [ProductionOrder.Status.PLANNED, ProductionOrder.Status.IN_PROGRESS]:
-            cls._release_ingredients(po_id)
+            try:
+                cls._release_ingredients(po_id)
+            except _ProductionStepError as e:
+                transaction.set_rollback(True)
+                return e.result, e.status
 
         po.status = ProductionOrder.Status.CANCELED
         if reason:
@@ -604,6 +616,13 @@ class ProductionOrderService:
                 notes=f"Reserved for production: {po.order_number}"
             )
 
+            # If the reservation failed, do NOT flip the ingredient to ALLOCATED
+            # (that would lie about stock being held). Raise so the caller's
+            # transaction rolls back the whole allocation, consistent with the
+            # _ProductionStepError pattern used by complete()'s helpers.
+            if status >= 400:
+                raise _ProductionStepError(result, status)
+
             ing.status = ProductionOrderIngredient.IngredientStatus.ALLOCATED
             ing.save(update_fields=["status"])
 
@@ -624,6 +643,12 @@ class ProductionOrderService:
                 user_id=po.created_by_id,
                 notes=f"Released from cancelled production: {po.order_number}"
             )
+
+            # If the release failed, do NOT flip the ingredient back to PENDING
+            # (the reservation is still held). Raise so the caller's transaction
+            # rolls back rather than silently leaking the reservation.
+            if status >= 400:
+                raise _ProductionStepError(result, status)
 
             ing.status = ProductionOrderIngredient.IngredientStatus.PENDING
             ing.save(update_fields=["status"])
@@ -650,13 +675,17 @@ class ProductionOrderService:
             # back, so available = quantity - reserved eventually returns
             # zero on healthy stock and blocks future production.
             if ing.status == ProductionOrderIngredient.IngredientStatus.ALLOCATED:
-                StockLevelService.release_reservation(
+                rel_result, rel_status = StockLevelService.release_reservation(
                     stock_item_id=ing.stock_item_id,
                     location_id=po.source_location_id,
                     quantity=ing.planned_quantity,
                     user_id=user_id,
                     notes=f"Released for consumption: {po.order_number}",
                 )
+                # Surface a failed release so complete()'s atomic rolls back
+                # instead of double-counting the reservation against the deduction.
+                if rel_status >= 400:
+                    raise _ProductionStepError(rel_result, rel_status)
 
             if settings.track_batches or ing.stock_item.track_batches:
                 from .batch_service import StockBatchService

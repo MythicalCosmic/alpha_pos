@@ -24,9 +24,22 @@ def _login_email(request):
     return (email or '').strip().lower()[:128] or None
 
 
+def _login_user_id(request):
+    try:
+        import json
+        body = json.loads(request.body.decode('utf-8') or '{}')
+    except Exception:
+        return None
+    user_id = body.get('user_id') if isinstance(body, dict) else None
+    if user_id is None:
+        return None
+    return str(user_id).strip()[:128] or None
+
+
 @csrf_exempt
 @rate_limit('login', 5, 60)
 @rate_limit_by('login_user', 5, 60, _login_email)
+@rate_limit_by('login_uid', 5, 60, _login_user_id)
 @require_POST
 def login(request):
     data, error = login_request(request)

@@ -21,9 +21,38 @@ def _vat_portion(line_total_tiyin, vat_percent):
 
 def build_receipt_payload(order, tenant, receipt_type='SALE'):
     vat_percent = tenant.get('vat_percent', 0) or 0
+
+    # Raw (pre-discount) extended line totals in tiyin.
+    raw_lines = [
+        (item, _to_tiyin(Decimal(str(item.price)) * item.quantity))
+        for item in order.items.select_related('product').all()
+    ]
+    gross = sum(lt for _, lt in raw_lines)
+    total = _to_tiyin(order.total_amount)
+
+    # Apportion any order-level discount across the lines so the line totals sum
+    # to the amount actually charged and VAT is computed on the DISCOUNTED line
+    # amounts. Previously each line used its pre-discount total while `total`
+    # used the discounted figure, so on every discounted sale the receipt
+    # over-reported both line amounts and VAT versus the real transaction — a
+    # fiscal-compliance defect. The last line absorbs the rounding remainder so
+    # the lines reconcile exactly to `total`.
+    apportion = gross > 0 and total != gross
     items = []
-    for item in order.items.select_related('product').all():
-        line_total = _to_tiyin(Decimal(str(item.price)) * item.quantity)
+    running = 0
+    last_idx = len(raw_lines) - 1
+    for idx, (item, raw_total) in enumerate(raw_lines):
+        if apportion:
+            if idx == last_idx:
+                line_total = total - running
+            else:
+                line_total = int(
+                    (Decimal(raw_total) * total / gross).quantize(
+                        Decimal('1'), rounding=ROUND_HALF_UP)
+                )
+        else:
+            line_total = raw_total
+        running += line_total
         ikpu = getattr(item.product, 'ikpu_code', '') or ''
         items.append({
             'name': (item.product.name if item.product else 'Item')[:63],
@@ -35,7 +64,6 @@ def build_receipt_payload(order, tenant, receipt_type='SALE'):
             'vat': _vat_portion(line_total, vat_percent),
         })
 
-    total = _to_tiyin(order.total_amount)
     is_cash = (order.payment_method or 'CASH') == 'CASH'
     return {
         'tin': tenant.get('tin', ''),

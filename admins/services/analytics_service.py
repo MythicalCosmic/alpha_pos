@@ -40,7 +40,7 @@ def shift_performance(shift):
         completed=Count('id', filter=Q(status='COMPLETED')),
         cancelled=Count('id', filter=Q(status='CANCELED')),
         paid=Count('id', filter=Q(is_paid=True)),
-        revenue=Sum('total_amount', filter=Q(is_paid=True)),
+        revenue=Sum('total_amount', filter=Q(is_paid=True) & ~Q(status='CANCELED')),
     )
 
     # Avg prep = (ready_at - created_at) over ready/completed orders, in SQL

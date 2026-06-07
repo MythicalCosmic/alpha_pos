@@ -8,6 +8,27 @@ STATUS_TTL = 86400
 
 class SyncStatus:
 
+    # The pull cursor key in the durable SyncState table.
+    CURSOR_KEY = 'last_pull'
+
+    @classmethod
+    def get_cursor(cls):
+        """Durable pull cursor (cloud-clock `synced_at` frontier), or None.
+
+        Stored in the DB (SyncState) rather than the cache so a restart or a
+        cache flush can't silently reset it and trigger a full re-pull.
+        """
+        from base.models import SyncState
+        row = SyncState.objects.filter(key=cls.CURSOR_KEY).first()
+        return row.value if (row and row.value) else None
+
+    @classmethod
+    def set_cursor(cls, value):
+        from base.models import SyncState
+        SyncState.objects.update_or_create(
+            key=cls.CURSOR_KEY, defaults={'value': value or ''},
+        )
+
     @classmethod
     def update(cls, **kwargs):
         data = cls.get()

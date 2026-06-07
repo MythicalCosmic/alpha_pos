@@ -117,7 +117,8 @@ def expense_reject(request, expense_id):
     if error:
         return json_response(error)
 
-    result, status = ExpenseService.reject(expense_id, approved_by_id=request.user.id, **data)
+    result, status = ExpenseService.reject(
+        expense_id, approved_by_id=request.user.id, notes=data.get("notes", ""))
     return JsonResponse(result, status=status)
 
 
@@ -129,7 +130,14 @@ def expense_pay(request, expense_id):
     if error:
         return json_response(error)
 
-    result, status = ExpenseService.mark_paid(expense_id, paid_by_id=request.user.id)
+    # Honor the client-supplied payment_method (CASH/UZCARD/HUMO/etc.).
+    # The previous default of CASH caused bank/card-paid expenses to wrongly
+    # debit the cash drawer, leaving the register short by the expense amount
+    # even though no cash had been disbursed.
+    kwargs = {"paid_by_id": request.user.id}
+    if data and "payment_method" in data:
+        kwargs["payment_method"] = data["payment_method"]
+    result, status = ExpenseService.mark_paid(expense_id, **kwargs)
     return JsonResponse(result, status=status)
 
 
