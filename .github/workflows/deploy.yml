@@ -56,6 +56,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp the commit into the image -> reported by /healthz.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           # GitHub Actions layer cache so rebuilds reuse unchanged layers.
           cache-from: type=gha
           cache-to: type=gha,mode=max

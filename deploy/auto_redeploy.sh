@@ -48,6 +48,8 @@ if ! git merge --ff-only "origin/$BRANCH"; then
 fi
 
 COMPOSE="docker compose -f docker-compose.yaml -f docker-compose.edge.yml"
+# Stamp the build with the commit we just checked out so /healthz reports it.
+export GIT_SHA="$(git rev-parse --short=12 HEAD)"
 # --build picks up the new code; migrations run from the container entrypoint.
 $COMPOSE up -d --build
 

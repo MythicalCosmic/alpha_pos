@@ -14,6 +14,8 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+import os
+
 from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import path, include
@@ -23,7 +25,13 @@ from notifications.views import telegram_views, qr_order_views
 
 
 def healthz(_request):
-    return HttpResponse('ok', content_type='text/plain')
+    # Body is "ok <commit>" so `curl /healthz` tells you exactly which build is
+    # live (APP_GIT_SHA is baked into the image at build time — see Dockerfile /
+    # auto_redeploy.sh). The container healthcheck only checks the 200 status,
+    # so enriching the body is safe. Keeps the "ok" prefix as the stable
+    # contract for any naive monitor.
+    sha = os.environ.get('APP_GIT_SHA', 'unknown')
+    return HttpResponse(f'ok {sha}', content_type='text/plain')
 
 
 urlpatterns = [

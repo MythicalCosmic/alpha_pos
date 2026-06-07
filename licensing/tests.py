@@ -42,7 +42,8 @@ class TestMiddlewareAllowlist:
         _unregister_license()
         resp = _client().get('/healthz')
         assert resp.status_code == 200
-        assert resp.content == b'ok'
+        # Body is "ok <commit>"; the stable contract is the leading "ok".
+        assert resp.content.startswith(b'ok')
 
     def test_status_endpoint_passes_without_license(self):
         _unregister_license()

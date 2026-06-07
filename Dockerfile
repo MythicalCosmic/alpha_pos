@@ -27,6 +27,12 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
+# Stamp the build with the git commit so /healthz can report exactly which code
+# is live. Passed by the deploy scripts (--build-arg GIT_SHA=...); defaults to
+# "unknown" for ad-hoc builds. Placed after COPY so it only affects late layers.
+ARG GIT_SHA=unknown
+ENV APP_GIT_SHA=${GIT_SHA}
+
 # A throwaway SECRET_KEY lets settings import at build time — with DEBUG unset
 # (False) settings is fail-loud without one, which is why this previously ran
 # under `2>/dev/null || true` and silently collected NOTHING. collectstatic

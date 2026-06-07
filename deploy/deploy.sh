@@ -182,7 +182,8 @@ echo ">> wrote Caddyfile"
 
 # --- 5. bring the stacks up ------------------------------------------------
 echo ">> building + starting alpha_pos ..."
-( cd "$ALPHA_DIR" && docker compose -f docker-compose.yaml -f docker-compose.edge.yml up -d --build )
+A_SHA="$(git -C "$ALPHA_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+( cd "$ALPHA_DIR" && GIT_SHA="$A_SHA" docker compose -f docker-compose.yaml -f docker-compose.edge.yml up -d --build )
 
 if $HAVE_CONTROL; then
     echo ">> building + starting pos_control ..."
