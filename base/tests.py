@@ -262,3 +262,23 @@ class TestInkassaAtomic:
 
         register = CashRegister.objects.first()
         assert register.current_balance == Decimal('175')
+
+
+class TestPartialUniqueAllowsEmpty:
+    """Regression: partial unique constraints must NOT constrain empty values —
+    many categories have no slug. This broke cloud sync with
+    'duplicate key ... uniq_category_slug_active ... slug=()'."""
+
+    def test_multiple_empty_slug_categories_ok(self):
+        from base.models import Category
+        Category.objects.create(name='A', slug='')
+        Category.objects.create(name='B', slug='')
+        assert Category.objects.filter(slug='').count() == 2
+
+    def test_nonempty_slug_still_unique(self):
+        from base.models import Category
+        from django.db import IntegrityError, transaction
+        Category.objects.create(name='A', slug='drinks')
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                Category.objects.create(name='B', slug='drinks')

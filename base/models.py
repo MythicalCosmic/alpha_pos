@@ -518,7 +518,8 @@ class User(SyncMixin, models.Model):
             # non-deleted rows.
             models.UniqueConstraint(
                 fields=['email'],
-                condition=models.Q(is_deleted=False),
+                # Live rows with a non-empty email only (blank emails aren't unique).
+                condition=models.Q(is_deleted=False) & ~models.Q(email=''),
                 name='uniq_user_email_active',
             ),
         ]
@@ -584,7 +585,9 @@ class Category(SyncMixin, models.Model):
             # rows; a global unique index would IntegrityError on the dead row).
             models.UniqueConstraint(
                 fields=['slug'],
-                condition=models.Q(is_deleted=False),
+                # Only enforce uniqueness for live rows with a NON-empty slug —
+                # many categories legitimately have no slug ('' is not unique).
+                condition=models.Q(is_deleted=False) & ~models.Q(slug=''),
                 name='uniq_category_slug_active',
             ),
         ]
@@ -808,7 +811,8 @@ class Table(SyncMixin, models.Model):
             # be reused (number_exists only checks live rows).
             models.UniqueConstraint(
                 fields=['place', 'number'],
-                condition=models.Q(is_deleted=False),
+                # Live tables with a non-empty number only.
+                condition=models.Q(is_deleted=False) & ~models.Q(number=''),
                 name='uniq_table_place_number_active',
             ),
         ]
