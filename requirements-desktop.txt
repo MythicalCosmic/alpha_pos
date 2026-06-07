@@ -10,4 +10,11 @@ waitress==3.0.2
 pywebview==6.2.1
 pythonnet==3.1.0
 # Only needed to BUILD the .exe, not to run from source. 6.15+ supports Py 3.14.
-pyinstaller>=6.15
+# Pinned for reproducible builds (was unpinned >=6.15, so the bootloader could
+# change silently between builds). Bump deliberately.
+pyinstaller==6.15.0
+# Signed self-update (The Update Framework). Runtime + release tooling. If pip
+# can't resolve this exact version, bump to the latest tufup and re-verify the
+# Client/Repository API used in desktop/updater.py and tools/release.py.
+tufup==0.9.0
+

@@ -73,3 +73,57 @@ cd ~/alpha_pos/deploy && ./deploy.sh <IP>
 
 Secrets live only in the generated `.env` files (gitignored). Re-running
 `deploy.sh` preserves existing secrets so the database keeps working.
+
+## Continuous deployment (auto-redeploy on push)
+
+Instead of `git pull && up --build` by hand, let CI build the image and let the
+server pull it automatically.
+
+**How it works**
+
+1. Push to `main` (or a `v*` tag) → `.github/workflows/deploy.yml` builds the
+   Docker image and pushes it to GHCR as
+   `ghcr.io/<owner>/<repo>:latest` (+ `:sha-<commit>`, + `:vX.Y` for tags).
+2. On the server, **Watchtower** (in `deploy/docker-compose.cd.yml`) polls GHCR
+   every 5 min, pulls a changed `:latest`, and recreates the `web` container.
+3. The container entrypoint runs `migrate` on every start, so schema changes
+   apply themselves.
+
+**One-time server setup**
+
+```bash
+# a) Authenticate Docker to GHCR so Watchtower can pull the image.
+#    Use a GitHub PAT (classic) with read:packages, or skip this if you make
+#    the GHCR package Public (Repo → Packages → package → Settings → Visibility).
+echo <PAT_WITH_read:packages> | docker login ghcr.io -u <github-user> --password-stdin
+
+# b) Pin the image in the alpha_pos .env (owner/repo lowercased):
+echo 'WEB_IMAGE=ghcr.io/mythicalcosmic/alpha_pos:latest' >> ~/alpha_pos/.env
+
+# c) Bring the stack up with the CD overlay (NOTE: no --build — pull the image):
+cd ~/alpha_pos && docker compose \
+  -f docker-compose.yaml -f docker-compose.edge.yml -f deploy/docker-compose.cd.yml up -d
+```
+
+From then on, a merge to `main` redeploys within the poll interval — nothing to
+run on the server.
+
+**Force an immediate update** (don't wait for the poll):
+```bash
+cd ~/alpha_pos && docker compose \
+  -f docker-compose.yaml -f docker-compose.edge.yml -f deploy/docker-compose.cd.yml \
+  pull web && docker compose \
+  -f docker-compose.yaml -f docker-compose.edge.yml -f deploy/docker-compose.cd.yml up -d web
+```
+
+**Roll back** to a known-good build:
+```bash
+# set the pinned SHA tag, then up -d
+sed -i 's#^WEB_IMAGE=.*#WEB_IMAGE=ghcr.io/mythicalcosmic/alpha_pos:sha-<commit>#' ~/alpha_pos/.env
+cd ~/alpha_pos && docker compose \
+  -f docker-compose.yaml -f docker-compose.edge.yml -f deploy/docker-compose.cd.yml up -d web
+```
+
+Watchtower only updates containers labelled
+`com.centurylinklabs.watchtower.enable=true` (just `web`); db, redis and caddy
+are left untouched.

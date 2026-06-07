@@ -69,3 +69,7 @@ DELIVERABLES/
 # Server deploy: generated on the server, not committed
 docker-compose.edge.yml
 deploy/caddy/Caddyfile
+
+# Desktop self-update (tufup): signing keys are SECRET, the repo is generated
+update_keys/
+update_repo/

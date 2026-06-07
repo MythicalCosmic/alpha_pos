@@ -143,6 +143,20 @@ def main():
     if '--selftest' in sys.argv:
         return _selftest()
 
+    # Self-update check BEFORE anything binds or serves. In a configured frozen
+    # build this may download a new signed bundle and restart the process (so
+    # the call won't return); in dev or when unconfigured it's a guaranteed
+    # no-op that never raises. --no-update skips it (useful for debugging).
+    if '--no-update' not in sys.argv:
+        try:
+            from desktop import updater
+            updater.check_and_apply()
+            # Reached here => no update applied; confirm any prior update booted
+            # cleanly so its pending marker is cleared.
+            updater.mark_started_ok()
+        except Exception:  # noqa: BLE001 — never let updating block startup
+            logger.exception('self-update check failed; continuing')
+
     url = f'http://{control_server.CONTROL_HOST}:{control_server.CONTROL_PORT}/'
 
     # Single-instance: if the control port is already bound, another copy is
