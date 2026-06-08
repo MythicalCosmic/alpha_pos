@@ -354,3 +354,62 @@ class TestRehashPasswords:
         u.refresh_from_db()
         assert u.password == h  # untouched
         assert verify_password('9999', u.password) is True
+
+
+class TestReceiveOwnershipPreserved:
+    """A branch editing a CLOUD-owned record must not steal ownership on push —
+    else /changes later excludes it from that branch and cloud edits stop
+    flowing down (the 'edit on local renames it branch1' bug)."""
+
+    def test_branch_edit_keeps_cloud_owner(self):
+        from base.models import User
+        from base.services.sync.receiver import CloudReceiver
+        u = User.objects.create(
+            first_name='Cloud', last_name='User', email='c@test.local',
+            password='h', role='CASHIER', sync_version=1, branch_id='cloud')
+        result = CloudReceiver.receive_batch('base.User', branch_id='branch1', records=[{
+            'uuid': str(u.uuid), 'sync_version': 2, 'is_deleted': False,
+            'first_name': 'Edited', 'last_name': 'User', 'email': 'c@test.local',
+            'branch_id': 'cloud',
+        }])
+        assert result['updated'] == 1
+        u.refresh_from_db()
+        assert u.first_name == 'Edited'       # the edit applied
+        assert u.branch_id == 'cloud'         # owner preserved (NOT branch1)
+
+    def test_untagged_row_gets_tagged_on_update(self):
+        from base.models import User
+        from base.services.sync.receiver import CloudReceiver
+        u = User.objects.create(
+            first_name='No', last_name='Owner', email='n@test.local',
+            password='h', role='CASHIER', sync_version=1)
+        # save() auto-tags an empty branch_id with settings.BRANCH_ID, so force
+        # it empty at the DB level to exercise "untagged -> tag with pusher".
+        User.objects.filter(pk=u.pk).update(branch_id='')
+        CloudReceiver.receive_batch('base.User', branch_id='branch1', records=[{
+            'uuid': str(u.uuid), 'sync_version': 2, 'is_deleted': False,
+            'first_name': 'No', 'last_name': 'Owner', 'email': 'n@test.local',
+        }])
+        u.refresh_from_db()
+        assert u.branch_id == 'branch1'        # empty -> tagged with pusher
+
+
+class TestReceiveResolvesNonBaseModels:
+    """Bare model names from the push queue must resolve to the RIGHT app, not
+    default to 'base' (which rejected every cashbox/stock/hr/discounts record:
+    "App 'base' doesn't have a 'shiftpaymenttotal' model")."""
+
+    def test_bare_cashbox_model_resolves(self):
+        from base.services.sync.receiver import CloudReceiver
+        result = CloudReceiver.receive_batch('shiftpaymenttotal', 'branch1', [])
+        assert result['success'] is True
+
+    def test_bare_stock_model_resolves(self):
+        from base.services.sync.receiver import CloudReceiver
+        result = CloudReceiver.receive_batch('stocklevel', 'branch1', [])
+        assert result['success'] is True
+
+    def test_bare_base_model_still_resolves(self):
+        from base.services.sync.receiver import CloudReceiver
+        result = CloudReceiver.receive_batch('user', 'branch1', [])
+        assert result['success'] is True

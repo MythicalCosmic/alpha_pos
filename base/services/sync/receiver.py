@@ -124,12 +124,20 @@ class CloudReceiver:
         }
 
         try:
-            parts = model_name.split('.')
-            if len(parts) == 2:
-                app_label, model = parts
+            if '.' in model_name:
+                # Explicit 'app.Model'.
+                app_label, model = model_name.split('.', 1)
+                model_class = apps.get_model(app_label, model)
             else:
-                app_label, model = 'base', model_name
-            model_class = apps.get_model(app_label, model)
+                # Bare lowercase name as queued by SyncService.queue_record
+                # (instance.__class__.__name__.lower()). Resolve via the sync
+                # registry so non-base apps (cashbox/stock/hr/discounts) map to
+                # the RIGHT app — the old `else 'base'` default sent every bare
+                # name to base and rejected all non-base records.
+                from base.services.sync.config import resolve_model
+                model_class = resolve_model(model_name)
+                if model_class is None:
+                    model_class = apps.get_model('base', model_name)  # legacy fallback
         except Exception as e:
             return {'success': False, 'created': 0, 'updated': 0, 'skipped': 0, 'errors': [str(e)]}
 
@@ -268,7 +276,13 @@ class CloudReceiver:
                 instance.sync_version = sync_version
                 instance.is_deleted = is_deleted
                 instance.synced_at = timezone.now()
-                instance.branch_id = incoming_branch
+                # Preserve the record's OWNER on update. Overwriting branch_id
+                # with the pushing branch stole ownership of a cloud-owned record
+                # (a branch editing a cloud-created user re-tagged it 'branch1'),
+                # after which /changes excluded it from that branch's pull feed
+                # and cloud edits stopped flowing down. Only tag an untagged row.
+                if not instance.branch_id:
+                    instance.branch_id = incoming_branch
                 instance.save(_syncing=True)
                 _preserve_updated_at(model_class, instance, incoming_updated)
                 return instance, 'updated'
@@ -297,7 +311,10 @@ class CloudReceiver:
                     instance.sync_version = sync_version
                     instance.is_deleted = is_deleted
                     instance.synced_at = timezone.now()
-                    instance.branch_id = incoming_branch
+                    # Reconcile = update of an existing row: preserve its owner
+                    # (see the update branch above). Only tag if untagged.
+                    if not instance.branch_id:
+                        instance.branch_id = incoming_branch
                     instance.save(_syncing=True)
                     _preserve_updated_at(model_class, instance, incoming_updated)
                     return instance, 'updated'
