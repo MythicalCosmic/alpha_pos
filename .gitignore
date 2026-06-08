@@ -73,3 +73,6 @@ deploy/caddy/Caddyfile
 # Desktop self-update (tufup): signing keys are SECRET, the repo is generated
 update_keys/
 update_repo/
+
+# Old database dump (full prior DB — never commit)
+old_db/
