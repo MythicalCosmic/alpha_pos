@@ -1,4 +1,5 @@
 """Tests for the per-shift drawer + cashbox expenses (P1/P4)."""
+from django.test import override_settings
 from decimal import Decimal
 
 import pytest
@@ -112,3 +113,41 @@ class TestShiftSettlement:
         b = ShiftService.ensure_active_shift(u.id)
         assert a.id == b.id
         assert Shift.objects.filter(user=u, status='ACTIVE').count() == 1
+
+
+class TestShiftPaymentTotalSync:
+    """ShiftPaymentTotal is identified by (shift, method); sync must reconcile a
+    new-uuid record onto the existing row instead of an INSERT that trips
+    uniq_shift_method_active. And a tombstone whose shift is gone is skipped."""
+
+    @override_settings(DEPLOYMENT_MODE='cloud')
+    def test_collision_reconciles_not_duplicates(self):
+        import uuid as _uuid
+        from cashbox.models import ShiftPaymentTotal
+        from base.services.sync.receiver import CloudReceiver
+        u = _user(); s = _shift(u)
+        ShiftPaymentTotal.objects.create(
+            shift=s, method='CASH', expected_amount=Decimal('100'), sync_version=1)
+        incoming = str(_uuid.uuid4())
+        result = CloudReceiver.receive_batch('shiftpaymenttotal', 'branch1', [{
+            'uuid': incoming, 'sync_version': 5, 'is_deleted': False,
+            'shift_uuid': str(s.uuid), 'method': 'CASH',
+            'expected_amount': '250', 'counted_amount': '250',
+            'confirmed_amount': '0', 'difference': '0',
+        }])
+        assert result['errors'] == [], result['errors']
+        assert ShiftPaymentTotal.objects.filter(shift=s, method='CASH').count() == 1
+        row = ShiftPaymentTotal.objects.get(shift=s, method='CASH')
+        assert str(row.uuid) == incoming                 # reconciled onto existing
+        assert row.expected_amount == Decimal('250.00')  # cloud accepts branch money
+
+    def test_tombstone_with_missing_shift_is_skipped(self):
+        import uuid as _uuid
+        from base.services.sync.receiver import CloudReceiver
+        result = CloudReceiver.receive_batch('shiftpaymenttotal', 'branch1', [{
+            'uuid': str(_uuid.uuid4()), 'sync_version': 1, 'is_deleted': True,
+            'shift_uuid': str(_uuid.uuid4()), 'method': 'CASH', 'expected_amount': '0',
+        }])
+        assert result['errors'] == []
+        assert result['skipped'] == 1
+        assert result['failed_uuids'] == []

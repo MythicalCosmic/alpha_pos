@@ -209,21 +209,30 @@ class CloudReceiver:
             fk_field_name = FK_UUID_MAPPINGS[uuid_field][2]
             try:
                 fk_field = model_class._meta.get_field(fk_field_name)
-                if not fk_field.null:
-                    raise ValueError(
-                        f'Unresolved required FK on {model_class.__name__}: '
-                        f'{fk_field_name}={uuid_value}. Parent record has not '
-                        'synced yet — retry after the parent batch lands.'
-                    )
-            except Exception as exc:
-                if isinstance(exc, ValueError):
-                    raise
-                # Field lookup failure (mapping points to a field that no
-                # longer exists). Log and move on so a stale FK_UUID_MAPPINGS
-                # entry can't blow up the whole receive loop.
+            except Exception as exc:  # noqa: BLE001
+                # Field lookup failure (mapping points to a field that no longer
+                # exists). Log and move on so a stale FK_UUID_MAPPINGS entry can't
+                # blow up the whole receive loop.
                 logger.warning(
                     'sync receive: FK field %s missing on %s: %s',
                     fk_field_name, model_class.__name__, exc,
+                )
+                continue
+            if not fk_field.null:
+                if is_deleted:
+                    # A tombstone whose required parent never arrived (e.g. the
+                    # parent shift was deleted) is a no-op — there's nothing to
+                    # delete. Skip it instead of deferring forever and flooding
+                    # the queue with "parent not synced" errors.
+                    logger.info(
+                        'sync receive: skipping tombstone for %s; required FK '
+                        '%s=%s absent', model_class.__name__, fk_field_name, uuid_value,
+                    )
+                    return None, 'skipped'
+                raise ValueError(
+                    f'Unresolved required FK on {model_class.__name__}: '
+                    f'{fk_field_name}={uuid_value}. Parent record has not '
+                    'synced yet — retry after the parent batch lands.'
                 )
 
         for uuid_field in FK_UUID_MAPPINGS:
@@ -296,7 +305,7 @@ class CloudReceiver:
                 # forever. Converge on the incoming uuid.
                 natural = None
                 if hasattr(model_class, '_find_by_natural_key'):
-                    natural = model_class._find_by_natural_key(cleaned)
+                    natural = model_class._find_by_natural_key(cleaned, resolved_fks)
                 if natural is not None:
                     # Re-fetch under a row lock so two concurrent receives that
                     # both reconcile onto the same natural-key row serialize

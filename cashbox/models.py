@@ -51,6 +51,11 @@ class ShiftPaymentTotal(SyncMixin, models.Model):
         'expected_amount', 'counted_amount', 'confirmed_amount', 'difference',
     })
 
+    # (shift, method) is the real identity: reconcile an incoming row onto the
+    # existing one for the same shift+tender instead of INSERTing a duplicate
+    # that trips uniq_shift_method_active. 'shift' is resolved from shift_uuid.
+    SYNC_NATURAL_KEYS = ('shift', 'method')
+
     objects = SyncManager()
 
     class Meta:

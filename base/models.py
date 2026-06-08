@@ -188,12 +188,21 @@ class SyncMixin(models.Model):
     SYNC_NATURAL_KEYS = ()
 
     @classmethod
-    def _find_by_natural_key(cls, data):
+    def _find_by_natural_key(cls, data, resolved_fks=None):
+        """Find an existing row by SYNC_NATURAL_KEYS so an incoming record with a
+        new uuid reconciles onto it instead of INSERTing a duplicate that trips a
+        unique constraint. A key can be a plain field (read from `data`) or an FK
+        field (read from `resolved_fks`, the already-resolved related instances) —
+        e.g. ShiftPaymentTotal's ('shift', 'method')."""
         keys = getattr(cls, 'SYNC_NATURAL_KEYS', ())
         if not keys:
             return None
+        resolved_fks = resolved_fks or {}
         lookup = {}
         for k in keys:
+            if k in resolved_fks:
+                lookup[k] = resolved_fks[k]
+                continue
             value = data.get(k)
             if value in (None, ''):
                 return None
@@ -379,7 +388,7 @@ class SyncMixin(models.Model):
             # user). If so, reconcile onto that row — converging on the incoming
             # uuid — rather than INSERTing a duplicate that would raise
             # IntegrityError and be silently dropped, never to retry.
-            natural = cls._find_by_natural_key(data)
+            natural = cls._find_by_natural_key(data, resolved_fks)
             if natural is not None:
                 instance = natural
                 instance.uuid = uuid_val
