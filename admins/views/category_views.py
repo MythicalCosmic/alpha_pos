@@ -16,7 +16,10 @@ from admins.requests.category_requests import (
 
 def _check_permission(request, perm):
     user_perms = request.user.permissions or []
-    if '*' in user_perms:
+    # ADMIN role has every permission (matches base.security.permissions
+    # .permission_required) — without this an admin without '*' in their
+    # permissions list got a 403 on create/edit.
+    if '*' in user_perms or getattr(request.user, 'role', None) == 'ADMIN':
         return None
     if perm not in user_perms:
         return JsonResponse(
