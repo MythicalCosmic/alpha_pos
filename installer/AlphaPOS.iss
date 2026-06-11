@@ -45,7 +45,6 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 MinVersion=10.0
-PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline dialog
 ; lowest = install per-user, no elevation. Needed so the self-updater can
 ; overwrite the install in place. Trade-off: the LAN firewall rule below is then
