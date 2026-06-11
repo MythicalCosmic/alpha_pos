@@ -143,6 +143,16 @@ def main():
     if '--selftest' in sys.argv:
         return _selftest()
 
+    # Load saved config + baked defaults (incl. ALPHA_POS_UPDATE_URL) into the
+    # process env BEFORE the self-update check — otherwise apply_env_to_process
+    # only runs later inside ensure_django, so the launch-time updater would see
+    # no update server and skip on a hands-off boot.
+    try:
+        from desktop import config_store
+        config_store.apply_env_to_process()
+    except Exception:  # noqa: BLE001 — never let env loading block startup
+        logger.exception('early env load failed; continuing')
+
     # Self-update check BEFORE anything binds or serves. In a configured frozen
     # build this may download a new signed bundle and restart the process (so
     # the call won't return); in dev or when unconfigured it's a guaranteed

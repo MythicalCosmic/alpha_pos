@@ -72,7 +72,19 @@ def publish(bundle: Path):
     if not KEYS_DIR.exists():
         print(f"no keys in {KEYS_DIR}/ — run `--init` once first")
         return 1
-    repo = _repo()
+    from tufup.repo import Repository
+    # Load the existing repo (keys + roles) from .tufup-repo-config written by
+    # --init. Constructing a bare Repository leaves self.roles=None, so
+    # add_bundle's get_latest_archive() blows up — from_config() loads them.
+    repo = Repository.from_config()
+    # tufup's make_gztar_archive prompts interactively before overwriting an
+    # existing same-version archive, and that input() EOFs in a non-interactive
+    # publish (CI / background). Drop a leftover archive for this version first
+    # so re-running a publish (e.g. after an interrupted one) is clean.
+    stale = REPO_DIR / 'targets' / f'{APP_NAME}-{__version__}.tar.gz'
+    if stale.exists():
+        print(f"removing leftover archive: {stale}")
+        stale.unlink()
     # Register the new bundle for the current version and re-sign the metadata.
     repo.add_bundle(new_bundle_dir=str(bundle), new_version=__version__)
     repo.publish_changes(private_key_dirs=[str(KEYS_DIR)])

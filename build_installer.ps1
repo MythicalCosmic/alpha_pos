@@ -12,8 +12,13 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$py = Join-Path $root '.venv\Scripts\python.exe'
-$pyinstaller = Join-Path $root '.venv\Scripts\pyinstaller.exe'
+# Prefer a dedicated build venv (.venv-build) when present. It carries the
+# self-update stack (tufup/bsdiff4), whose wheels aren't available on the 3.14
+# dev venv, so a build from it ships a self-updating app. Falls back to .venv.
+$venv = if (Test-Path (Join-Path $root '.venv-build\Scripts\python.exe')) { '.venv-build' } else { '.venv' }
+Write-Host "Using build venv: $venv" -ForegroundColor DarkCyan
+$py = Join-Path $root "$venv\Scripts\python.exe"
+$pyinstaller = Join-Path $root "$venv\Scripts\pyinstaller.exe"
 
 # Locate the Inno Setup compiler (default + per-user winget install location).
 $isccCandidates = @(

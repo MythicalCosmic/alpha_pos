@@ -7,7 +7,7 @@
 # several runtime-imported modules must be collected explicitly.
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 # The spec dir (project root) must be importable so `import alpha_pos.settings`
 # works at build time, regardless of the CWD pyinstaller is invoked from.
@@ -40,6 +40,22 @@ for lib in ('waitress', 'whitenoise', 'corsheaders', 'cryptography',
     hiddenimports += collect_submodules(lib)
 # Gemini SDK is lazy-imported in base/services/llm.py — collect it explicitly.
 hiddenimports += collect_submodules('google.genai')
+# Self-update stack: tufup + its deps (tuf, securesystemslib, bsdiff4, pynacl).
+# updater.py lazy-imports tufup.client, so collect them explicitly or the frozen
+# build ships without the update engine. Guarded so a build made in a venv that
+# lacks tufup (e.g. the py3.14 dev venv) still succeeds — self-update just stays
+# disabled in that build. bsdiff4/pynacl are C extensions, so pull their DLLs.
+update_binaries = []
+for _ulib in ('tufup', 'tuf', 'securesystemslib', 'bsdiff4', 'nacl'):
+    try:
+        hiddenimports += collect_submodules(_ulib)
+    except Exception:
+        print(f'AlphaPOS.spec: {_ulib} not available — self-update engine omitted from this build.')
+for _ulib in ('bsdiff4', 'nacl'):
+    try:
+        update_binaries += collect_dynamic_libs(_ulib)
+    except Exception:
+        pass
 # Native GUI: pywebview + pythonnet/CLR (WebView2). The hook-webview/hook-clr/
 # hook-clr_loader hooks pull the .NET runtime + WebView2 DLLs; we add the
 # submodules + 'clr' so the lazy `import webview` is never missed.
@@ -70,7 +86,7 @@ block_cipher = None
 a = Analysis(
     [os.path.join(SPECPATH, 'desktop', 'app.py')],
     pathex=[SPECPATH],
-    binaries=[],
+    binaries=update_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
