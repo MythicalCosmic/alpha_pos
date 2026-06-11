@@ -315,32 +315,40 @@ class Api:
         return {'ok': resp.status == 200, 'status': resp.status, 'body': body[:50]}
 
     # -- self-update --------------------------------------------------------
+    def _ensure_update_env(self):
+        """Make sure ALPHA_POS_UPDATE_URL is in the process env (the launcher
+        seeds it once the server auto-starts, but the panel may be opened
+        first). Lightweight — no Django setup, no factory-reset side effects."""
+        import os
+        if not os.environ.get('ALPHA_POS_UPDATE_URL'):
+            url = (config_store.parse_env_file().get('ALPHA_POS_UPDATE_URL')
+                   or dict(config_store.CONFIG_FIELDS).get('ALPHA_POS_UPDATE_URL', ''))
+            if url:
+                os.environ['ALPHA_POS_UPDATE_URL'] = url
+
     @_safe
     def update_status(self):
-        """Current app version, the configured update URL, and whether a prior
-        update failed to confirm a clean start (its pending flag is still set)."""
-        import os
-        import sys
-        from pathlib import Path
-        from desktop.version import __version__
-        url = (config_store.parse_env_file().get('ALPHA_POS_UPDATE_URL')
-               or os.environ.get('ALPHA_POS_UPDATE_URL') or '')
-        # Mirror updater._data_dir at its run time (before Django sets
-        # ALPHA_POS_DATA_DIR): LOCALAPPDATA/AlphaPOS/update/update_pending.flag.
-        pending = False
-        try:
-            base = os.environ.get('LOCALAPPDATA') or str(Path.home())
-            pending = (Path(base) / 'AlphaPOS' / 'update' / 'update_pending.flag').exists()
-        except Exception:  # noqa: BLE001
-            pass
-        return {'ok': True, 'version': __version__, 'update_url': url,
-                'frozen': bool(getattr(sys, 'frozen', False)), 'pending': pending}
+        """Full update state for the Updates page: installed version, whether
+        updates are enabled, the configured server, pending state, and the
+        recorded last-check / last-update / available-version / history."""
+        self._ensure_update_env()
+        from desktop import updater
+        return {'ok': True, **updater.get_status_info()}
+
+    @_safe
+    def check_updates_only(self):
+        """Ask the server whether a newer version exists WITHOUT installing it,
+        so the page can show 'up to date' or offer an install."""
+        self._ensure_update_env()
+        from desktop import updater
+        return {'ok': True, **updater.check_only()}
 
     @_safe
     def check_updates_now(self):
         """Check the update server now and apply a newer signed build if present.
         In a configured frozen install this downloads + restarts the app (so this
         call may not return); from source / when unconfigured it is a safe no-op."""
+        self._ensure_update_env()
         from desktop import updater
         applied = updater.check_and_apply()
         return {'ok': True, 'applied': bool(applied),

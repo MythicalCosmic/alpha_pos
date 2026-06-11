@@ -608,6 +608,49 @@ window.I18N = {
   for (var l in extra) { window.I18N[l] = Object.assign(window.I18N[l] || {}, extra[l]); }
 })();
 
+// --- Updates page ---
+(function () {
+  var extra = {
+    en: {
+      "nav.updates": "Updates",
+      "upd.sub": "Keep this terminal up to date — signed and automatic.",
+      "upd.current": "This install",
+      "upd.lastChecked": "Last checked", "upd.lastUpdated": "Last updated",
+      "upd.availableV": "Available version", "upd.upToDate": "Up to date",
+      "upd.never": "never", "upd.checking": "Checking…", "upd.checkNow": "Check now",
+      "upd.installNow": "Install now", "upd.history": "Update history",
+      "upd.noHistory": "No updates applied on this PC yet.",
+      "upd.disabledMode": "Updates disabled", "upd.newAvailable": "A new version is available",
+      "upd.auto": "Every launch checks automatically. You can also check now.",
+    },
+    uz: {
+      "nav.updates": "Yangilanishlar",
+      "upd.sub": "Ushbu terminalni dolzarb saqlang — imzolangan va avtomatik.",
+      "upd.current": "Ushbu o‘rnatma",
+      "upd.lastChecked": "Oxirgi tekshiruv", "upd.lastUpdated": "Oxirgi yangilanish",
+      "upd.availableV": "Mavjud versiya", "upd.upToDate": "Eng so‘nggi",
+      "upd.never": "hech qachon", "upd.checking": "Tekshirilmoqda…", "upd.checkNow": "Tekshirish",
+      "upd.installNow": "O‘rnatish", "upd.history": "Yangilanishlar tarixi",
+      "upd.noHistory": "Bu kompyuterda hali yangilanish bo‘lmagan.",
+      "upd.disabledMode": "Yangilanishlar o‘chirilgan", "upd.newAvailable": "Yangi versiya mavjud",
+      "upd.auto": "Har ishga tushganda avtomatik tekshiriladi. Hozir ham tekshirishingiz mumkin.",
+    },
+    ru: {
+      "nav.updates": "Обновления",
+      "upd.sub": "Держите терминал в актуальном состоянии — подписано и автоматически.",
+      "upd.current": "Эта установка",
+      "upd.lastChecked": "Последняя проверка", "upd.lastUpdated": "Последнее обновление",
+      "upd.availableV": "Доступная версия", "upd.upToDate": "Актуально",
+      "upd.never": "никогда", "upd.checking": "Проверка…", "upd.checkNow": "Проверить",
+      "upd.installNow": "Установить", "upd.history": "История обновлений",
+      "upd.noHistory": "На этом ПК обновлений ещё не было.",
+      "upd.disabledMode": "Обновления отключены", "upd.newAvailable": "Доступна новая версия",
+      "upd.auto": "При каждом запуске выполняется проверка. Можно проверить и сейчас.",
+    },
+  };
+  for (var l in extra) { window.I18N[l] = Object.assign(window.I18N[l] || {}, extra[l]); }
+})();
+
 window.tr = function (lang, key) {
   var d = window.I18N[lang] || window.I18N.en;
   return d[key] != null ? d[key] : (window.I18N.en[key] != null ? window.I18N.en[key] : key);

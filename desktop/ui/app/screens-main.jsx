@@ -141,7 +141,7 @@ function DashboardScreen() {
               <KRow l={t("upd.server")} v={updates.url || t("common.none")} mono dim={!updates.url}></KRow>
               <KRow l={t("upd.mode")} v={updates.frozen ? t("upd.installed") : t("upd.dev")}></KRow>
             </div>
-            <Btn variant="primary" icon="download" onClick={updates.check}>{t("upd.check")}</Btn>
+            <Btn variant="ghost" icon="arrow" onClick={() => app.nav("updates")}>{t("common.manage")}</Btn>
           </div>
           {updates.pending && <p style={{ margin: "12px 0 0", color: "var(--warn)", fontSize: 13 }}>{t("upd.pendingMsg")}</p>}
         </Card>

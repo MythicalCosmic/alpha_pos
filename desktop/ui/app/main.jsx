@@ -12,6 +12,7 @@ const NAV = [
   { id: "config", icon: "sliders", l: "nav.config", screen: () => <ConfigScreen /> },
   { id: "tests", icon: "flask", l: "nav.tests", screen: () => <TestsScreen /> },
   { id: "fiscal", icon: "receipt", l: "nav.fiscal", screen: () => <FiscalScreen /> },
+  { id: "updates", icon: "download", l: "nav.updates", screen: () => <UpdatesScreen /> },
 ];
 
 function fmtClock(d) {
@@ -177,7 +178,16 @@ function App() {
     },
     fiscal: { mode: fiscal.mode, setMode: setFisMode, provider: fiscal.provider || "mock", confirmed: fiscal.confirmed || 0, failed: fiscal.failed || 0, bumpConfirmed },
     adminCreds: creds,
-    updates: { version: upd.version, url: upd.update_url, pending: upd.pending, frozen: upd.frozen, check: async () => { const r = await api.check_updates_now(); toast((r && r.message) || ""); refreshUpdates(); } },
+    updates: {
+      version: upd.version, url: upd.update_url, pending: upd.pending, frozen: upd.frozen,
+      enabled: upd.enabled, reason: upd.reason,
+      lastCheckAt: upd.last_check_at, lastCheckOk: upd.last_check_ok, lastCheckError: upd.last_check_error,
+      lastUpdateAt: upd.last_update_at, lastUpdateVersion: upd.last_update_version,
+      available: upd.available, history: upd.history || [],
+      checkOnly: async () => { const r = await api.check_updates_only(); refreshUpdates(); if (r && r.available && r.available !== upd.version) toast(t("upd.newAvailable")); else toast(t("upd.upToDate")); return r; },
+      install: async () => { const r = await api.check_updates_now(); toast((r && r.message) || ""); refreshUpdates(); return r; },
+      check: async () => { const r = await api.check_updates_now(); toast((r && r.message) || ""); refreshUpdates(); },
+    },
     activateLicense, deactivateLicense, refreshAll,
   };
 
