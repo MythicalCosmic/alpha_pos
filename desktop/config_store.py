@@ -44,18 +44,25 @@ RESET_FLAG = DATA_DIR / '.reset_pending'
 # Grouped only for the UI; stored flat in .env.
 CONFIG_FIELDS = [
     # General
-    ('BRANCH_ID', 'main'),
+    ('BRANCH_ID', 'branch1'),
     ('DEPLOYMENT_MODE', 'local'),
     ('PORT', '8000'),
     # Licensing / control center
-    ('LICENSE_CONTROL_CENTER_URL', ''),
-    # Sync (cloud)
-    ('SYNC_ENABLED', 'False'),
-    ('CLOUD_SYNC_URL', ''),
-    ('CLOUD_SYNC_TOKEN', ''),
+    ('LICENSE_CONTROL_CENTER_URL', 'https://control.94.141.97.228.nip.io/'),
+    # Self-update: base URL the server serves the signed tufup repo from
+    # (…/updates/metadata/ + …/updates/targets/). Read by desktop/updater.py.
+    # Blank disables updates. Baked to the production hub so a fresh install is
+    # pre-wired once the repo is published + bundled root shipped.
+    ('ALPHA_POS_UPDATE_URL', 'https://pos.94.141.97.228.nip.io/updates'),
+    # Sync (cloud) — baked defaults point at the production hub so a fresh
+    # install is pre-wired. CLOUD_SYNC_TOKEN is the per-branch token from the
+    # server's .env (DESKTOP_BRANCH_TOKEN); fill it in the panel or bake it here.
+    ('SYNC_ENABLED', 'True'),
+    ('CLOUD_SYNC_URL', 'https://pos.94.141.97.228.nip.io/api/sync'),
+    ('CLOUD_SYNC_TOKEN', 'yucTaCucvUTUknFa9EFvR0L0_BLkKStFW5Kyk1mDc8w'),
     # Telegram (token + chat ids drive real message delivery)
-    ('TELEGRAM_BOT_TOKEN', ''),
-    ('TELEGRAM_CHAT_IDS', ''),
+    ('TELEGRAM_BOT_TOKEN', '8809919796:AAF03pZ-IJpl-Ov4R74gs1ld7EYNtLs7T-k'),
+    ('TELEGRAM_CHAT_IDS', '134385193,6589960007,493544586,1023732044'),
     ('TELEGRAM_WEBHOOK_SECRET', ''),
     # AI (stock assistant + demand forecast). Pick a provider, fill its key.
     ('AI_PROVIDER', 'claude'),  # 'claude' or 'gemini'
@@ -201,6 +208,13 @@ def apply_env_to_process() -> None:
     # Trusted-LAN appliance: the POS is exposed to the whole network, so open
     # CSRF + CORS to any origin/device by default (auth + licensing still apply).
     os.environ.setdefault('OPEN_LAN', 'True')
+    # Seed the baked-in config defaults so a FRESH install (no .env yet) runs
+    # pre-configured — sync URL, Telegram, control-center URL — without the
+    # operator having to open the panel. setdefault means real .env values
+    # (loaded just below) always win.
+    for _k, _default in CONFIG_FIELDS:
+        if _default != '':
+            os.environ.setdefault(_k, _default)
     for k, v in parse_env_file().items():
         os.environ[k] = v
     # The desktop binds the POS to the whole LAN (0.0.0.0), so devices reach it

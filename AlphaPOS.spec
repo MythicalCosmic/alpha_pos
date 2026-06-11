@@ -50,6 +50,16 @@ datas = [
     ('desktop/ui', 'desktop/ui'),
     ('desktop/tos.txt', 'desktop'),
 ]
+# Ship the trusted TUF root so the self-updater (desktop/updater.py) can
+# bootstrap trust offline. Guarded: a build made before
+# `python tools/release.py --init` (no update_repo/ yet) still succeeds —
+# self-update simply stays disabled until the root is published.
+_tuf_root = os.path.join(SPECPATH, 'update_repo', 'metadata', 'root.json')
+if os.path.exists(_tuf_root):
+    datas += [(_tuf_root, 'tuf_root')]
+else:
+    print('AlphaPOS.spec: update_repo/metadata/root.json not found — self-update '
+          'disabled in this build. Run tools/release.py --init to enable it.')
 datas += collect_data_files('webview')  # WebView2 assemblies in webview/lib
 # Ship each app's migrations + templates + static.
 for app in APPS:

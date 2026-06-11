@@ -105,15 +105,6 @@ class TestShiftSettlement:
         assert TreasuryAccount.objects.get(kind='SAFE').balance == Decimal('100000.00')
         assert TreasuryAccount.objects.get(kind='BANK').balance == Decimal('40000.00')
 
-    def test_ensure_active_shift_idempotent(self):
-        from admins.services.shift_service import ShiftService
-        from base.models import Shift
-        u = _user()
-        a = ShiftService.ensure_active_shift(u.id)
-        b = ShiftService.ensure_active_shift(u.id)
-        assert a.id == b.id
-        assert Shift.objects.filter(user=u, status='ACTIVE').count() == 1
-
 
 class TestShiftPaymentTotalSync:
     """ShiftPaymentTotal is identified by (shift, method); sync must reconcile a

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -63,6 +64,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # Static assets the panel pulls in (CSS, vendored React/Babel, the app/*.jsx
+    # Babel fetches at runtime). JSX is served as text/babel so the in-browser
+    # compiler picks it up.
+    _CTYPES = {
+        '.css': 'text/css; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.jsx': 'text/babel; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.map': 'application/json; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.ico': 'image/x-icon',
+        '.woff2': 'font/woff2',
+        '.woff': 'font/woff',
+    }
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, '{"error":"forbidden host"}')
@@ -72,6 +89,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html, 'text/html; charset=utf-8')
         if self.path == '/healthz':
             return self._send(200, 'ok', 'text/plain')
+        # Static panel assets — confined to the ui dir. A resolved path that
+        # escapes it (.. traversal) or an unknown extension is refused.
+        rel = self.path.split('?', 1)[0].lstrip('/')
+        ext = os.path.splitext(rel)[1].lower()
+        if rel and ext in self._CTYPES:
+            ui = _ui_dir().resolve()
+            target = (ui / rel).resolve()
+            try:
+                target.relative_to(ui)
+            except ValueError:
+                return self._send(403, '{"error":"forbidden path"}')
+            if target.is_file():
+                return self._send(200, target.read_bytes(), self._CTYPES[ext])
         self._send(404, '{"error":"not found"}')
 
     def do_POST(self):

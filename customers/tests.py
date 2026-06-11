@@ -394,22 +394,26 @@ class TestCashierShiftSelfService:
         _, st = ShiftService.end_active_for_user(cashier_user.id)
         assert st == 404
 
-    def test_login_autostarts_shift(self, cashier_user):
-        """Per the Money & Shift spec, a cashier login auto-opens a shift
-        (idempotent). Reverses the earlier manual-start behavior."""
+    def test_login_does_not_autostart_shift(self, cashier_user):
+        """Shifts are manual: login must NOT open a shift. The cashier opens one
+        explicitly via POST /shifts/start (ShiftService.start_shift)."""
         from customers.services.auth_service import AuthService
         from base.repositories.shift import ShiftRepository
+        from admins.services.shift_service import ShiftService
+        from base.models import Shift
 
         res, st = AuthService.login(
             'cashier1@test.local', 'cashierpass', '127.0.0.1', 'pytest')
         assert st == 200
+        # Login opened no shift as a side effect.
+        assert ShiftRepository.get_active_for_user(cashier_user.id) is None
+        assert Shift.objects.filter(user=cashier_user, status='ACTIVE').count() == 0
+
+        # Only the explicit manual start opens one.
+        _, st = ShiftService.start_shift(cashier_user.id)
+        assert st == 201
         active = ShiftRepository.get_active_for_user(cashier_user.id)
         assert active is not None and active.status == 'ACTIVE'
-
-        # Logging in again resumes the same shift (no duplicate).
-        AuthService.login('cashier1@test.local', 'cashierpass', '127.0.0.1', 'pytest')
-        from base.models import Shift
-        assert Shift.objects.filter(user=cashier_user, status='ACTIVE').count() == 1
 
     def test_logout_leaves_shift_open(self, cashier_user):
         from customers.services.auth_service import AuthService

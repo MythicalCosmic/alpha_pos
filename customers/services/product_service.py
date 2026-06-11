@@ -33,7 +33,7 @@ class CustomerProductService:
 
     @staticmethod
     def get_all_products(page=1, per_page=20, search=None, category_ids=None,
-                         order_by='-created_at'):
+                         order_by='-created_at', popular=True):
         queryset = ProductRepository.model.objects.select_related('category').filter(is_deleted=False)
 
         if search:
@@ -47,7 +47,14 @@ class CustomerProductService:
 
         if order_by not in ALLOWED_ORDER_FIELDS:
             order_by = '-created_at'
-        queryset = queryset.order_by(order_by)
+        if popular:
+            # Top-selling first (default). Composes with the category/search
+            # filters above. popular=False restores the plain order_by.
+            from base.repositories.order_item import OrderItemRepository
+            queryset = OrderItemRepository.apply_popularity_order(
+                queryset, fallback_order_by=order_by)
+        else:
+            queryset = queryset.order_by(order_by)
 
         page_obj, paginator = ProductRepository.paginate(queryset, page, per_page)
 

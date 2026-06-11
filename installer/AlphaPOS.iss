@@ -26,7 +26,9 @@ VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName} Setup
 VersionInfoProductName={#AppName}
-DefaultDirName={autopf}\AlphaPOS
+; Per-user install under %LOCALAPPDATA%\Programs so the running app can swap its
+; own files for a hands-off self-update (tufup) without an admin/UAC prompt.
+DefaultDirName={localappdata}\Programs\AlphaPOS
 DefaultGroupName=Alpha POS
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
@@ -45,6 +47,11 @@ ArchitecturesAllowed=x64compatible
 MinVersion=10.0
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=commandline dialog
+; lowest = install per-user, no elevation. Needed so the self-updater can
+; overwrite the install in place. Trade-off: the LAN firewall rule below is then
+; best-effort (it needs admin) — if it doesn't take, allow TCP 8000 once manually
+; or accept the Windows prompt on first launch.
+PrivilegesRequired=lowest
 CloseApplications=yes
 RestartApplications=no
 
@@ -64,7 +71,7 @@ Name: "{group}\Uninstall Alpha POS"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Alpha POS"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 ; Auto-launch at every logon/boot (all users). The app then auto-starts and
 ; supervises the backend server itself, so the POS is always up after a reboot.
-Name: "{commonstartup}\Alpha POS"; Filename: "{app}\{#AppExeName}"
+Name: "{userstartup}\Alpha POS"; Filename: "{app}\{#AppExeName}"
 
 [Run]
 ; Open the POS port (TCP 8000) on the Windows Firewall so other devices on the

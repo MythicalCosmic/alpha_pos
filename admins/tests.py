@@ -199,3 +199,67 @@ class TestShiftEndReconcileFlow:
         s = self._active_shift(cashier_user)  # still ACTIVE
         _, st = ShiftService.reconcile(s.id, actual_cash='0', notes='', reconciled_by_id=admin_user.id)
         assert st == 400
+
+    def test_end_blocked_when_open_order(self, cashier_user, regular_user):
+        from base.models import Order
+        from admins.services.shift_service import ShiftService
+        s = self._active_shift(cashier_user)
+        # An order the cashier opened this shift that's still on the line.
+        Order.objects.create(
+            user=regular_user, cashier=cashier_user, status='PREPARING',
+            is_paid=False, display_id=1, subtotal='10.00', total_amount='10.00')
+        _, st = ShiftService.end_shift(s.id, cashier_user.id, 'done')
+        assert st == 400
+        s.refresh_from_db()
+        assert s.status == 'ACTIVE'  # close was refused
+
+    def test_end_allowed_when_order_completed(self, cashier_user, regular_user):
+        from base.models import Order
+        from admins.services.shift_service import ShiftService
+        s = self._active_shift(cashier_user)
+        Order.objects.create(
+            user=regular_user, cashier=cashier_user, status='COMPLETED',
+            is_paid=True, display_id=1, subtotal='10.00', total_amount='10.00')
+        res, st = ShiftService.end_shift(s.id, cashier_user.id, 'done')
+        assert st == 200
+        assert res['data']['status'] == 'ENDED'
+
+    def test_shift_detail_exposes_stats_and_settlement(self, cashier_user, admin_user):
+        from admins.services.shift_service import ShiftService
+        s = self._active_shift(cashier_user)
+        res, st = ShiftService.get(s.id, actor=admin_user)
+        assert st == 200
+        assert 'stats' in res['data'] and 'settlement' in res['data']
+        assert 'payment_mix' in res['data']['stats']
+        assert 'category_stats' in res['data']['stats']
+        assert isinstance(res['data']['settlement'], list)
+
+
+class TestAdminInstantOrderParity:
+    """is_instant must short-circuit the chef queue on the admin order path too
+    (previously only the customer path honoured it)."""
+
+    def test_admin_instant_only_order_born_ready(self, regular_user, category):
+        from base.models import Product, Order
+        from admins.services.order_service import AdminOrderService
+        instant = Product.objects.create(
+            name='Cola', price='5.00', category=category, is_instant=True)
+        res, st = AdminOrderService.create_order(
+            user_id=regular_user.id,
+            items=[{'product_id': instant.id, 'quantity': 1}],
+        )
+        assert st == 201
+        order = Order.objects.get(id=res['data']['order_id'])
+        assert order.status == 'READY'
+        assert order.ready_at is not None
+        assert order.chef_queue_number is not None  # chef number allocated
+
+
+class TestTodayDashboard:
+    def test_get_today_includes_new_stat_keys(self, db):
+        from admins.services.dashboard_service import get_today
+        data = get_today()
+        assert 'payment_breakdown_today' in data
+        assert 'category_stats_today' in data
+        assert {'units_sold', 'peak_hour', 'avg_prep_seconds', 'money_entered'} \
+            <= set(data['today'])

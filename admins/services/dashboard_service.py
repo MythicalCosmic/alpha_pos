@@ -8,11 +8,30 @@ Each piece is best-effort — a low-stock query crash shouldn't take down
 the revenue widget. Failures are logged and the field is set to None.
 """
 import logging
+from decimal import Decimal
 
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum
+from django.db.models import (
+    Avg, Count, DecimalField, DurationField, ExpressionWrapper, F, Q, Sum,
+)
+from django.db.models.functions import Coalesce, ExtractHour
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+# Concrete tender types broken out on the "today" payment breakdown. Legacy
+# orders with a NULL payment_method are bundled into CASH (matches the shift
+# reconciliation convention).
+_PAYMENT_METHODS = ('CASH', 'UZCARD', 'HUMO', 'PAYME', 'MIXED')
+
+
+def _safe(label, fn, default):
+    """Run a today-widget query best-effort: log + fall back on failure so one
+    broken aggregate never takes down the whole dashboard."""
+    try:
+        return fn()
+    except Exception:
+        logger.exception('%s failed', label)
+        return default
 
 
 def _today_window():
@@ -87,6 +106,109 @@ def _top_products_today(limit=5):
     ]
 
 
+def _today_payment_breakdown():
+    """Paid revenue today split by tender (NULL method counts as CASH)."""
+    from base.models import Order
+    start, end = _today_window()
+    paid = Order.objects.filter(
+        is_deleted=False, is_paid=True,
+        created_at__gte=start, created_at__lt=end,
+    ).exclude(status='CANCELED')
+    agg = paid.aggregate(
+        CASH=Coalesce(Sum('total_amount', filter=Q(payment_method='CASH') | Q(payment_method__isnull=True)),
+                      Decimal('0.00'), output_field=DecimalField()),
+        UZCARD=Coalesce(Sum('total_amount', filter=Q(payment_method='UZCARD')),
+                        Decimal('0.00'), output_field=DecimalField()),
+        HUMO=Coalesce(Sum('total_amount', filter=Q(payment_method='HUMO')),
+                      Decimal('0.00'), output_field=DecimalField()),
+        PAYME=Coalesce(Sum('total_amount', filter=Q(payment_method='PAYME')),
+                       Decimal('0.00'), output_field=DecimalField()),
+        MIXED=Coalesce(Sum('total_amount', filter=Q(payment_method='MIXED')),
+                       Decimal('0.00'), output_field=DecimalField()),
+    )
+    return {m: str(agg[m]) for m in _PAYMENT_METHODS}
+
+
+def _today_category_stats():
+    """Units + revenue today grouped by product category."""
+    from base.models import OrderItem
+    start, end = _today_window()
+    line_total = ExpressionWrapper(
+        F('price') * F('quantity'),
+        output_field=DecimalField(max_digits=18, decimal_places=2),
+    )
+    rows = (
+        OrderItem.objects.filter(
+            order__is_deleted=False,
+            order__created_at__gte=start, order__created_at__lt=end,
+        )
+        .exclude(order__status='CANCELED')
+        .values('product__category_id', 'product__category__name')
+        .annotate(quantity=Sum('quantity'), revenue=Sum(line_total))
+        .order_by('-revenue')
+    )
+    return [
+        {
+            'category_id': r['product__category_id'],
+            'category': r['product__category__name'],
+            'quantity': int(r['quantity'] or 0),
+            'revenue': str(r['revenue'] or 0),
+        }
+        for r in rows
+    ]
+
+
+def _today_units_sold():
+    """Total product units sold today (excludes cancelled orders)."""
+    from base.models import OrderItem
+    start, end = _today_window()
+    agg = OrderItem.objects.filter(
+        order__is_deleted=False,
+        order__created_at__gte=start, order__created_at__lt=end,
+    ).exclude(order__status='CANCELED').aggregate(q=Sum('quantity'))
+    return int(agg['q'] or 0)
+
+
+def _today_peak_hour():
+    """Hour (0-23) with the most orders today, or None if no orders yet."""
+    from base.models import Order
+    start, end = _today_window()
+    rows = list(
+        Order.objects.filter(
+            is_deleted=False, created_at__gte=start, created_at__lt=end,
+        )
+        .annotate(hour=ExtractHour('created_at'))
+        .values('hour').annotate(c=Count('id')).order_by('-c', 'hour')
+    )
+    return rows[0]['hour'] if rows else None
+
+
+def _today_avg_prep_seconds():
+    """Average kitchen prep time today: mean(ready_at - created_at) in seconds."""
+    from base.models import Order
+    start, end = _today_window()
+    agg = Order.objects.filter(
+        is_deleted=False, ready_at__isnull=False,
+        created_at__gte=start, created_at__lt=end,
+    ).exclude(status='CANCELED').aggregate(
+        avg=Avg(ExpressionWrapper(F('ready_at') - F('created_at'),
+                                  output_field=DurationField())),
+    )
+    return agg['avg'].total_seconds() if agg['avg'] else None
+
+
+def _today_money_entered():
+    """Cash the manager counted into the SAFE when closing shifts today
+    (sum of today's reconciliation actual_cash) — the 'money entered when
+    closing the shift' figure."""
+    from base.models import CashReconciliation
+    start, end = _today_window()
+    agg = CashReconciliation.objects.filter(
+        is_deleted=False, created_at__gte=start, created_at__lt=end,
+    ).aggregate(total=Sum('actual_cash'))
+    return str(agg['total'] or 0)
+
+
 def _low_stock_count():
     try:
         from stock.models import StockItem
@@ -142,7 +264,16 @@ def get_today():
             'orders': breakdown['orders'],
             'cancelled': breakdown['cancelled'],
             'open': breakdown['open'],
+            # New: the operator-requested headline figures.
+            'units_sold': _safe('today units_sold', _today_units_sold, 0),
+            'peak_hour': _safe('today peak_hour', _today_peak_hour, None),
+            'avg_prep_seconds': _safe('today avg_prep', _today_avg_prep_seconds, None),
+            'money_entered': _safe('today money_entered', _today_money_entered, '0'),
         },
+        'payment_breakdown_today': _safe(
+            'today payment breakdown', _today_payment_breakdown,
+            {m: '0' for m in _PAYMENT_METHODS}),
+        'category_stats_today': _safe('today category stats', _today_category_stats, []),
         'top_products_today': _top_products_today(),
         'low_stock_count': _low_stock_count(),
         'clocked_in': _clocked_in(),

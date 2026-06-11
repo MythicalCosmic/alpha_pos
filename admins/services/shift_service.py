@@ -123,7 +123,7 @@ class ShiftService:
                 and shift.user_id != actor.id:
             return ServiceResponse.forbidden("You can only view your own shift")
 
-        data = ShiftService._serialize_shift(shift)
+        data = ShiftService._serialize_shift(shift, detail=True)
 
         reconciliation = CashReconciliationRepository.get_for_shift(shift_id)
         if reconciliation:
@@ -164,16 +164,6 @@ class ShiftService:
         return ServiceResponse.created(data=ShiftService._serialize_shift(shift))
 
     @staticmethod
-    def ensure_active_shift(user_id):
-        """Idempotent: return the user's open shift, creating one if none exists.
-        Used to auto-start a shift when a cashier logs in. Never errors."""
-        active = ShiftRepository.get_active_for_user(user_id)
-        if active:
-            return active
-        return ShiftRepository.create(
-            user_id=user_id, start_time=timezone.now(), status='ACTIVE')
-
-    @staticmethod
     @transaction.atomic
     def end_shift(shift_id, user_id, notes, actor=None, counted=None):
         # Row-lock the shift first so two concurrent end_shift calls can't
@@ -192,6 +182,22 @@ class ShiftService:
             return ServiceResponse.forbidden("You can only end your own shift")
         if shift.status != 'ACTIVE':
             return ServiceResponse.error("Shift is not active")
+
+        # A shift can't be closed while it still has work in flight: an order the
+        # cashier opened this shift that hasn't been served or cancelled. Closing
+        # over an open order would freeze the drawer mid-sale and orphan the order
+        # on the kitchen line. The cashier must complete or cancel them first.
+        open_orders = Order.objects.filter(
+            is_deleted=False,
+            cashier_id=shift.user_id,
+            created_at__gte=shift.start_time,
+            status__in=[Order.Status.OPEN, Order.Status.PREPARING, Order.Status.READY],
+        ).count()
+        if open_orders:
+            return ServiceResponse.error(
+                f"Cannot close shift while {open_orders} order(s) are still open. "
+                "Complete or cancel them first."
+            )
 
         now = timezone.now()
 
@@ -347,6 +353,8 @@ class ShiftService:
             'notes': reconciliation.notes,
             'reconciled_by_id': reconciled_by_id,
             'created_at': reconciliation.created_at.isoformat() if reconciliation.created_at else None,
+            # Per-tender cashier-vs-manager comparison (what posted to the SAFE).
+            'settlement': ShiftService._shift_settlement(shift),
         })
 
     @staticmethod
@@ -401,7 +409,95 @@ class ShiftService:
         )
 
     @staticmethod
-    def _serialize_shift(shift):
+    def _shift_settlement(shift):
+        """Per-tender cashier-vs-manager comparison (the 'expenses comparing
+        cashier and manager' view): expected (system), counted (cashier's blind
+        count), confirmed (manager's accepted figure that posted to the SAFE),
+        and the frozen difference. Drawn from the ShiftPaymentTotal rows."""
+        from cashbox.models import ShiftPaymentTotal
+        rows = ShiftPaymentTotal.objects.filter(
+            shift=shift, is_deleted=False).order_by('method')
+        return [{
+            'method': r.method,
+            'expected': str(r.expected_amount),
+            'counted': str(r.counted_amount),      # cashier
+            'confirmed': str(r.confirmed_amount),  # manager
+            'difference': str(r.difference),
+        } for r in rows]
+
+    @staticmethod
+    def _shift_stats(shift, end):
+        """Rich per-shift breakdowns for the shift detail page, scoped to this
+        cashier and the shift window. Best-effort: degrades to safe defaults so
+        a single failed aggregate never breaks the shift page."""
+        from django.db.models import (
+            Avg, ExpressionWrapper, DurationField, F as _F,
+        )
+        from django.db.models.functions import ExtractHour
+        from base.models import Order, OrderItem
+        start = shift.start_time
+        try:
+            sold = Order.objects.filter(
+                is_deleted=False, cashier_id=shift.user_id,
+                created_at__gte=start, created_at__lte=end,
+            ).exclude(status='CANCELED')
+
+            paid = sold.filter(is_paid=True)
+            mix = paid.aggregate(
+                CASH=Coalesce(Sum('total_amount', filter=Q(payment_method='CASH') | Q(payment_method__isnull=True)),
+                              Decimal('0.00'), output_field=DecimalField()),
+                UZCARD=Coalesce(Sum('total_amount', filter=Q(payment_method='UZCARD')),
+                                Decimal('0.00'), output_field=DecimalField()),
+                HUMO=Coalesce(Sum('total_amount', filter=Q(payment_method='HUMO')),
+                              Decimal('0.00'), output_field=DecimalField()),
+                PAYME=Coalesce(Sum('total_amount', filter=Q(payment_method='PAYME')),
+                               Decimal('0.00'), output_field=DecimalField()),
+                MIXED=Coalesce(Sum('total_amount', filter=Q(payment_method='MIXED')),
+                               Decimal('0.00'), output_field=DecimalField()),
+            )
+            payment_mix = {k: str(v) for k, v in mix.items()}
+
+            prep = sold.filter(ready_at__isnull=False).aggregate(
+                avg=Avg(ExpressionWrapper(_F('ready_at') - _F('created_at'),
+                                          output_field=DurationField())))
+            avg_prep_seconds = prep['avg'].total_seconds() if prep['avg'] else None
+
+            hours = list(sold.annotate(hour=ExtractHour('created_at'))
+                         .values('hour').annotate(c=Count('id')).order_by('-c', 'hour'))
+            peak_hour = hours[0]['hour'] if hours else None
+
+            items = OrderItem.objects.filter(is_deleted=False, order__in=sold)
+            units_sold = items.aggregate(q=Coalesce(Sum('quantity'), 0))['q']
+            category_stats = list(items.values(
+                'product__category_id', 'product__category__name'
+            ).annotate(
+                quantity=Coalesce(Sum('quantity'), 0),
+                revenue=Coalesce(Sum(_F('price') * _F('quantity'), output_field=DecimalField()),
+                                 Decimal('0.00')),
+            ).order_by('-revenue'))
+            category_stats = [{
+                'category_id': c['product__category_id'],
+                'category': c['product__category__name'],
+                'quantity': int(c['quantity'] or 0),
+                'revenue': str(c['revenue'] or 0),
+            } for c in category_stats]
+
+            return {
+                'payment_mix': payment_mix,
+                'units_sold': int(units_sold or 0),
+                'avg_prep_seconds': avg_prep_seconds,
+                'peak_hour': peak_hour,
+                'category_stats': category_stats,
+            }
+        except Exception:
+            logger.exception('shift stats computation failed (shift=%s)', shift.id)
+            return {
+                'payment_mix': {}, 'units_sold': 0, 'avg_prep_seconds': None,
+                'peak_hour': None, 'category_stats': [],
+            }
+
+    @staticmethod
+    def _serialize_shift(shift, detail=False):
         # A shift's stored totals are only written when end_shift runs, so an
         # in-progress (ACTIVE) shift would otherwise serialize as all-zero
         # "no stats". Compute them live for ACTIVE shifts (clock running to
@@ -440,7 +536,7 @@ class ShiftService:
         except Exception:
             logger.exception('failed to serialize shift reconciliation (shift=%s)', shift.id)
 
-        return {
+        result = {
             'id': shift.id,
             'uuid': str(shift.uuid),
             'user': {
@@ -464,3 +560,11 @@ class ShiftService:
             'duration_minutes': duration_minutes,
             'reconciliation': reconciliation,
         }
+        # The shift DETAIL page gets the rich breakdowns (payment mix, products
+        # sold, category stats, peak hour, avg prep) + the per-tender
+        # cashier-vs-manager settlement comparison. Kept off the list serializer
+        # so paging shifts doesn't run these aggregates per row.
+        if detail:
+            result['stats'] = ShiftService._shift_stats(shift, effective_end)
+            result['settlement'] = ShiftService._shift_settlement(shift)
+        return result

@@ -1,9 +1,38 @@
 from django.db import models
 
+# The message categories a chat can be subscribed to / muted from, in the order
+# the desktop panel lists them. Every real NotificationTemplate type is mapped
+# onto one of these buckets by `bucket_for`. 'system' is the catch-all and also
+# carries the background sync push/pull/error messages.
+ROUTABLE_TYPES = ('order_paid', 'daily', 'contract', 'document', 'system')
+
+
+def bucket_for(notification_type):
+    """Map a raw NotificationTemplate type (e.g. 'order_paid', 'hr.contract_expiry')
+    onto one of ROUTABLE_TYPES so per-chat routing can be expressed in a handful
+    of human-meaningful categories."""
+    nt = (notification_type or '').lower()
+    if 'contract' in nt:
+        return 'contract'
+    if 'document' in nt:
+        return 'document'
+    if 'order' in nt or 'paid' in nt:
+        return 'order_paid'
+    if 'daily' in nt or 'summary' in nt or 'shift' in nt:
+        return 'daily'
+    return 'system'
+
 
 class NotificationSettings(models.Model):
     bot_token = models.CharField(max_length=200, blank=True, default='')
     chat_ids = models.JSONField(default=list, blank=True)
+    # Per-chat message routing + label, keyed by chat id:
+    #   {"<cid>": {"label": "Owner", "events": {"order_paid": true, ...}}}
+    # A chat (or an event) missing from the map defaults to RECEIVING that
+    # category, so existing installs keep getting everything until an operator
+    # narrows it. Operator-managed from the desktop panel; branch-local (this row
+    # is a pinned singleton, not a SyncMixin) so it never propagates.
+    chat_routing = models.JSONField(default=dict, blank=True)
     brand_name = models.CharField(max_length=100, default='Alpha POS')
     is_enabled = models.BooleanField(default=True)
     timeout = models.PositiveIntegerField(default=10)
@@ -33,9 +62,37 @@ class NotificationSettings(models.Model):
         cached = cache.get(cls._CACHE_KEY)
         if cached is not None:
             return cached
-        obj, _ = cls.objects.get_or_create(pk=1)
+        obj, created = cls.objects.get_or_create(pk=1)
+        if created:
+            # Seed from env on first creation so a packaged build's baked-in
+            # Telegram defaults (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_IDS) take
+            # effect on a fresh DB. The operator can still edit them in the panel
+            # afterwards (that writes the DB row, which wins).
+            import os
+            token = (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
+            raw_ids = (os.environ.get('TELEGRAM_CHAT_IDS') or '').strip()
+            ids = [c.strip() for c in raw_ids.replace(';', ',').split(',') if c.strip()]
+            if token or ids:
+                obj.bot_token = token
+                obj.chat_ids = ids
+                obj.save()
         cache.set(cls._CACHE_KEY, obj, cls._CACHE_TTL)
         return obj
+
+    def routing_for(self, chat_id):
+        """Resolve a chat's per-category subscription, defaulting every missing
+        entry to True (receive)."""
+        entry = (self.chat_routing or {}).get(str(chat_id)) or {}
+        events = entry.get('events') if isinstance(entry, dict) else None
+        events = events if isinstance(events, dict) else {}
+        return {tp: bool(events.get(tp, True)) for tp in ROUTABLE_TYPES}
+
+    def recipients_for(self, message_type):
+        """The configured chat ids that should receive `message_type` (one of
+        ROUTABLE_TYPES, or a raw template type which is bucketed first)."""
+        bucket = message_type if message_type in ROUTABLE_TYPES else bucket_for(message_type)
+        return [str(c) for c in (self.chat_ids or [])
+                if self.routing_for(c).get(bucket, True)]
 
     def __str__(self):
         return f"Notification Settings ({self.brand_name})"

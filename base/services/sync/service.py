@@ -497,10 +497,22 @@ class SyncService:
         safe_delete(key)
 
     @classmethod
+    def _sync_recipients(cls):
+        """Telegram chats that should receive the SYNC messages. Sync push/pull/
+        error notices ride the 'system' category, so a chat muted from 'system'
+        in the desktop panel's per-chat routing stops getting them. Empty list ⇒
+        nobody is subscribed, so the caller skips the send."""
+        from notifications.models import NotificationSettings
+        return NotificationSettings.load().recipients_for('system')
+
+    @classmethod
     def _notify_success(cls, count):
         try:
             from base.notifications.config import NotificationConfig
             if not NotificationConfig.is_enabled():
+                return
+            recipients = cls._sync_recipients()
+            if not recipients:
                 return
             from base.notifications.telegram import TelegramAPI
             from base.notifications.helpers import format_datetime
@@ -511,7 +523,7 @@ class SyncService:
                 f'Branch: {get_branch_id()}\n'
                 f'Vaqt: {time_str}'
             )
-            TelegramAPI.send_message(text)
+            TelegramAPI.send_message(text, chat_ids=recipients)
         except Exception as e:
             logger.debug(f'Sync notification skipped: {e}')
 
@@ -520,6 +532,9 @@ class SyncService:
         try:
             from base.notifications.config import NotificationConfig
             if not NotificationConfig.is_enabled():
+                return
+            recipients = cls._sync_recipients()
+            if not recipients:
                 return
             from base.notifications.telegram import TelegramAPI
             from base.notifications.helpers import format_datetime
@@ -531,7 +546,7 @@ class SyncService:
                 f'Branch: {get_branch_id()}\n'
                 f'Vaqt: {time_str}'
             )
-            TelegramAPI.send_message(text)
+            TelegramAPI.send_message(text, chat_ids=recipients)
         except Exception as e:
             logger.debug(f'Pull notification skipped: {e}')
 
@@ -540,6 +555,9 @@ class SyncService:
         try:
             from base.notifications.config import NotificationConfig
             if not NotificationConfig.is_enabled():
+                return
+            recipients = cls._sync_recipients()
+            if not recipients:
                 return
             from base.notifications.telegram import TelegramAPI
             from base.notifications.helpers import format_datetime
@@ -550,6 +568,6 @@ class SyncService:
                 f'Branch: {get_branch_id()}\n'
                 f'Vaqt: {time_str}'
             )
-            TelegramAPI.send_message(text)
+            TelegramAPI.send_message(text, chat_ids=recipients)
         except Exception as e:
             logger.debug(f'Sync error notification skipped: {e}')

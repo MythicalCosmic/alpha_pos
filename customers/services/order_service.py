@@ -371,6 +371,7 @@ class CustomerOrderService:
                 return ServiceResponse.not_found('Table not found')
 
         display_id = OrderRepository.next_display_id()
+        chef_queue_number = OrderRepository.next_chef_queue_number()
 
         product_ids = [item.get('product_id') for item in items]
         products = {p.id: p for p in ProductRepository.filter(id__in=product_ids)}
@@ -404,6 +405,7 @@ class CustomerOrderService:
             user_id=user_id,
             cashier_id=cashier_id,
             display_id=display_id,
+            chef_queue_number=chef_queue_number,
             order_type=order_type,
             phone_number=phone_number,
             description=description,
@@ -1112,6 +1114,10 @@ class CustomerOrderService:
             orders_list.append({
                 'id': order.id,
                 'display_id': order.display_id,
+                # The chef's kitchen number: monotonic (never wraps at 100) so the
+                # line never sees the count reset. display_id stays for the
+                # receipt/cashier short number.
+                'chef_queue_number': order.chef_queue_number,
                 'user': f"{order.user.first_name} {order.user.last_name}",
                 'total_amount': str(order.total_amount),
                 'is_paid': order.is_paid,

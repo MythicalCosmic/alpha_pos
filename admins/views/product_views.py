@@ -37,6 +37,8 @@ def products(request):
         category_ids = request.GET.get('category_ids')
         order_by = request.GET.get('order_by', '-created_at')
         include_deleted = request.GET.get('include_deleted', '').lower() == 'true'
+        # Top-selling first is the default; pass popular=false to disable.
+        popular = request.GET.get('popular', 'true').lower() not in ('false', '0', 'no')
 
         result, status_code = AdminProductService.get_all_products(
             page=page,
@@ -45,6 +47,7 @@ def products(request):
             category_ids=category_ids,
             order_by=order_by,
             include_deleted=include_deleted,
+            popular=popular,
         )
         return JsonResponse(result, status=status_code)
 
