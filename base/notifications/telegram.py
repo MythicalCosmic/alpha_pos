@@ -8,9 +8,12 @@ logger = logging.getLogger(__name__)
 class TelegramAPI:
 
     @staticmethod
-    def send_message(text):
+    def send_message(text, chat_ids=None):
         token = NotificationConfig.get_bot_token()
-        chat_ids = NotificationConfig.get_chat_ids()
+        # Callers may pass an explicit recipient subset (e.g. sync messages
+        # honour the per-chat mute list); default to every configured chat.
+        if chat_ids is None:
+            chat_ids = NotificationConfig.get_chat_ids()
 
         if not token or not chat_ids:
             logger.warning('Telegram not configured (missing token or chat_ids)')

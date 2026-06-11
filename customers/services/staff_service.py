@@ -30,8 +30,8 @@ class StaffService:
         Pre-auth: shown before anyone logs in. Returns only the fields the
         picker needs — never the password hash. Flags who already has an
         ACTIVE shift so the frontend can resume instead of starting a
-        duplicate one (login auto-starts a shift), and flags managers so the
-        UI can surface their settings access.
+        duplicate one (shifts are started manually via POST /shifts/start),
+        and flags managers so the UI can surface their settings access.
         """
         cashiers = list(
             UserRepository.get_pos_staff().order_by('first_name', 'last_name')

@@ -351,6 +351,7 @@ class AdminOrderService:
                 return ServiceResponse.not_found('Delivery person not found')
 
         display_id = OrderRepository.next_display_id()
+        chef_queue_number = OrderRepository.next_chef_queue_number()
 
         product_ids = [item.get('product_id') for item in items]
         products = {p.id: p for p in ProductRepository.filter(id__in=product_ids)}
@@ -384,6 +385,7 @@ class AdminOrderService:
             user_id=user_id,
             cashier_id=cashier_id,
             display_id=display_id,
+            chef_queue_number=chef_queue_number,
             order_type=order_type,
             phone_number=phone_number,
             description=description,
@@ -395,16 +397,32 @@ class AdminOrderService:
         )
 
         from base.models import OrderItem
-        OrderItem.objects.bulk_create([
-            OrderItem(
+        now = timezone.now()
+        # Instant items (drinks, packaged goods) need no kitchen prep, so they
+        # are born ready and never hit the chef display. Mirrors the customer
+        # order path so an instant product behaves the same on every surface.
+        any_kitchen_item = False
+        new_items = []
+        for d in order_items_data:
+            instant = d['product'].is_instant
+            if not instant:
+                any_kitchen_item = True
+            new_items.append(OrderItem(
                 order=order,
                 product=d['product'],
                 detail=d['detail'],
                 quantity=d['quantity'],
                 price=d['price'],
-                ready_at=None,
-            ) for d in order_items_data
-        ])
+                ready_at=now if instant else None,
+            ))
+        OrderItem.objects.bulk_create(new_items)
+
+        # An order made up entirely of instant items has nothing to cook —
+        # it's ready the moment it's placed.
+        if not any_kitchen_item:
+            order.status = 'READY'
+            order.ready_at = now
+            order.save(update_fields=['status', 'ready_at'])
 
         try:
             from stock.services import OrderStatusHandler, StockSettingsService
@@ -474,8 +492,9 @@ class AdminOrderService:
                 message='Quantity must be greater than 0',
             )
 
+        is_instant = product.is_instant
         existing = OrderItemRepository.get_existing_unready(order_id, product_id)
-        if existing:
+        if existing and not is_instant:
             # F-expression so the increment happens in SQL — read-modify-write
             # in Python would lose increments under concurrent calls even with
             # the row lock above (different OrderItem rows would race).
@@ -484,11 +503,15 @@ class AdminOrderService:
                 quantity=F('quantity') + quantity,
             )
         else:
+            # Instant items are born ready and never need the kitchen.
             OrderItemRepository.create(
-                order=order, product=product, quantity=quantity, price=product.price
+                order=order, product=product, quantity=quantity, price=product.price,
+                ready_at=timezone.now() if is_instant else None,
             )
 
-        if order.ready_at:
+        # Only adding a real (non-instant) item reopens a ready order for the
+        # kitchen; tacking on a drink must not send the order back to PREPARING.
+        if not is_instant and order.ready_at:
             order.ready_at = None
             order.status = 'PREPARING'
             order.save(update_fields=['ready_at', 'status'])

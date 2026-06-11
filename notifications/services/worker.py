@@ -81,12 +81,21 @@ def _dispatch(item, min_interval):
     from notifications.services.queue_service import QueueService
 
     settings = NotificationSettings.load()
-    chat_ids = settings.chat_ids or []
-    if not chat_ids:
-        return
-
     text = item['text']
     notification_type = item['notification_type']
+
+    # Per-chat routing: only the chats subscribed to this message's category
+    # receive it (managed in the desktop panel). Manual test sends ('test') and
+    # any explicit re-queued chat list bypass routing and go to their targets.
+    explicit = item.get('chat_ids')
+    if explicit:
+        chat_ids = [str(c) for c in explicit]
+    elif notification_type == 'test':
+        chat_ids = settings.chat_ids or []
+    else:
+        chat_ids = settings.recipients_for(notification_type)
+    if not chat_ids:
+        return
 
     # Throttle per chat. We don't actually iterate per chat in TelegramService
     # — it sends to all chats in one call — so we throttle on the first

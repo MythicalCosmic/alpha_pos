@@ -39,6 +39,19 @@ class Api:
         return {'ok': True}
 
     @_safe
+    def get_ui_prefs(self):
+        """Panel look preferences (theme direction, accent, language) persisted
+        across launches in desktop_state.json."""
+        return {'ok': True, 'prefs': (config_store.read_state().get('ui') or {})}
+
+    @_safe
+    def set_ui_prefs(self, prefs=None):
+        state = config_store.read_state()
+        state['ui'] = {**(state.get('ui') or {}), **(prefs or {})}
+        config_store.write_state(state)
+        return {'ok': True, 'prefs': state['ui']}
+
+    @_safe
     def get_config(self):
         cfg = config_store.read_config()
         # Mask secrets for display (operator can overwrite; blank = unchanged).
@@ -102,6 +115,99 @@ class Api:
         except Exception:  # noqa: BLE001
             logger.exception('live config apply failed')
         return {'ok': True, 'restart_required': self.server.is_running()}
+
+    # -- config export / import (backup + clone an install) -----------------
+    @_safe
+    def export_config(self):
+        """Download the current configuration as a JSON blob the operator can
+        re-import on another PC. Secrets are masked (never exported in clear);
+        they must be re-entered on the target."""
+        cfg = config_store.read_config()
+        masked = dict(cfg)
+        for k in config_store.SECRET_KEYS:
+            if masked.get(k):
+                masked[k] = '••••••••'
+        branch = (cfg.get('BRANCH_ID') or 'branch').strip() or 'branch'
+        return {'ok': True, 'config': masked,
+                'filename': f'alpha-pos-config-{branch}.json'}
+
+    @_safe
+    def import_config(self, data=None):
+        """Apply a previously-exported config JSON. Only recognised CONFIG_FIELDS
+        are taken; a masked secret (••••) is treated as 'keep current' so an
+        import never blanks a secret the operator didn't actually re-enter."""
+        if not isinstance(data, dict):
+            return {'ok': False, 'error': 'Expected a config object'}
+        # Some browsers hand us {"config": {...}} — unwrap it.
+        if 'config' in data and isinstance(data['config'], dict):
+            data = data['config']
+        current = config_store.read_config()
+        known = {k for k, _ in config_store.CONFIG_FIELDS}
+        clean = {}
+        for k, v in data.items():
+            if k not in known:
+                continue
+            if k in config_store.SECRET_KEYS and v in ('••••••••', None, ''):
+                clean[k] = current.get(k, '')
+            else:
+                clean[k] = v
+        if not clean:
+            return {'ok': False, 'error': 'No recognised settings in the file'}
+        config_store.write_config(clean)
+        return {'ok': True, 'imported': sorted(clean),
+                'restart_required': self.server.is_running()}
+
+    # -- notifications: per-chat message routing ----------------------------
+    @_safe
+    def notif_routing(self):
+        """Every configured Telegram chat with its label + which message
+        categories it receives, so the panel can render the master-detail
+        recipients screen. A chat missing from chat_routing defaults to ON for
+        every category."""
+        self.server.ensure_django()
+        from notifications.models import NotificationSettings, ROUTABLE_TYPES
+        ns = NotificationSettings.load()
+        recipients = [{
+            'cid': str(c),
+            'label': ((ns.chat_routing or {}).get(str(c), {}) or {}).get('label', ''),
+            'events': ns.routing_for(c),
+        } for c in (ns.chat_ids or [])]
+        return {'ok': True, 'types': list(ROUTABLE_TYPES), 'recipients': recipients}
+
+    @_safe
+    def set_notif_routing(self, recipients=None):
+        """Persist the recipient list + per-chat routing. `recipients` is a list
+        of {cid, label, events:{type:bool}}; this becomes the chat_ids set and
+        the chat_routing map in one write."""
+        self.server.ensure_django()
+        from notifications.models import NotificationSettings, ROUTABLE_TYPES
+        ns = NotificationSettings.load()
+        chat_ids, routing = [], {}
+        for r in (recipients or []):
+            cid = str((r or {}).get('cid', '')).strip()
+            if not cid:
+                continue
+            chat_ids.append(cid)
+            events = (r.get('events') or {})
+            routing[cid] = {
+                'label': str(r.get('label', '') or ''),
+                'events': {tp: bool(events.get(tp, True)) for tp in ROUTABLE_TYPES},
+            }
+        ns.chat_ids = chat_ids
+        ns.chat_routing = routing
+        ns.save()  # save() pins pk=1 and clears the cached singleton
+        return {'ok': True, 'count': len(chat_ids)}
+
+    @_safe
+    def send_test_to_chat(self, chat_id):
+        """Send a one-off test message to a single chat id (the recipient
+        detail 'send to this chat' button)."""
+        self.server.ensure_django()
+        from base.notifications.telegram import TelegramAPI
+        ok, err = TelegramAPI.send_message(
+            '✅ Alpha POS test — this chat is wired up correctly.',
+            chat_ids=[str(chat_id)])
+        return {'ok': bool(ok), 'error': err}
 
     # -- install + server lifecycle -----------------------------------------
     @_safe
@@ -207,6 +313,39 @@ class Api:
         with urllib.request.urlopen(url, timeout=5) as resp:
             body = resp.read().decode('utf-8', 'replace')
         return {'ok': resp.status == 200, 'status': resp.status, 'body': body[:50]}
+
+    # -- self-update --------------------------------------------------------
+    @_safe
+    def update_status(self):
+        """Current app version, the configured update URL, and whether a prior
+        update failed to confirm a clean start (its pending flag is still set)."""
+        import os
+        import sys
+        from pathlib import Path
+        from desktop.version import __version__
+        url = (config_store.parse_env_file().get('ALPHA_POS_UPDATE_URL')
+               or os.environ.get('ALPHA_POS_UPDATE_URL') or '')
+        # Mirror updater._data_dir at its run time (before Django sets
+        # ALPHA_POS_DATA_DIR): LOCALAPPDATA/AlphaPOS/update/update_pending.flag.
+        pending = False
+        try:
+            base = os.environ.get('LOCALAPPDATA') or str(Path.home())
+            pending = (Path(base) / 'AlphaPOS' / 'update' / 'update_pending.flag').exists()
+        except Exception:  # noqa: BLE001
+            pass
+        return {'ok': True, 'version': __version__, 'update_url': url,
+                'frozen': bool(getattr(sys, 'frozen', False)), 'pending': pending}
+
+    @_safe
+    def check_updates_now(self):
+        """Check the update server now and apply a newer signed build if present.
+        In a configured frozen install this downloads + restarts the app (so this
+        call may not return); from source / when unconfigured it is a safe no-op."""
+        from desktop import updater
+        applied = updater.check_and_apply()
+        return {'ok': True, 'applied': bool(applied),
+                'message': 'Update applied — restarting…' if applied
+                           else 'You are on the latest version.'}
 
     # -- dashboards ----------------------------------------------------------
     @_safe

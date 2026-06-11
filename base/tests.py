@@ -413,3 +413,137 @@ class TestReceiveResolvesNonBaseModels:
         from base.services.sync.receiver import CloudReceiver
         result = CloudReceiver.receive_batch('user', 'branch1', [])
         assert result['success'] is True
+
+
+class TestUnpaidExcludesCancelled:
+    """Pre-fix: build_filtered_queryset(payment_status='UNPAID') only filtered
+    is_paid=False, so a cancelled-but-unpaid order lingered forever in the
+    cashier's unpaid list."""
+
+    def _order(self, user, status, is_paid, display_id):
+        from base.models import Order
+        return Order.objects.create(
+            user=user, status=status, is_paid=is_paid, display_id=display_id,
+            subtotal='10.00', total_amount='10.00',
+        )
+
+    def test_unpaid_filter_excludes_cancelled(self, regular_user):
+        from base.models import Order
+        from base.repositories.order import OrderRepository
+        live = self._order(regular_user, 'PREPARING', False, 1)
+        self._order(regular_user, 'CANCELED', False, 2)  # the leaking row
+        qs = OrderRepository.build_filtered_queryset(payment_status='UNPAID')
+        ids = list(qs.values_list('id', flat=True))
+        assert ids == [live.id]
+        assert Order.Status.CANCELED not in set(qs.values_list('status', flat=True))
+
+    def test_paid_filter_also_excludes_cancelled(self, regular_user):
+        from base.repositories.order import OrderRepository
+        paid = self._order(regular_user, 'COMPLETED', True, 1)
+        self._order(regular_user, 'CANCELED', True, 2)  # cancelled-after-payment
+        qs = OrderRepository.build_filtered_queryset(payment_status='PAID')
+        assert list(qs.values_list('id', flat=True)) == [paid.id]
+
+
+class TestChefQueueNumber:
+    """The chef display number must keep increasing (never wrap at 100 like the
+    cashier display_id) and must stay branch-local (never sync)."""
+
+    def test_monotonic_past_100(self):
+        from base.repositories.order import OrderRepository
+        vals = [OrderRepository.next_chef_queue_number(scope='t') for _ in range(105)]
+        assert vals == list(range(1, 106))  # 100 -> 101, never resets to 1
+
+    def test_excluded_from_sync_dict(self, regular_user):
+        from base.models import Order
+        o = Order.objects.create(
+            user=regular_user, status='PREPARING', is_paid=False,
+            display_id=5, chef_queue_number=42, subtotal='10.00', total_amount='10.00',
+        )
+        data = o.to_sync_dict()
+        assert 'chef_queue_number' not in data
+        assert 'display_id' not in data
+
+
+class TestPopularProductsFilter:
+    """popular=True (default) orders products by recent sales; popular=False
+    falls back to the requested ordering."""
+
+    def test_popular_puts_top_seller_first(self, regular_user, category):
+        from base.models import Product, Order, OrderItem
+        from customers.services.product_service import CustomerProductService
+        hot = Product.objects.create(name='Hot', price='10.00', category=category)
+        cold = Product.objects.create(name='Cold', price='10.00', category=category)
+        order = Order.objects.create(
+            user=regular_user, status='COMPLETED', is_paid=True, display_id=1,
+            subtotal='10.00', total_amount='10.00')
+        OrderItem.objects.create(order=order, product=hot, quantity=50, price='10.00')
+
+        res, st = CustomerProductService.get_all_products(popular=True)
+        assert st == 200
+        ids = [p['id'] for p in res['data']['products']]
+        assert ids[0] == hot.id  # best seller floats to the top
+
+        # popular=False uses the default -created_at: cold was created last.
+        res2, _ = CustomerProductService.get_all_products(popular=False)
+        ids2 = [p['id'] for p in res2['data']['products']]
+        assert ids2[0] == cold.id
+
+    def test_popular_respects_category(self, regular_user, category):
+        from base.models import Category, Product, Order, OrderItem
+        from customers.services.product_service import CustomerProductService
+        other = Category.objects.create(name='Other')
+        in_cat = Product.objects.create(name='InCat', price='10.00', category=category)
+        Product.objects.create(name='Elsewhere', price='10.00', category=other)
+        order = Order.objects.create(
+            user=regular_user, status='COMPLETED', is_paid=True, display_id=1,
+            subtotal='10.00', total_amount='10.00')
+        OrderItem.objects.create(order=order, product=in_cat, quantity=5, price='10.00')
+
+        res, st = CustomerProductService.get_all_products(
+            popular=True, category_ids=[category.id])
+        assert st == 200
+        names = {p['name'] for p in res['data']['products']}
+        assert names == {'InCat'}  # category filter still honoured under popular
+
+
+class TestNotificationRouting:
+    """Per-chat, per-category routing: each chat picks which message categories
+    it receives. Sync messages ride the 'system' category."""
+
+    def _settings(self, chat_ids, routing):
+        from notifications.models import NotificationSettings
+        ns = NotificationSettings.load()
+        ns.chat_ids = chat_ids
+        ns.chat_routing = routing
+        ns.save()
+        return ns
+
+    def test_recipients_for_respects_routing(self):
+        from notifications.models import NotificationSettings
+        # 111 only wants order_paid; 222 isn't in the map ⇒ receives everything.
+        self._settings(['111', '222'],
+                       {'111': {'events': {'order_paid': True, 'daily': False, 'system': False}}})
+        ns = NotificationSettings.load()
+        assert ns.recipients_for('order_paid') == ['111', '222']
+        assert ns.recipients_for('daily') == ['222']
+        assert ns.recipients_for('system') == ['222']
+
+    def test_sync_excludes_system_muted(self):
+        from base.services.sync.service import SyncService
+        # 222 muted from 'system' (the category sync messages ride on).
+        self._settings(['111', '222', '333'], {'222': {'events': {'system': False}}})
+        assert SyncService._sync_recipients() == ['111', '333']
+
+    def test_default_all_receive(self):
+        from base.services.sync.service import SyncService
+        self._settings(['111', '222'], {})
+        assert SyncService._sync_recipients() == ['111', '222']
+
+    def test_bucket_for_maps_real_types(self):
+        from notifications.models import bucket_for
+        assert bucket_for('order_paid') == 'order_paid'
+        assert bucket_for('hr.contract_expiry') == 'contract'
+        assert bucket_for('hr.document_expiry') == 'document'
+        assert bucket_for('daily_summary') == 'daily'
+        assert bucket_for('telegram.start') == 'system'

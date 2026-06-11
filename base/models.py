@@ -894,6 +894,11 @@ class Order(SyncMixin, models.Model):
     )
 
     display_id = models.IntegerField(default=1)
+    # The kitchen-line number shown on the CHEF display. Unlike display_id (which
+    # wraps at 100 so the cashier/receipt number stays short), this counter only
+    # ever increases, so the chef never sees the number "reset" mid-service.
+    # Per-branch (allocated from ChefQueueCounter), nullable for legacy rows.
+    chef_queue_number = models.IntegerField(null=True, blank=True)
 
     order_type = models.CharField(
         max_length=10,
@@ -960,6 +965,10 @@ class Order(SyncMixin, models.Model):
         # two branches' orders would overwrite each other's numbers and the
         # local get_by_display_id lookup would see duplicates. Keep it local.
         data.pop('display_id', None)
+        # chef_queue_number is a per-branch monotonic counter (ChefQueueCounter),
+        # same as display_id it must stay local or two branches' kitchen numbers
+        # would collide on pull.
+        data.pop('chef_queue_number', None)
         data['user_uuid'] = str(self.user.uuid) if self.user else None
         data['cashier_uuid'] = str(self.cashier.uuid) if self.cashier else None
         data['delivery_person_uuid'] = str(self.delivery_person.uuid) if self.delivery_person else None
@@ -1666,6 +1675,29 @@ class DisplayIdCounter(models.Model):
 
     def __str__(self):
         return f"DisplayIdCounter<{self.scope}={self.value}>"
+
+
+class ChefQueueCounter(models.Model):
+    """Per-scope MONOTONIC counter for Order.chef_queue_number.
+
+    Identical in shape to DisplayIdCounter but never wraps: the chef display
+    needs an ever-increasing queue number so a busy line never sees the count
+    jump back to #1 after #100 (which display_id does on purpose, to keep the
+    cashier/receipt number short). Locked via select_for_update inside the
+    order-create transaction. One row per branch_id (default scope: 'default').
+
+    Not a SyncMixin — per-branch bookkeeping, must never propagate.
+    """
+
+    scope = models.CharField(max_length=64, primary_key=True)
+    value = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'chef_queue_counter'
+
+    def __str__(self):
+        return f"ChefQueueCounter<{self.scope}={self.value}>"
 
 
 class SequenceCounter(models.Model):

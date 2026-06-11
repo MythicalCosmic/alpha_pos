@@ -5,7 +5,7 @@ from django.db.models.functions import Coalesce, TruncDate, TruncMonth, TruncYea
 from django.core.paginator import Paginator
 from decimal import Decimal
 from base.repositories.base import BaseSyncRepository
-from base.models import Order, DisplayIdCounter
+from base.models import Order, DisplayIdCounter, ChefQueueCounter
 
 
 # Wrap kitchen-handoff numbers at this point so the line never has to read
@@ -117,6 +117,25 @@ class OrderRepository(BaseSyncRepository):
             return row.value
 
     @classmethod
+    def next_chef_queue_number(cls, scope=None):
+        """Atomically allocate the next MONOTONIC chef-queue number for `scope`.
+
+        Same locked allocator as next_display_id but WITHOUT the wrap: the chef
+        display needs an ever-increasing number (never resets to 1 after 100).
+        Caller must be inside a transaction (order services wrap create in
+        @transaction.atomic). scope defaults to BRANCH_ID.
+        """
+        if scope is None:
+            scope = getattr(settings, 'BRANCH_ID', 'default') or 'default'
+        with transaction.atomic():
+            row, _ = ChefQueueCounter.objects.select_for_update().get_or_create(
+                scope=scope, defaults={'value': 0},
+            )
+            row.value = row.value + 1
+            row.save(update_fields=['value', 'updated_at'])
+            return row.value
+
+    @classmethod
     def paginate(cls, queryset, page=1, per_page=20):
         paginator = Paginator(queryset, per_page)
         return paginator.get_page(page), paginator
@@ -130,10 +149,14 @@ class OrderRepository(BaseSyncRepository):
 
         if payment_status:
             payment_status = payment_status.strip().upper()
+            # Cancelled orders are never "paid" or "unpaid" work to settle — they
+            # are dead. Excluding CANCELED here mirrors get_unpaid() (the cashier's
+            # unpaid screen filters via this method, and a cancelled-but-unpaid
+            # order used to linger there forever).
             if payment_status == 'PAID':
-                qs = qs.filter(is_paid=True)
+                qs = qs.filter(is_paid=True).exclude(status=Order.Status.CANCELED)
             elif payment_status == 'UNPAID':
-                qs = qs.filter(is_paid=False)
+                qs = qs.filter(is_paid=False).exclude(status=Order.Status.CANCELED)
 
         if statuses:
             valid = [c[0] for c in Order.Status.choices]

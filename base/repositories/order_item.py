@@ -1,8 +1,13 @@
-from django.db.models import Sum, F, Count, DecimalField
+from datetime import timedelta
+from django.db.models import Sum, F, Count, DecimalField, Case, When, Value, IntegerField
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 from decimal import Decimal
 from base.repositories.base import BaseSyncRepository
 from base.models import OrderItem
+
+# How far back "top selling / popular" looks when ranking products.
+POPULAR_WINDOW_DAYS = 30
 
 
 class OrderItemRepository(BaseSyncRepository):
@@ -65,6 +70,31 @@ class OrderItemRepository(BaseSyncRepository):
             ),
             order_count=Count('order_id', distinct=True),
         ).order_by('-total_qty')[:limit])
+
+    @classmethod
+    def apply_popularity_order(cls, queryset, days=POPULAR_WINDOW_DAYS,
+                              fallback_order_by='-created_at'):
+        """Re-order a Product `queryset` so the best sellers come first.
+
+        Ranks products by units sold over the last `days`; products with no
+        recent sales fall to the bottom, ordered by `fallback_order_by`. This is
+        the "top selling" filter the products endpoints default to (popular=True)
+        and it composes with any category/search filter already applied — so it
+        works "even with categories" (top sellers *within* the chosen category
+        float up). Pass popular=False at the endpoint to skip it.
+        """
+        window_start = timezone.now() - timedelta(days=days)
+        ordered_ids = [t['product_id'] for t in
+                       cls.get_top_products(date_from=window_start, limit=500)]
+        if not ordered_ids:
+            # Nothing sold in the window yet — keep the requested ordering.
+            return queryset.order_by(fallback_order_by)
+        rank = Case(
+            *[When(id=pid, then=Value(i)) for i, pid in enumerate(ordered_ids)],
+            default=Value(len(ordered_ids)),
+            output_field=IntegerField(),
+        )
+        return queryset.annotate(_pop_rank=rank).order_by('_pop_rank', fallback_order_by)
 
     @classmethod
     def get_least_sold_products(cls, date_from=None, date_to=None, limit=20):
